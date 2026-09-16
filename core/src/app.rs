@@ -346,6 +346,9 @@ pub struct Session {
 
     // view state, updated by on_event:
     now_playing: Option<TrackId>,
+    /// The `Player` actually driving `now_playing`, set in `start_playback` —
+    /// can differ from `Track::best_rendition`'s player after a fallback.
+    now_playing_player: Option<Arc<dyn Player>>,
     last_status: PlayerStatus,
     link_pick: Option<TrackId>,
     volume: f32,
@@ -460,6 +463,7 @@ impl Session {
             failed_playback_sources: Vec::new(),
             history_path,
             now_playing: None,
+            now_playing_player: None,
             last_status,
             link_pick: None,
             volume,
@@ -1340,6 +1344,7 @@ impl Session {
         p.load(r, false, 0, true);
         self.now_playing = Some(track.id);
         self.last_status = p.status();
+        self.now_playing_player = Some(p);
         self.last_status.volume = self.volume;
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
@@ -1472,10 +1477,7 @@ impl Session {
     }
 
     fn active_player(&self) -> Option<Arc<dyn Player>> {
-        let id = self.now_playing?;
-        let track = self.store.get_track(id).ok().flatten()?;
-        let r = track.best_rendition()?;
-        self.pick_player(&r)
+        self.now_playing_player.clone()
     }
 
     /// Route a rendition to a player: prefer the one registered under its
