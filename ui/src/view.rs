@@ -4112,15 +4112,14 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
     }
 }
 
-/// Bracketed BPM-scan status tag for the currently-playing `track`, shown
-/// next to the status line's scrubber: `[bd]` when the plugin is disabled by
-/// config or paused at runtime (`B` / `ScanDriver::is_paused`), the resolved
-/// number once `attrs["bpm"]` exists, else the live `ScanDriver` status for
-/// the "bpm" plugin (`[Bd]` downloading, `[Be]` errored, `[Bs]` skipped,
-/// `[Bw]` waiting — no attempt yet or off cooldown).
+/// Bracketed BPM-scan status tag shown next to the status line's scrubber:
+/// `[bd]` with no scan driver or while paused (`B` / `:togglescan`), else
+/// `[Bd]` downloading, `[Be]` errored, `[Bs]` skipped, `[Bw]` waiting.
 fn bpm_status_tag(s: &Session, track: &core::Track) -> String {
-    let paused = s.scan.as_ref().is_some_and(|scan| scan.is_paused());
-    if !s.cfg.scan.bpm.enabled || paused {
+    let Some(scan) = s.scan.as_ref() else {
+        return "[bd]".to_string();
+    };
+    if scan.is_paused() {
         return "[bd]".to_string();
     }
     // Purely a plugin-status indicator, never the resolved value itself —
@@ -4128,8 +4127,7 @@ fn bpm_status_tag(s: &Session, track: &core::Track) -> String {
     // track has no live status (see `ScanStatus`'s doc), so it falls into
     // the `None` arm below same as "never attempted", both being steady
     // states with nothing left for this plugin to do.
-    let status = s.scan.as_ref().and_then(|scan| scan.status("bpm", track.id));
-    match status {
+    match scan.status("bpm", track.id) {
         Some(core::ScanStatus::Downloading) => "[Bd]",
         Some(core::ScanStatus::Error) => "[Be]",
         Some(core::ScanStatus::Skipped) => "[Bs]",

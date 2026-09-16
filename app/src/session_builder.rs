@@ -43,10 +43,11 @@ pub fn build_session(
         media_cache.clone(),
         history_path,
     );
-    if !scan_plugins.is_empty() {
-        let driver = Arc::new(ScanDriver::new(scan_plugins, cache_full));
-        driver.spawn(session.catalog.clone(), store, media, players, media_cache);
-        session.scan = Some(driver);
-    }
+    // Always spawned, even with an empty initial plugin list — plugins that
+    // only become available after async setup register later via
+    // `ScanDriver::register_plugin`.
+    let driver = Arc::new(ScanDriver::new(scan_plugins, cache_full));
+    driver.spawn(session.catalog.clone(), store, media, players, media_cache);
+    session.scan = Some(driver);
     session
 }

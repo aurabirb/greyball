@@ -80,14 +80,16 @@ fn load_volume() -> Option<f32> {
 
 /// Whether `:togglescan`/the scan-pause hotkey left the background scan
 /// (bpm, ...) paused at last exit — persisted the same way `volume` is, so
-/// a deliberate pause survives a restart instead of silently resuming.
-fn load_scan_paused() -> bool {
+/// a deliberate pause survives a restart instead of silently resuming. Falls
+/// back to `default_paused` (derived from `cfg.scan.bpm.enabled`) when
+/// `state.toml` has no recorded state yet, i.e. on a fresh install.
+fn load_scan_paused(default_paused: bool) -> bool {
     (|| -> Option<bool> {
         let text = std::fs::read_to_string(state_path()).ok()?;
         let v: toml::Value = text.parse().ok()?;
         v.get("scan_paused")?.as_bool()
     })()
-    .unwrap_or(false)
+    .unwrap_or(default_paused)
 }
 
 /// `HotkeyTarget` <-> the single string `state.toml` stores it as: a local
@@ -357,18 +359,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         register_plugin(plugin, &mut sources, &mut media, &mut players, &mut plugins);
     }
 
-    // `BpmPlugin` isn't Spotify-specific (it scans any track it can get
-    // audio for via `open_scan_audio`) — it just happens to live in the
-    // `sources-spotify` crate/cargo feature since that's where the DSP was
-    // ported from and where the one source lacking a `MediaProvider` (so
-    // needing `Player::open_for_scan`) lives. Gated only on its own config
-    // toggle, not `cfg.spotify.enabled`.
-    #[allow(unused_mut)]
-    let mut scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
+    // BpmPlugin is registered into the running driver further down instead
+    // (see `register_plugin` below), not passed in here.
+    let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
+    let bpm_enabled_default = cfg.scan.bpm.enabled;
     #[cfg(feature = "spotify")]
-    if cfg.scan.bpm.enabled {
-        scan_plugins.push(Arc::new(sources_spotify::BpmPlugin::new(cfg.scan.bpm.min_interval_secs)));
-    }
+    let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
 
     log_registered_sources(&sources);
 
@@ -391,7 +387,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         data_dir().join("history.m3u8"),
     );
     if let Some(scan) = &session.scan {
-        scan.set_paused(load_scan_paused());
+        scan.set_paused(load_scan_paused(!bpm_enabled_default));
+        // Not Spotify-specific — just lives in this crate/feature. Runtime
+        // on/off is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
+        // seeds the initial paused state.
+        #[cfg(feature = "spotify")]
+        scan.register_plugin(Arc::new(sources_spotify::BpmPlugin::new(bpm_min_interval_secs)));
     }
     session.set_hotkeys(load_hotkeys());
     let session = Arc::new(Mutex::new(session));

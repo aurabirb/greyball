@@ -193,7 +193,9 @@ struct ViewOrder {
 }
 
 struct Inner {
-    plugins: Vec<Arc<dyn ScanPlugin>>,
+    /// Grows via `ScanDriver::register_plugin` as sources finish async
+    /// setup. Cloned fresh each tick rather than locked across `analyze`.
+    plugins: Mutex<Vec<Arc<dyn ScanPlugin>>>,
     /// `ScanConfig::cache_full` — applied to background-walk fetches only;
     /// the prioritized now-playing path always uses `ScanFetchMode::CacheOnly`
     /// regardless, never `Full`/`Partial`.
@@ -239,7 +241,7 @@ impl ScanDriver {
     pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>, cache_full: bool) -> Self {
         Self {
             inner: Arc::new(Inner {
-                plugins,
+                plugins: Mutex::new(plugins),
                 cache_full,
                 paused: AtomicBool::new(false),
                 priority: Mutex::new(VecDeque::new()),
@@ -299,6 +301,13 @@ impl ScanDriver {
         if let Some(p) = player {
             self.inner.players.lock().unwrap().insert(id, p);
         }
+    }
+
+    /// Adds a plugin to the already-running driver, for one whose
+    /// availability depends on setup finishing rather than being known at
+    /// construction time.
+    pub fn register_plugin(&self, plugin: Arc<dyn ScanPlugin>) {
+        self.inner.plugins.lock().unwrap().push(plugin);
     }
 
     /// The currently-playing track jumps the walk order for every plugin
@@ -376,13 +385,14 @@ fn run(
         // tick instead of never.
         let media = inner.media.lock().unwrap().clone();
         let players = inner.players.lock().unwrap().clone();
+        let plugins = inner.plugins.lock().unwrap().clone();
         let ctx = ScanCtx { media: &media, players: &players, media_cache: &media_cache };
 
         let prio = inner.priority.lock().unwrap().pop_front();
         if let Some(id) = prio {
             match store.get_track(id) {
                 Ok(Some(track)) => {
-                    if scan_one(&inner, &catalog, &ctx, &track, true) {
+                    if scan_one(&inner, &plugins, &catalog, &ctx, &track, true) {
                         continue;
                     }
                     // Still needs a plugin, just blocked on that plugin's
@@ -391,7 +401,7 @@ fn run(
                     // tick, rather than silently dropping the priority jump
                     // and falling back to whatever order the general walk
                     // happens to reach it in.
-                    if any_plugin_needs(&inner, &track) {
+                    if any_plugin_needs(&inner, &plugins, &track) {
                         inner.priority.lock().unwrap().push_front(id);
                     } else {
                         log::debug!("scan: priority track {id:?} has nothing left to do");
@@ -431,7 +441,7 @@ fn run(
         }
         let mut scanned = 0usize;
         for track in &tracks {
-            if scan_one(&inner, &catalog, &ctx, track, false) {
+            if scan_one(&inner, &plugins, &catalog, &ctx, track, false) {
                 scanned += 1;
             }
         }
@@ -468,8 +478,8 @@ fn resolve_walk_list(inner: &Inner, store: &Arc<dyn Store>) -> Option<Vec<Track>
 /// Whether any registered plugin still `needs()` `track` and hasn't
 /// permanently given up on it (`Outcome::Skip`) — used to decide whether a
 /// priority track that couldn't be scanned this tick is worth requeuing.
-fn any_plugin_needs(inner: &Inner, track: &Track) -> bool {
-    inner.plugins.iter().any(|p| {
+fn any_plugin_needs(inner: &Inner, plugins: &[Arc<dyn ScanPlugin>], track: &Track) -> bool {
+    plugins.iter().any(|p| {
         p.needs(track)
             && inner.status.lock().unwrap().get(&(p.id(), track.id)) != Some(&ScanStatus::Skipped)
     })
@@ -480,8 +490,15 @@ fn any_plugin_needs(inner: &Inner, track: &Track) -> bool {
 /// `priority`: this is the currently-playing-track fast path, which always
 /// fetches with `ScanFetchMode::CacheOnly` — never `Full`/`Partial` —
 /// so scanning never races the live player's own fetch of the same file.
-fn scan_one(inner: &Inner, catalog: &Arc<Catalog>, ctx: &ScanCtx, track: &Track, priority: bool) -> bool {
-    for plugin in &inner.plugins {
+fn scan_one(
+    inner: &Inner,
+    plugins: &[Arc<dyn ScanPlugin>],
+    catalog: &Arc<Catalog>,
+    ctx: &ScanCtx,
+    track: &Track,
+    priority: bool,
+) -> bool {
+    for plugin in plugins {
         if !plugin.needs(track) {
             continue;
         }
