@@ -213,10 +213,11 @@ pub trait Player: Send + Sync {
     /// `mode`: see `crate::scan::ScanFetchMode`. `Full` drains the rest of
     /// the track after the plugin reads it so the backend commits the
     /// *entire* file to its local cache rather than just the bytes actually
-    /// consumed; `Partial` doesn't force that drain; `CacheOnly` never
-    /// touches the network, returning audio only if it's already fully on
-    /// disk — used for the prioritized now-playing path so scanning never
-    /// races the live player's own fetch of the same file.
+    /// consumed; `Partial` doesn't force that drain. `open_scan_audio` never
+    /// calls this with `CacheOnly` — that mode only ever reads `MediaCache`
+    /// (see its doc) — but a source may still call this itself with
+    /// `CacheOnly` outside that path, e.g. to populate `MediaCache` from
+    /// its own already-local bytes without risking a fetch.
     fn open_for_scan(
         &self,
         _r: &Rendition,

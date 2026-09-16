@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use medley_core::{
     BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LogBuf, MediaCache, MediaProvider, Player,
-    PlaylistId, Plugin, ScanPlugin, Source, SourceId, Store, Uuid,
+    PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, Uuid,
 };
 #[cfg(any(feature = "spotify", feature = "soundcloud", feature = "soulseek"))]
 use medley_core::{PluginHealth, Wiring};
@@ -78,16 +78,33 @@ fn load_volume() -> Option<f32> {
     v.get("volume")?.as_float().map(|f| f as f32)
 }
 
-/// Last-exit scan-pause state, persisted like `volume` — but only written
-/// (see `save_state`) when it was an explicit override of the config
-/// default, so a later default change isn't masked by a stale value.
-fn load_scan_paused(default_paused: bool) -> bool {
-    (|| -> Option<bool> {
+fn scan_mode_to_str(mode: ScanMode) -> &'static str {
+    match mode {
+        ScanMode::Active => "active",
+        ScanMode::CacheOnly => "cache-only",
+        ScanMode::Disabled => "disabled",
+    }
+}
+
+fn scan_mode_from_str(s: &str) -> Option<ScanMode> {
+    match s {
+        "active" => Some(ScanMode::Active),
+        "cache-only" => Some(ScanMode::CacheOnly),
+        "disabled" => Some(ScanMode::Disabled),
+        _ => None,
+    }
+}
+
+/// Last-exit scan mode, persisted like `volume` — but only written (see
+/// `save_state`) when it was an explicit override of the config default, so
+/// a later default change isn't masked by a stale value.
+fn load_scan_mode(default: ScanMode) -> ScanMode {
+    (|| -> Option<ScanMode> {
         let text = std::fs::read_to_string(state_path()).ok()?;
         let v: toml::Value = text.parse().ok()?;
-        v.get("scan_paused")?.as_bool()
+        scan_mode_from_str(v.get("scan_mode")?.as_str()?)
     })()
-    .unwrap_or(default_paused)
+    .unwrap_or(default)
 }
 
 /// `HotkeyTarget` <-> the single string `state.toml` stores it as: a local
@@ -154,11 +171,11 @@ fn load_hotkeys() -> HashMap<char, HotkeyTarget> {
     map
 }
 
-fn save_state(volume: f32, scan_paused: Option<bool>, hotkeys: &HashMap<char, HotkeyTarget>) {
+fn save_state(volume: f32, scan_mode: Option<ScanMode>, hotkeys: &HashMap<char, HotkeyTarget>) {
     let _ = std::fs::create_dir_all(data_dir());
     let mut text = format!("volume = {volume}\n");
-    if let Some(scan_paused) = scan_paused {
-        text.push_str(&format!("scan_paused = {scan_paused}\n"));
+    if let Some(scan_mode) = scan_mode {
+        text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
     }
     if !hotkeys.is_empty() {
         text.push_str("\n[hotkeys]\n");
@@ -356,14 +373,19 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir().join("spotify"));
-        let plugin = Arc::new(sources_spotify::SpotifyPlugin::new(cache_dir, bus.clone(), cfg.volume));
+        let plugin = Arc::new(sources_spotify::SpotifyPlugin::new(
+            cache_dir,
+            bus.clone(),
+            cfg.volume,
+            media_cache.clone(),
+        ));
         register_plugin(plugin, &mut sources, &mut media, &mut players, &mut plugins);
     }
 
     // BpmPlugin is registered into the running driver further down instead
     // (see `register_plugin` below), not passed in here.
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
-    let bpm_enabled_default = cfg.scan.bpm.enabled;
+    let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::Active } else { ScanMode::Disabled };
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
 
     log_registered_sources(&sources);
@@ -387,9 +409,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         data_dir().join("history.m3u8"),
     );
     if let Some(scan) = &session.scan {
-        scan.set_paused(load_scan_paused(!bpm_enabled_default));
-        // Runtime on/off is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
-        // only seeds the initial paused state.
+        scan.set_mode(load_scan_mode(bpm_default_mode));
+        // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
+        // only seeds the initial mode.
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
     }
     session.set_hotkeys(load_hotkeys());
@@ -519,12 +541,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let s = session.lock().unwrap();
     // Only persisted when it's an explicit override of the config default —
     // otherwise a later default change would be masked by today's value.
-    let scan_paused = s
-        .scan
-        .as_ref()
-        .map(|d| d.is_paused())
-        .filter(|&paused| paused != !s.cfg.scan.bpm.enabled);
-    save_state(s.player_status().volume, scan_paused, &s.hotkeys().into_iter().collect());
+    let default_mode = if s.cfg.scan.bpm.enabled { ScanMode::Active } else { ScanMode::Disabled };
+    let scan_mode = s.scan.as_ref().map(|d| d.mode()).filter(|&mode| mode != default_mode);
+    save_state(s.player_status().volume, scan_mode, &s.hotkeys().into_iter().collect());
     s.save_queue();
     drop(s);
     Ok(())

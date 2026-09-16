@@ -40,7 +40,7 @@ pub use playlist_m3u::{M3uDoc, M3uEntry, ParsedRendition, PlaylistMeta, SoftMeta
 pub use plugin::{Plugin, PluginCommand, PluginHealth, SetupKind, Wiring};
 pub use queue::{Queue, RepeatSetting};
 pub use resolver::{Resolution, Resolver, Target, is_local_source, local_path_from_uri};
-pub use scan::{Outcome, ScanDriver, ScanFetchMode, ScanPlugin, ScanStatus, TrackMeta, open_scan_audio};
+pub use scan::{Outcome, ScanDriver, ScanFetchMode, ScanMode, ScanPlugin, ScanStatus, TrackMeta, open_scan_audio};
 pub use search::Search;
 pub use store::{MemStore, RedbStore};
 pub use traits::{

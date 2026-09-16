@@ -243,8 +243,9 @@ pub enum Command {
     },
     /// Empty the queue (and stop playback).
     ClearQueue,
-    /// Pause/resume the background scan driver (`:togglescan`). No-op if no
-    /// scan plugin is registered.
+    /// Cycles the background scan driver's mode: active -> cache-only ->
+    /// disabled -> active (`:togglescan`). No-op if no scan plugin is
+    /// registered.
     ToggleScan,
     Quit,
 }
@@ -522,7 +523,7 @@ impl Session {
             }
             Command::ToggleScan => {
                 if let Some(scan) = &self.scan {
-                    scan.set_paused(!scan.is_paused());
+                    scan.set_mode(scan.mode().cycle());
                 }
                 Ok(Dispatch::Ok)
             }

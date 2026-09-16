@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
-    Bus, CoreEvent, Error, Player, PlayerEvent, PlayerState, PlayerStatus, ReadSeek, Rendition,
-    SourceId,
+    Bus, CoreEvent, Error, MediaCache, Player, PlayerEvent, PlayerState, PlayerStatus, ReadSeek,
+    Rendition, ScanFetchMode, SourceId,
 };
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
@@ -157,7 +157,7 @@ pub struct SpotifyPlayer {
 impl SpotifyPlayer {
     /// Spawn the worker. Blocks only long enough to hand the credentials to the
     /// worker thread; the librespot session connects asynchronously in there.
-    pub fn new(auth: Auth, bus: Bus, volume: f32) -> Self {
+    pub fn new(auth: Auth, bus: Bus, volume: f32, media_cache: Arc<MediaCache>) -> Self {
         let snap = Arc::new(Mutex::new(Snap {
             state: PlayerState::Stopped,
             position_ms: 0,
@@ -184,7 +184,7 @@ impl SpotifyPlayer {
                         return;
                     }
                 };
-                rt.block_on(run(auth, bus, rx, worker_snap, worker_tap, worker_scan));
+                rt.block_on(run(auth, bus, rx, worker_snap, worker_tap, worker_scan, media_cache));
             })
             .expect("spawn spotify-player worker");
         Self { tx, snap, tap, scan }
@@ -411,6 +411,7 @@ async fn run(
     snap: Arc<Mutex<Snap>>,
     tap: Arc<AudioTap>,
     scan: Arc<Mutex<Option<(tokio::runtime::Handle, Session)>>>,
+    media_cache: Arc<MediaCache>,
 ) {
     // Set only from the `SessionDied` exit path (never from a clean
     // `Shutdown`, an explicit `Cmd::Stop`, or a legitimate `EndOfTrack`/
@@ -614,7 +615,8 @@ async fn run(
                     {
                         materialized_sent = true;
                         log::debug!("spotify: materialized {uri}");
-                        bus.send(CoreEvent::Player(PlayerEvent::Materialized { source, uri }));
+                        bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
+                        spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri);
                     }
                 }
             }
@@ -652,6 +654,37 @@ async fn run(
             }
         }
     }
+}
+
+/// Best-effort: now that `is_materialized` confirms `uri`'s Ogg Vorbis file
+/// is fully in librespot's own on-disk cache, decrypt it and write the
+/// plain bytes into the shared `MediaCache` too — so a `ScanMode::CacheOnly`
+/// walk (which never touches a `Player`/`MediaProvider`, only `MediaCache`,
+/// see `core::scan::open_scan_audio`) can read this track without any
+/// Spotify-specific code of its own. `CacheOnly` here guarantees this never
+/// originates a CDN fetch — the file is already local. Spawned off the
+/// worker's select loop so a slow disk read/decrypt never delays command
+/// handling; failures are just logged, never surfaced to playback.
+fn spawn_materialize_to_cache(session: Session, media_cache: Arc<MediaCache>, source: SourceId, uri: String) {
+    tokio::spawn(async move {
+        let audio = match crate::scan_audio::fetch_scan_audio(&session, &uri, ScanFetchMode::CacheOnly).await {
+            Ok(audio) => audio,
+            Err(e) => {
+                log::debug!("spotify: materialize-to-cache fetch failed for {uri}: {e}");
+                return;
+            }
+        };
+        let bytes = match core::audio_decode::read_all(audio) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::warn!("spotify: materialize-to-cache read failed for {uri}: {e}");
+                return;
+            }
+        };
+        if let Err(e) = media_cache.put(&source, &uri, &bytes) {
+            log::warn!("spotify: materialize-to-cache write failed for {uri}: {e}");
+        }
+    });
 }
 
 fn set_state(snap: &Arc<Mutex<Snap>>, state: PlayerState, position_ms: u32) {

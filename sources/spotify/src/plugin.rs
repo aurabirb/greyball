@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Bus, CoreEvent, Player, Plugin, PluginCommand, PluginHealth, SetupKind, Source, SourceId, Wiring};
+use core::{
+    Bus, CoreEvent, MediaCache, Player, Plugin, PluginCommand, PluginHealth, SetupKind, Source, SourceId,
+    Wiring,
+};
 
 use crate::auth::Auth;
 use crate::player::SpotifyPlayer;
@@ -23,6 +26,7 @@ pub struct SpotifyPlugin {
     cache_dir: PathBuf,
     bus: Bus,
     volume: f32,
+    media_cache: Arc<MediaCache>,
     /// Guards against `probe` spawning overlapping automatic refresh
     /// attempts (it's called on every redraw, ~4/s).
     refreshing: Arc<AtomicBool>,
@@ -30,12 +34,13 @@ pub struct SpotifyPlugin {
 }
 
 impl SpotifyPlugin {
-    pub fn new(cache_dir: PathBuf, bus: Bus, volume: f32) -> Self {
+    pub fn new(cache_dir: PathBuf, bus: Bus, volume: f32, media_cache: Arc<MediaCache>) -> Self {
         crate::auth::heal_permissions(&cache_dir);
         Self {
             cache_dir,
             bus,
             volume,
+            media_cache,
             refreshing: Arc::new(AtomicBool::new(false)),
             next_auto_refresh: Arc::new(Mutex::new(Instant::now())),
         }
@@ -107,7 +112,8 @@ impl Plugin for SpotifyPlugin {
             self.cache_dir.clone(),
             self.bus.clone(),
         ));
-        let player: Arc<dyn Player> = Arc::new(SpotifyPlayer::new(auth, self.bus.clone(), self.volume));
+        let player: Arc<dyn Player> =
+            Arc::new(SpotifyPlayer::new(auth, self.bus.clone(), self.volume, self.media_cache.clone()));
         Wiring { source: Some(source), player: Some(player), media: None }
     }
 

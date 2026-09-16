@@ -3,7 +3,7 @@
 //! into the generic `Track::attrs` map.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -98,24 +98,59 @@ pub enum ScanFetchMode {
     /// Fetch if needed, but don't force a drain beyond what the plugin
     /// itself reads.
     Partial,
-    /// Never touch the network. Return audio only if it's already fully on
-    /// disk; otherwise behave exactly like "no audio available". Used
-    /// exclusively for the prioritized now-playing path: the live player is
-    /// the only thing allowed to originate a network fetch for a track
-    /// that's actively loading/playing, so scanning just waits for that
-    /// fetch to land it in cache.
+    /// Never touch a `MediaProvider`/`Player` at all — only ever a
+    /// `MediaCache` hit. Used for the prioritized now-playing path and for
+    /// `ScanMode::CacheOnly`: something else (an active-mode scan, or a
+    /// source's own playback-triggered materializer, e.g. Spotify's) is
+    /// responsible for ever getting a track's audio into `MediaCache` in
+    /// the first place.
     CacheOnly,
 }
 
-/// Best-effort seekable audio for `rendition`: a `MediaCache` hit first (any
-/// source), then its `MediaProvider` (a local file / HTTP source), then
-/// falls back to `Player::open_for_scan` (Spotify has no `MediaProvider` at
-/// all, so this is its only path). `None` when nothing can supply bytes.
-/// `CacheOnly` never originates a live fetch through either path — a
-/// `MediaProvider`-backed source simply has nothing further to try once the
-/// cache misses (there's no raw-bytes cache to fall back to any more); a
-/// `Player` may still have something of its own (e.g. Spotify's librespot
-/// file cache from a live session), so `mode` is passed through to it as-is.
+/// The driver's overall on/off/how-hard state, cycled by `B`/`:togglescan`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanMode {
+    /// Fetch new audio as needed, per `ScanConfig::cache_full`.
+    Active,
+    /// Walk the library but only ever read what's already in `MediaCache` —
+    /// never originate a fetch. See `ScanFetchMode::CacheOnly`.
+    CacheOnly,
+    /// Walk thread does nothing.
+    Disabled,
+}
+
+impl ScanMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            ScanMode::Active => ScanMode::CacheOnly,
+            ScanMode::CacheOnly => ScanMode::Disabled,
+            ScanMode::Disabled => ScanMode::Active,
+        }
+    }
+
+    fn to_u8(self) -> u8 {
+        match self {
+            ScanMode::Active => 0,
+            ScanMode::CacheOnly => 1,
+            ScanMode::Disabled => 2,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => ScanMode::Active,
+            1 => ScanMode::CacheOnly,
+            _ => ScanMode::Disabled,
+        }
+    }
+}
+
+/// A `MediaCache` hit, or (unless `mode` is `CacheOnly`) a live fetch via
+/// the source's `MediaProvider`, or `Player::open_for_scan` for a source
+/// with no `MediaProvider` (e.g. Spotify). `None` when nothing can supply
+/// bytes. `CacheOnly` never touches `media`/`players` at all — populating
+/// `MediaCache` is entirely someone else's job (see `ScanFetchMode::CacheOnly`'s
+/// doc), so a cache miss here is just "not materialized yet", not an error.
 pub fn open_scan_audio(
     rendition: &Rendition,
     media: &HashMap<SourceId, Arc<dyn MediaProvider>>,
@@ -132,12 +167,16 @@ pub fn open_scan_audio(
             }
         };
     }
+    if mode == ScanFetchMode::CacheOnly {
+        log::debug!(
+            "scan: {} {} not yet materialized, skipping (CacheOnly)",
+            rendition.source,
+            rendition.uri
+        );
+        return None;
+    }
     let source = &rendition.source;
     if let Some(mp) = media.get(source) {
-        if mode == ScanFetchMode::CacheOnly {
-            log::debug!("scan: {source} {} not yet cached, skipping (CacheOnly)", rendition.uri);
-            return None;
-        }
         match mp.materialize(rendition) {
             Ok(r) => Some(r),
             Err(e) => {
@@ -149,17 +188,7 @@ pub fn open_scan_audio(
         match p.open_for_scan(rendition, mode) {
             Ok(r) => Some(r),
             Err(e) => {
-                // `CacheOnly` never originates a fetch, so "nothing cached
-                // yet" is the expected outcome whenever this rendition
-                // just isn't the one actually playing (same case the
-                // `MediaProvider` branch above already logs at `debug!`, not
-                // `warn!`) — only a genuine fetch/decrypt failure in
-                // Full/Partial mode is worth a warning.
-                if mode == ScanFetchMode::CacheOnly {
-                    log::debug!("scan: {source} player couldn't open {} for scan (CacheOnly): {e}", rendition.uri);
-                } else {
-                    log::warn!("scan: {source} player couldn't open {} for scan: {e}", rendition.uri);
-                }
+                log::warn!("scan: {source} player couldn't open {} for scan: {e}", rendition.uri);
                 None
             }
         }
@@ -200,7 +229,7 @@ struct Inner {
     /// the prioritized now-playing path always uses `ScanFetchMode::CacheOnly`
     /// regardless, never `Full`/`Partial`.
     cache_full: bool,
-    paused: AtomicBool,
+    mode: AtomicU8,
     /// Track ids that jumped the queue (currently-playing), oldest first.
     priority: Mutex<VecDeque<TrackId>>,
     last_run: Mutex<HashMap<&'static str, Instant>>,
@@ -243,7 +272,7 @@ impl ScanDriver {
             inner: Arc::new(Inner {
                 plugins: Mutex::new(plugins),
                 cache_full,
-                paused: AtomicBool::new(false),
+                mode: AtomicU8::new(ScanMode::Active.to_u8()),
                 priority: Mutex::new(VecDeque::new()),
                 last_run: Mutex::new(HashMap::new()),
                 status: Mutex::new(HashMap::new()),
@@ -333,20 +362,20 @@ impl ScanDriver {
         *view = if tracks.is_empty() { None } else { Some(ViewOrder { tracks, highlighted }) };
     }
 
-    /// Runtime pause/resume (`B` / `:togglescan`) — stops/restarts the walk
-    /// without dropping anything already scanned. Also drains `priority`
-    /// and clears any in-flight `Downloading` status so pausing fully
-    /// inhibits the scanner rather than just skipping the next tick.
-    pub fn set_paused(&self, paused: bool) {
-        self.inner.paused.store(paused, Ordering::Relaxed);
-        if paused {
+    /// Sets the driver's mode (`B` / `:togglescan` cycles it). Switching to
+    /// `Disabled` drains `priority` and clears any in-flight `Downloading`
+    /// status so it fully inhibits the scanner rather than just skipping
+    /// the next tick.
+    pub fn set_mode(&self, mode: ScanMode) {
+        self.inner.mode.store(mode.to_u8(), Ordering::Relaxed);
+        if mode == ScanMode::Disabled {
             self.inner.priority.lock().unwrap().clear();
             self.inner.status.lock().unwrap().retain(|_, v| *v != ScanStatus::Downloading);
         }
     }
 
-    pub fn is_paused(&self) -> bool {
-        self.inner.paused.load(Ordering::Relaxed)
+    pub fn mode(&self) -> ScanMode {
+        ScanMode::from_u8(self.inner.mode.load(Ordering::Relaxed))
     }
 
     /// Live status of `plugin_id`'s last/current attempt at `track`. `None`
@@ -373,7 +402,8 @@ fn run(
 ) {
     loop {
         thread::sleep(TICK);
-        if inner.paused.load(Ordering::Relaxed) {
+        let mode = ScanMode::from_u8(inner.mode.load(Ordering::Relaxed));
+        if mode == ScanMode::Disabled {
             continue;
         }
 
@@ -390,19 +420,21 @@ fn run(
         if let Some(id) = prio {
             match store.get_track(id) {
                 Ok(Some(track)) => {
-                    if scan_one(&inner, &plugins, &catalog, &ctx, &track, true) {
-                        continue;
-                    }
-                    // Still needs a plugin, just blocked on that plugin's
-                    // own cooldown right now (min_interval or failure
-                    // backoff) — requeue so it gets first crack again next
-                    // tick, rather than silently dropping the priority jump
-                    // and falling back to whatever order the general walk
-                    // happens to reach it in.
+                    // Always attempted with `ScanFetchMode::CacheOnly` (see
+                    // `scan_one`), which never blocks on a plugin's
+                    // `min_interval` — so this either resolves the track or
+                    // finds it not materialized yet. Either way, re-check
+                    // `needs()` and requeue if there's still something to
+                    // do, so a not-yet-materialized now-playing track keeps
+                    // getting retried every tick instead of just once.
+                    let attempted = scan_one(&inner, &plugins, &catalog, &ctx, &track, true, mode);
                     if any_plugin_needs(&inner, &plugins, &track) {
                         inner.priority.lock().unwrap().push_front(id);
                     } else {
                         log::debug!("scan: priority track {id:?} has nothing left to do");
+                    }
+                    if attempted {
+                        continue;
                     }
                 }
                 Ok(None) => log::debug!("scan: priority track {id:?} not found in store"),
@@ -439,7 +471,7 @@ fn run(
         }
         let mut scanned = 0usize;
         for track in &tracks {
-            if scan_one(&inner, &plugins, &catalog, &ctx, track, false) {
+            if scan_one(&inner, &plugins, &catalog, &ctx, track, false, mode) {
                 scanned += 1;
             }
         }
@@ -495,6 +527,7 @@ fn scan_one(
     ctx: &ScanCtx,
     track: &Track,
     priority: bool,
+    driver_mode: ScanMode,
 ) -> bool {
     for plugin in plugins {
         if !plugin.needs(track) {
@@ -503,7 +536,9 @@ fn scan_one(
         // A prior `Outcome::Skip` means "not this plugin's job" — honour
         // that for the rest of this run rather than re-attempting it every
         // `min_interval`, which would otherwise waste a cooldown slot
-        // forever on a track this plugin will never handle.
+        // forever on a track this plugin will never handle. Never recorded
+        // for a `CacheOnly` miss in the first place (below) — that's "not
+        // materialized yet", not a verdict.
         if inner.status.lock().unwrap().get(&(plugin.id(), track.id)) == Some(&ScanStatus::Skipped)
         {
             continue;
@@ -518,7 +553,21 @@ fn scan_one(
                 None => {}
             }
         }
-        {
+
+        let mode = if priority || driver_mode == ScanMode::CacheOnly {
+            ScanFetchMode::CacheOnly
+        } else if inner.cache_full || plugin.wants_full_audio() {
+            ScanFetchMode::Full
+        } else {
+            ScanFetchMode::Partial
+        };
+
+        // `min_interval` only throttles a real fetch — a `CacheOnly`
+        // attempt never touches the network, so it's never worth delaying
+        // (this is what lets the now-playing fast path pick up a track
+        // within one tick of it being materialized, rather than waiting
+        // out the plugin's cooldown).
+        if mode != ScanFetchMode::CacheOnly {
             let mut last_run = inner.last_run.lock().unwrap();
             let ready = last_run
                 .get(plugin.id())
@@ -531,13 +580,6 @@ fn scan_one(
 
         inner.status.lock().unwrap().insert((plugin.id(), track.id), ScanStatus::Downloading);
 
-        let mode = if priority {
-            ScanFetchMode::CacheOnly
-        } else if inner.cache_full || plugin.wants_full_audio() {
-            ScanFetchMode::Full
-        } else {
-            ScanFetchMode::Partial
-        };
         log::debug!(
             "scan[{}]: attempting \"{}\" ({:?}, {mode:?}{})",
             plugin.id(),
@@ -578,6 +620,19 @@ fn scan_one(
                 let _ = catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
                 inner.status.lock().unwrap().remove(&(plugin.id(), track.id));
                 inner.failures.lock().unwrap().remove(&(plugin.id(), track.id));
+            }
+            Outcome::Skip if mode == ScanFetchMode::CacheOnly => {
+                // Not a verdict — just not materialized yet under a mode
+                // that was never allowed to fetch. Leave "waiting" (no
+                // status entry) so a later `Active` attempt gets a fresh
+                // try instead of finding this sticky-`Skipped`.
+                log::debug!(
+                    "scan[{}]: \"{}\" ({:?}) not materialized yet (CacheOnly)",
+                    plugin.id(),
+                    track.title,
+                    track.id
+                );
+                inner.status.lock().unwrap().remove(&(plugin.id(), track.id));
             }
             Outcome::Skip => {
                 log::debug!(
