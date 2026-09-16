@@ -1262,6 +1262,18 @@ impl Session {
         self.hotkeys = hotkeys;
     }
 
+    /// Sets a source's persisted `enabled` bit; takes effect next restart, like editing config.toml.
+    pub fn set_source_enabled(&mut self, source: &str, enabled: bool) {
+        Arc::make_mut(&mut self.cfg).set_source_enabled(source, enabled);
+    }
+
+    /// Live scan on/off — reaches `ScanMode::Disabled`, which `B` deliberately never does.
+    pub fn set_scan_enabled(&mut self, enabled: bool) {
+        if let Some(scan) = &self.scan {
+            scan.set_mode(if enabled { crate::scan::ScanMode::CacheOnly } else { crate::scan::ScanMode::Disabled });
+        }
+    }
+
     /// Latest async remote-playlist-toggle result, if any — see
     /// `membership_feedback`'s field doc.
     pub fn membership_feedback(&self) -> Option<String> {

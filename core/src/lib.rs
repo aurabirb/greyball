@@ -26,7 +26,7 @@ pub use app::{BuiltinAction, Command, Dispatch, HotkeyTarget, Session, cache_ren
 pub use catalog::Catalog;
 pub use config::{
     Axis, BpmScanConfig, Config, HttpConfig, PaneLayoutConfig, PaneMode, ScanConfig, Side,
-    SoulseekConfig, SoundcloudConfig, SpotifyConfig,
+    SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES,
 };
 pub use audio_decode::decode_and_cache;
 pub use event::{Bus, CoreEvent, PlayerEvent};

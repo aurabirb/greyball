@@ -74,10 +74,6 @@
   startup even though the BPM plugin is disabled/paused at that point — investigate why the status
   line's tag doesn't show until some later redraw/state change and fix it to appear immediately.
 ### Features
-- [ ] The Settings pane (`ui/src/view.rs`'s `settings_lines`/`Pane::Settings`) is currently just a
-  read-only scrollable text dump — make it interactive, at least enough to toggle each plugin/source
-  on/off from there (the same enable/disable state that plugin-specific config already tracks, e.g.
-  Soulseek's `enabled` toggle) instead of only being editable via `config.toml`.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 - [ ] Ignore mouse events in the log panel so the user can select/copy text with the mouse instead of the panel capturing clicks/drags as input.
 

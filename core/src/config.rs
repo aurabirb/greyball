@@ -36,6 +36,33 @@ pub struct Config {
     pub volume: f32,
 }
 
+/// Sources the Settings pane / `state.toml` can toggle by name.
+pub const TOGGLABLE_SOURCES: [&str; 4] = ["http", "spotify", "soundcloud", "soulseek"];
+
+impl Config {
+    /// `enabled` bit for one of `TOGGLABLE_SOURCES`, `None` for any other name.
+    pub fn source_enabled(&self, source: &str) -> Option<bool> {
+        match source {
+            "http" => Some(self.http.enabled),
+            "spotify" => Some(self.spotify.enabled),
+            "soundcloud" => Some(self.soundcloud.enabled),
+            "soulseek" => Some(self.soulseek.enabled),
+            _ => None,
+        }
+    }
+
+    /// Sets one of `TOGGLABLE_SOURCES`' `enabled` bit; no-op for any other name.
+    pub fn set_source_enabled(&mut self, source: &str, enabled: bool) {
+        match source {
+            "http" => self.http.enabled = enabled,
+            "spotify" => self.spotify.enabled = enabled,
+            "soundcloud" => self.soundcloud.enabled = enabled,
+            "soulseek" => self.soulseek.enabled = enabled,
+            _ => {}
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HttpConfig {

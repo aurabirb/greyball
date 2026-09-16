@@ -24,8 +24,8 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 
 use core::{
     Axis, BrowseNode, Command, CoreEvent, Dispatch, HotkeyTarget, LogBuf, PaneLayoutConfig,
-    PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, Session, SetupKind, Side,
-    SourceId, TrackId,
+    PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session, SetupKind,
+    Side, SourceId, TOGGLABLE_SOURCES, TrackId,
 };
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -556,9 +556,10 @@ pub struct MedleyView {
     /// `scroll_pane` (see `log_pin_after_scroll`); read by the Log draw
     /// sites via `log_visible_len`.
     log_pin: Option<usize>,
-    /// Same idea as `log_scroll`, but top-down (0 = top) since Settings has
-    /// no live tail to follow.
-    settings_scroll: usize,
+    /// Selected row within the Settings pane's entry list.
+    settings_cursor: usize,
+    /// Scroll window into the Settings pane's list — see `warnings_offset`.
+    settings_offset: usize,
     /// Which pane currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     /// The Vis pane's background worker + last computed frame.
@@ -647,7 +648,8 @@ impl MedleyView {
             last_query: None,
             log_scroll: 0,
             log_pin: None,
-            settings_scroll: 0,
+            settings_cursor: 0,
+            settings_offset: 0,
             focus: Focus::Main,
             vis,
             screen_pane: None,
@@ -723,17 +725,17 @@ impl MedleyView {
                 draw_pane(pane, &content, &lines, scroll, true);
             }
             Pane::Settings => {
-                let lines = self.with_session(settings_lines);
-                draw_pane(pane, &content, &lines, self.settings_scroll, true);
+                let entries = self.with_session(settings_entries);
+                draw_settings_pane(&content, &entries, self.settings_offset, self.settings_cursor, true);
             }
             // `toggle_pane` never routes these two here — a `Screen`-mode
             // Queue/History switches `self.screen` instead (see its doc).
             Pane::Queue | Pane::History => unreachable!("Queue/History never become screen_pane"),
         }
-        let hint = if pane == Pane::Vis {
-            "  [Esc] close"
-        } else {
-            "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll"
+        let hint = match pane {
+            Pane::Vis => "  [Esc] close",
+            Pane::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
+            _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
         };
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
             p.print((0, h), &pad(hint, p.size.x));
@@ -1045,28 +1047,56 @@ impl MedleyView {
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }
 
-    /// Line-scroll for Log/Settings/Vis only — a focused Queue/History pane
-    /// is a track list, not lines, and `on_event` routes its nav keys to
-    /// cursor movement (`list_screen_for_pane`) before ever reaching here.
+    /// Line-scroll for Log/Vis only — Settings has its own row cursor
+    /// (`jump_settings`) and a focused Queue/History pane is a track list,
+    /// not lines; `on_event` routes both elsewhere before ever reaching here.
     fn scroll_pane(&mut self, pane: Pane, up: bool, step: usize) {
+        if pane == Pane::Settings {
+            self.jump_settings(up, step);
+            return;
+        }
         let s = match pane {
             Pane::Log => &mut self.log_scroll,
-            Pane::Settings => &mut self.settings_scroll,
+            Pane::Settings => unreachable!("handled above"),
             Pane::Vis => return, // nothing to scroll, it's live
             Pane::Queue | Pane::History => return,
         };
-        // Log's 0 is the tail (up = further back = increase); Settings' 0 is
-        // the top (up = decrease).
-        match (pane, up) {
-            (Pane::Log, true) | (Pane::Settings, false) => *s += step,
-            _ => *s = s.saturating_sub(step),
+        if up {
+            *s += step;
+        } else {
+            *s = s.saturating_sub(step);
         }
-        if pane == Pane::Log {
-            // Pin (or release) the Log pane's view against `log`'s current
-            // length — see `log_pin_after_scroll` for why.
-            self.log_pin = log_pin_after_scroll(self.log_scroll, self.log_pin, self.log.snapshot().len());
-        }
+        // Pin (or release) the Log pane's view against `log`'s current
+        // length — see `log_pin_after_scroll` for why.
+        self.log_pin = log_pin_after_scroll(self.log_scroll, self.log_pin, self.log.snapshot().len());
         self.clamp_pane_scroll(pane);
+    }
+
+    /// Settings pane's row cursor — a `CursorWindow` list like Queue/History
+    /// rather than Log's wrapped-line scroll, since each entry is one row.
+    fn jump_settings(&mut self, up: bool, step: usize) {
+        let n = self.with_session(|s| settings_entries(s).len());
+        let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
+        CursorWindow { cursor: &mut self.settings_cursor, offset: &mut self.settings_offset }.jump(up, step, n, h);
+    }
+
+    /// Enter/Space on the Settings pane's selected row.
+    fn toggle_selected_setting(&mut self) {
+        let cursor = self.settings_cursor;
+        let Some(entry) = self.with_session(|s| settings_entries(s).into_iter().nth(cursor)) else { return };
+        match entry {
+            SettingsEntry::Source { name, enabled } => {
+                self.with_session_mut(|s| s.set_source_enabled(name, !enabled));
+                self.queue_feedback = Some(format!(
+                    "  {name}: {} (restart to apply)",
+                    if enabled { "disabled" } else { "enabled" }
+                ));
+            }
+            SettingsEntry::Scan { enabled, available: true } => {
+                self.with_session_mut(|s| s.set_scan_enabled(!enabled));
+            }
+            SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
+        }
     }
 
     /// The (width, content-row-count) `draw_pane` actually renders `pane`
@@ -1085,25 +1115,19 @@ impl MedleyView {
         }
     }
 
-    /// Keep `log_scroll`/`settings_scroll` inside the actual scrollable
-    /// range for `pane`'s current content and on-screen size (`bound_offset`
-    /// — same formula `draw_pane` already applies at render time), so
-    /// scrolling past either end can't inflate the stored value beyond what
-    /// scrolling back would ever need to undo.
+    /// Keep `log_scroll` inside the actual scrollable range for `pane`'s
+    /// current content and on-screen size (`bound_offset` — same formula
+    /// `draw_pane` already applies at render time), so scrolling past
+    /// either end can't inflate the stored value beyond what scrolling back
+    /// would ever need to undo.
     fn clamp_pane_scroll(&mut self, pane: Pane) {
         let Some((width, h)) = self.pane_content_dims(pane) else { return };
         let lines = match pane {
             Pane::Log => self.log_render_lines().0,
-            Pane::Settings => self.with_session(settings_lines),
-            Pane::Vis | Pane::Queue | Pane::History => return,
+            Pane::Settings | Pane::Vis | Pane::Queue | Pane::History => return,
         };
         let wrapped_len: usize = lines.iter().map(|l| wrap(l, width).len()).sum();
-        let s = match pane {
-            Pane::Log => &mut self.log_scroll,
-            Pane::Settings => &mut self.settings_scroll,
-            Pane::Vis | Pane::Queue | Pane::History => return,
-        };
-        *s = bound_offset(*s, wrapped_len, h);
+        self.log_scroll = bound_offset(self.log_scroll, wrapped_len, h);
     }
 
     /// The Log pane's content/scroll for this frame: the snapshot lines
@@ -2721,24 +2745,74 @@ fn pane_title(pane: Pane) -> &'static str {
     }
 }
 
-/// Effective config as plain lines, for both the embedded pane and the
-/// screen-mode modal.
-fn settings_lines(s: &Session) -> Vec<String> {
+/// One row of the Settings pane: plain info text, or a togglable bool.
+#[derive(Clone)]
+enum SettingsEntry {
+    Info(String),
+    /// One of `TOGGLABLE_SOURCES` — config-only, takes effect next restart.
+    Source { name: &'static str, enabled: bool },
+    /// Background scan on/off — live via `ScanDriver::set_mode`, unlike `Source`.
+    Scan { enabled: bool, available: bool },
+}
+
+fn settings_entry_line(e: &SettingsEntry) -> String {
+    match e {
+        SettingsEntry::Info(s) => s.clone(),
+        SettingsEntry::Source { name, enabled } => format!("[{}] {name}", if *enabled { "x" } else { " " }),
+        SettingsEntry::Scan { enabled, available: true } => {
+            format!("[{}] bpm scan", if *enabled { "x" } else { " " })
+        }
+        SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
+    }
+}
+
+/// Effective config as togglable/info rows, for both the embedded pane and
+/// the screen-mode modal.
+fn settings_entries(s: &Session) -> Vec<SettingsEntry> {
     let cfg = &s.cfg;
-    vec![
-        format!("theme:            {}", cfg.theme),
-        format!("initial_screen:   {}", cfg.initial_screen),
-        format!("volume:           {:.0}%", s.player_status().volume * 100.0),
-        format!("http.roots:       {}", cfg.http.roots.len()),
-        format!("http.recurse:     {}", cfg.http.recurse_depth),
-        format!("spotify:          {}", cfg.spotify.enabled),
-        format!("soundcloud:       {}", cfg.soundcloud.enabled),
-        format!("soulseek:         {}", cfg.soulseek.enabled),
-        String::new(),
-        format!("panes.mode:       {:?}", cfg.panes.mode),
-        format!("panes.side:       {:?}", cfg.panes.side),
-        format!("panes.stack:      {:?}", cfg.panes.stack),
-    ]
+    let mut v = vec![
+        SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
+        SettingsEntry::Info(format!("initial_screen:   {}", cfg.initial_screen)),
+        SettingsEntry::Info(format!("volume:           {:.0}%", s.player_status().volume * 100.0)),
+        SettingsEntry::Info(format!("http.roots:       {}", cfg.http.roots.len())),
+        SettingsEntry::Info(format!("http.recurse:     {}", cfg.http.recurse_depth)),
+    ];
+    for name in TOGGLABLE_SOURCES {
+        v.push(SettingsEntry::Source { name, enabled: cfg.source_enabled(name).unwrap_or(false) });
+    }
+    v.push(SettingsEntry::Scan {
+        enabled: s.scan.as_ref().is_some_and(|d| d.mode() != ScanMode::Disabled),
+        available: s.scan.is_some(),
+    });
+    v.push(SettingsEntry::Info(String::new()));
+    v.push(SettingsEntry::Info(format!("panes.mode:       {:?}", cfg.panes.mode)));
+    v.push(SettingsEntry::Info(format!("panes.side:       {:?}", cfg.panes.side)));
+    v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", cfg.panes.stack)));
+    v
+}
+
+/// Settings pane's title + rows, with a highlight on `cursor` — the
+/// `SettingsEntry` analogue of `draw_pane` (Log's wrap-based line scroll
+/// doesn't apply here: one entry is always exactly one row).
+fn draw_settings_pane(printer: &Printer, entries: &[SettingsEntry], offset: usize, cursor: usize, focused: bool) {
+    let mut title = pane_title(Pane::Settings).to_string();
+    if focused {
+        title = format!("[{title}]");
+    }
+    printer.with_color(ColorStyle::title_secondary(), |p| {
+        p.print((0, 0), &pad(&title, p.size.x));
+    });
+    let width = printer.size.x;
+    let h = printer.size.y.saturating_sub(1);
+    for (i, entry) in entries.iter().enumerate().skip(offset).take(h) {
+        let y = 1 + (i - offset);
+        let line = pad(&settings_entry_line(entry), width);
+        if i == cursor {
+            printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
+        } else {
+            printer.print((0, y), &line);
+        }
+    }
 }
 
 /// A title bar plus a window of track rows and a scrollbar — the main
@@ -3117,7 +3191,7 @@ impl View for MedleyView {
                     .unwrap_or_else(|| "nothing playing".to_string());
                 let bpm_tag = bpm_status_tag(s, now_playing.as_ref());
                 let shuffle = s.shuffle();
-                let settings = if want_settings { settings_lines(s) } else { Vec::new() };
+                let settings = if want_settings { settings_entries(s) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk "what the user is looking at" every
                 // redraw (cheap, and this already runs at BASELINE_FPS) so
@@ -3171,10 +3245,13 @@ impl View for MedleyView {
                 );
                 continue;
             }
+            if pane == Pane::Settings {
+                draw_settings_pane(&printer.windowed(rect), &settings, self.settings_offset, self.settings_cursor, focused);
+                continue;
+            }
             let (lines, scroll) = match pane {
                 Pane::Log => self.log_render_lines(),
-                Pane::Settings => (settings.clone(), self.settings_scroll),
-                Pane::Vis | Pane::Queue | Pane::History => unreachable!("handled above"),
+                Pane::Settings | Pane::Vis | Pane::Queue | Pane::History => unreachable!("handled above"),
             };
             draw_pane(pane, &printer.windowed(rect), &lines, scroll, focused);
         }
@@ -3863,6 +3940,10 @@ impl View for MedleyView {
             },
             Event::Key(Key::Enter) if self.focus == Focus::Warnings => {
                 self.open_warnings();
+                EventResult::consumed()
+            }
+            Event::Key(Key::Enter) | Event::Char(' ') if self.focus == Focus::Pane(Pane::Settings) => {
+                self.toggle_selected_setting();
                 EventResult::consumed()
             }
             Event::Char(':') => self.handle_action(Action::CommandLine),
