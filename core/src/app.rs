@@ -1153,20 +1153,6 @@ impl Session {
         self.view.remote_playlist_track_ids(source, node, self.remote_ctx())
     }
 
-    /// `(source, node)`'s ingested track ids exactly as far as they've
-    /// already loaded into `ViewCache` — read-only, never kicks off a fetch
-    /// (unlike `remote_playlist_track_ids`). `None` if this entry has never
-    /// been touched this session. For the hotkey-playlists column, which
-    /// must only reuse what's already cached as playlists load normally in
-    /// the background, not eagerly load every hotkey-bound playlist itself.
-    pub fn remote_playlist_cached_track_ids(
-        &self,
-        source: &SourceId,
-        node: &BrowseNode,
-    ) -> Option<Vec<TrackId>> {
-        self.view.remote_playlist_cached_track_ids(source, node)
-    }
-
     /// Whether `node` (a browse folder under `source`) is a synthetic,
     /// not-a-real-playlist entry — e.g. Spotify's "Liked Songs". Used to
     /// exclude such folders from the hotkey-playlists column even if one

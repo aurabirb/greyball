@@ -269,22 +269,6 @@ impl ViewCache {
         .unwrap_or_default()
     }
 
-    /// `(source, node)`'s ingested track ids exactly as far as they've
-    /// already loaded, read-only — unlike `remote_playlist_track_ids`, this
-    /// never calls `ensure_remote_playlist_tracks`, so it can't itself kick
-    /// off a fetch. `None` if nothing has ever touched this entry (not
-    /// browsed this session, no persisted cache from a previous one) — for
-    /// a caller (e.g. the hotkey-playlists column) that only wants to reuse
-    /// whatever's already sitting in the cache as playlists load normally
-    /// in the background, never to force-load one nobody has browsed to.
-    pub fn remote_playlist_cached_track_ids(
-        &self,
-        source: &SourceId,
-        node: &BrowseNode,
-    ) -> Option<Vec<TrackId>> {
-        self.remote_playlist_cached(source, node, |e| e.tracks.iter().map(|t| t.id).collect())
-    }
-
     /// Shared by the `remote_playlist_*` accessors above: look up the cache
     /// entry for `(source, node)` and, if present, run `f` over it.
     fn remote_playlist_cached<T>(

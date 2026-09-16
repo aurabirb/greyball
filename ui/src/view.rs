@@ -2532,10 +2532,13 @@ fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>) -> Vec<Row> {
 /// playlist, excluding synthetic ones (e.g. Spotify's "Liked Songs") — the
 /// hotkeys column's per-track lookup table, built once per `tracks_to_rows`
 /// call. A local playlist's membership is always fully known; a remote
-/// (e.g. Spotify) playlist's set only has however much of it has already
-/// loaded into `ViewCache` — reading `Session::remote_playlist_cached_track_ids`
-/// (never `remote_playlist_track_ids`) so this can't itself trigger a fetch
-/// for a playlist nobody has browsed to yet.
+/// (e.g. Spotify) playlist's set only has however much of it has loaded into
+/// `ViewCache` so far — reading `Session::remote_playlist_track_ids` (its
+/// `want=0` form, the same one cursor-bounds checks use on every keypress)
+/// so a hotkey-bound remote playlist actually starts loading in the
+/// background instead of staying permanently blank until the user happens
+/// to browse to it; `ensure_remote_playlist_tracks` only kicks a fetch that
+/// isn't already in flight and never blocks the caller.
 fn hotkey_playlist_membership(s: &Session) -> Vec<(char, HashSet<TrackId>)> {
     s.hotkeys()
         .into_iter()
@@ -2546,7 +2549,7 @@ fn hotkey_playlist_membership(s: &Session) -> Vec<(char, HashSet<TrackId>)> {
                     if s.is_synthetic_playlist(sid, node) {
                         None
                     } else {
-                        s.remote_playlist_cached_track_ids(sid, node)
+                        Some(s.remote_playlist_track_ids(sid, node))
                     }
                 }
                 // Not a playlist — nothing to show in the hotkeys column.
