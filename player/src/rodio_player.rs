@@ -486,7 +486,10 @@ fn open_media(
         .or_else(|| media.get(&http_id()))
         .ok_or_else(|| core::Error::NoSource(uri.to_string()))?;
 
-    let resolved = match provider.open(r)? {
+    Ok(match provider.open(r)? {
+        // Already sitting on local disk (e.g. Soulseek's own downloads
+        // dir) — nothing was fetched, so there's nothing worth duplicating
+        // into MediaCache.
         Media::Path(p) => (p, None),
         Media::Url(url) => {
             let started = std::time::Instant::now();
@@ -495,6 +498,7 @@ fn open_media(
                 .map_err(|e| core::Error::Other(format!("download {url}: {e}")))?;
             log::info!("player: fetched {url} in {:?}", started.elapsed());
             let p = tmp.path().to_path_buf();
+            cache_fetched(media_cache, r, &p, source, uri);
             (p, Some(tmp))
         }
         Media::Reader(mut rdr) => {
@@ -503,15 +507,19 @@ fn open_media(
             std::io::copy(&mut rdr, tmp.as_file_mut())
                 .map_err(|e| core::Error::Other(e.to_string()))?;
             let p = tmp.path().to_path_buf();
+            cache_fetched(media_cache, r, &p, source, uri);
             (p, Some(tmp))
         }
-    };
-    // Best-effort: also stash a copy in the shared MediaCache for CacheOnly
-    // scanning, mirroring Spotify's own playback-triggered materializer.
-    if let Err(e) = media_cache.put_file(&r.source, &r.uri, &resolved.0) {
+    })
+}
+
+/// Best-effort: stash a copy of a just-fetched (non-local) rendition in the
+/// shared MediaCache for CacheOnly scanning, mirroring Spotify's own
+/// playback-triggered materializer.
+fn cache_fetched(media_cache: &MediaCache, r: &Rendition, path: &std::path::Path, source: &SourceId, uri: &str) {
+    if let Err(e) = media_cache.put_file(&r.source, &r.uri, path) {
         log::debug!("player: couldn't populate media cache for {source} {uri}: {e}");
     }
-    Ok(resolved)
 }
 
 fn toggle(audio: &Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
