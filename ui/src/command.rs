@@ -102,6 +102,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("queue", "toggle the queue pane (dock it, or switch to it — see :panes)"),
     ("history", "toggle the history pane (dock it, or switch to it — see :panes)"),
     ("togglescan", "toggle the background scan (bpm, ...) between active and cache-only"),
+    ("toggleshuffle", "toggle queue shuffle"),
     (
         "panes [<pane>] [screen|embedded] [left|right|top|bottom] [horizontal|vertical]",
         "change where a pane renders — every pane places independently; \
@@ -186,6 +187,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         // own placement (`:panes history ...`), see `Pane::Queue`'s doc.
         "history" => Ok(Parsed::TogglePane(Pane::History)),
         "togglescan" => Ok(Parsed::Ready(Command::ToggleScan)),
+        "toggleshuffle" => Ok(Parsed::Ready(Command::ToggleShuffle)),
         "hist" => Ok(Parsed::History),
         "keys" => Ok(Parsed::Keys),
         "link" if rest.is_empty() => Ok(Parsed::Link),

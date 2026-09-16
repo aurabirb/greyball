@@ -3106,7 +3106,7 @@ impl View for MedleyView {
         // back into cursive.) Settings pane content needs `Session::cfg`, so
         // it's gathered in the same pass rather than locking again per pane.
         let want_settings = panes.iter().any(|(p, _)| *p == Pane::Settings);
-        let (detail, rows, total, st, np, bpm_tag, settings, warn_count, pane_rows, membership_feedback) =
+        let (detail, rows, total, st, np, bpm_tag, shuffle, settings, warn_count, pane_rows, membership_feedback) =
             self.with_session(|s| {
                 let (detail, rows) = self.rows(s, self.screen, offset, list_h);
                 let total = self.list_len(s, self.screen);
@@ -3116,6 +3116,7 @@ impl View for MedleyView {
                     .map(|t| format!("{} - {}", t.display_artist(), t.title))
                     .unwrap_or_else(|| "nothing playing".to_string());
                 let bpm_tag = bpm_status_tag(s, now_playing.as_ref());
+                let shuffle = s.shuffle();
                 let settings = if want_settings { settings_lines(s) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk "what the user is looking at" every
@@ -3142,6 +3143,7 @@ impl View for MedleyView {
                     s.player_status(),
                     np,
                     bpm_tag,
+                    shuffle,
                     settings,
                     warn_count,
                     pane_rows,
@@ -3230,7 +3232,7 @@ impl View for MedleyView {
                 .clone()
                 .or(membership_feedback.map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
-                    "  [:] cmd (:vis)  [space] play/pause [p/n] prev/next [q] queue [w] wedge  [?] shortcuts"
+                    "  [:] cmd (:vis)  [space] play/pause [p/n] prev/next [q] queue [w] wedge [s] shuffle  [?] shortcuts"
                         .to_string()
                 }),
         };
@@ -3242,7 +3244,8 @@ impl View for MedleyView {
         let scrubber = format!("{}/{} {bar}", ms(st.position_ms), ms(st.duration_ms));
         let prefix = format!("{state}  ");
         let gap = "  ";
-        let bpm = format!("{gap}{bpm_tag}");
+        let shuffle_tag = if shuffle { " [S]" } else { "" };
+        let bpm = format!("{gap}{bpm_tag}{shuffle_tag}");
         let name_w = name_field_width(
             printer.size.x,
             prefix.chars().count(),

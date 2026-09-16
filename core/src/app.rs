@@ -60,6 +60,7 @@ pub enum BuiltinAction {
     Quit,
     ClearQueue,
     ToggleScan,
+    ToggleShuffle,
     CyclePaneLayout,
     Enqueue,
     Wedge,
@@ -82,6 +83,7 @@ impl BuiltinAction {
         (BuiltinAction::Quit, 'Q'),
         (BuiltinAction::ClearQueue, 'E'),
         (BuiltinAction::ToggleScan, 'B'),
+        (BuiltinAction::ToggleShuffle, 's'),
         (BuiltinAction::CyclePaneLayout, 'P'),
         (BuiltinAction::Enqueue, 'q'),
         (BuiltinAction::Wedge, 'w'),
@@ -116,6 +118,7 @@ impl BuiltinAction {
             BuiltinAction::Quit => "quit",
             BuiltinAction::ClearQueue => "clear-queue",
             BuiltinAction::ToggleScan => "toggle-scan",
+            BuiltinAction::ToggleShuffle => "toggle-shuffle",
             BuiltinAction::CyclePaneLayout => "cycle-panes",
             BuiltinAction::Enqueue => "enqueue",
             BuiltinAction::Wedge => "wedge",
@@ -142,6 +145,7 @@ impl BuiltinAction {
             BuiltinAction::Quit => "quit",
             BuiltinAction::ClearQueue => "clear the queue",
             BuiltinAction::ToggleScan => "toggle background scan active/cache-only",
+            BuiltinAction::ToggleShuffle => "toggle queue shuffle",
             BuiltinAction::CyclePaneLayout => "cycle embedded-pane layout",
             BuiltinAction::Enqueue => "enqueue selected track",
             BuiltinAction::Wedge => "wedge selected track to queue front",
@@ -248,6 +252,9 @@ pub enum Command {
     /// config-only (`scan.bpm.enabled`). No-op if no scan plugin is
     /// registered or it's currently disabled.
     ToggleScan,
+    /// Toggles queue shuffle (`s`/`:toggleshuffle`) — see `Queue::set_shuffle`
+    /// for what turning it on/off actually does to the queue's order.
+    ToggleShuffle,
     Quit,
 }
 
@@ -535,6 +542,10 @@ impl Session {
                 if let Some(scan) = &self.scan {
                     scan.set_mode(scan.mode().cycle());
                 }
+                Ok(Dispatch::Ok)
+            }
+            Command::ToggleShuffle => {
+                self.queue.set_shuffle(!self.queue.get_shuffle());
                 Ok(Dispatch::Ok)
             }
             Command::Previous => {
@@ -1189,6 +1200,12 @@ impl Session {
     /// whole now-playing `Track` (a disk read) once per row on every redraw.
     pub fn now_playing_id(&self) -> Option<TrackId> {
         self.now_playing
+    }
+
+    /// Whether queue shuffle is currently on (`s`/`:toggleshuffle`) — for
+    /// the status line's shuffle indicator.
+    pub fn shuffle(&self) -> bool {
+        self.queue.get_shuffle()
     }
 
     /// All current playlist hotkeys, `(key, target)`.

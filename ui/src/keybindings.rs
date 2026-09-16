@@ -119,6 +119,7 @@ pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyT
         BuiltinAction::Quit => Action::Command(Command::Quit),
         BuiltinAction::ClearQueue => Action::Command(Command::ClearQueue),
         BuiltinAction::ToggleScan => Action::Command(Command::ToggleScan),
+        BuiltinAction::ToggleShuffle => Action::Command(Command::ToggleShuffle),
         BuiltinAction::CyclePaneLayout => Action::CyclePaneLayout,
         BuiltinAction::Enqueue => match selected {
             Some(id) => Action::Command(Command::Enqueue(id)),
