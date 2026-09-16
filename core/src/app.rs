@@ -858,6 +858,7 @@ impl Session {
                                     source: source.clone(),
                                     message: format!("playback failed for {uri}"),
                                 });
+                                self.advance(false);
                             }
                         }
                     }
