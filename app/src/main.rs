@@ -78,11 +78,9 @@ fn load_volume() -> Option<f32> {
     v.get("volume")?.as_float().map(|f| f as f32)
 }
 
-/// Whether `:togglescan`/the scan-pause hotkey left the background scan
-/// (bpm, ...) paused at last exit — persisted the same way `volume` is, so
-/// a deliberate pause survives a restart instead of silently resuming. Falls
-/// back to `default_paused` (derived from `cfg.scan.bpm.enabled`) when
-/// `state.toml` has no recorded state yet, i.e. on a fresh install.
+/// Last-exit scan-pause state, persisted like `volume` — but only written
+/// (see `save_state`) when it was an explicit override of the config
+/// default, so a later default change isn't masked by a stale value.
 fn load_scan_paused(default_paused: bool) -> bool {
     (|| -> Option<bool> {
         let text = std::fs::read_to_string(state_path()).ok()?;
@@ -156,9 +154,12 @@ fn load_hotkeys() -> HashMap<char, HotkeyTarget> {
     map
 }
 
-fn save_state(volume: f32, scan_paused: bool, hotkeys: &HashMap<char, HotkeyTarget>) {
+fn save_state(volume: f32, scan_paused: Option<bool>, hotkeys: &HashMap<char, HotkeyTarget>) {
     let _ = std::fs::create_dir_all(data_dir());
-    let mut text = format!("volume = {volume}\nscan_paused = {scan_paused}\n");
+    let mut text = format!("volume = {volume}\n");
+    if let Some(scan_paused) = scan_paused {
+        text.push_str(&format!("scan_paused = {scan_paused}\n"));
+    }
     if !hotkeys.is_empty() {
         text.push_str("\n[hotkeys]\n");
         for (k, target) in hotkeys {
@@ -516,7 +517,13 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let s = session.lock().unwrap();
-    let scan_paused = s.scan.as_ref().is_some_and(|d| d.is_paused());
+    // Only persisted when it's an explicit override of the config default —
+    // otherwise a later default change would be masked by today's value.
+    let scan_paused = s
+        .scan
+        .as_ref()
+        .map(|d| d.is_paused())
+        .filter(|&paused| paused != !s.cfg.scan.bpm.enabled);
     save_state(s.player_status().volume, scan_paused, &s.hotkeys().into_iter().collect());
     s.save_queue();
     drop(s);

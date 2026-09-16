@@ -3116,7 +3116,7 @@ impl View for MedleyView {
                     .as_ref()
                     .map(|t| format!("{} - {}", t.display_artist(), t.title))
                     .unwrap_or_else(|| "nothing playing".to_string());
-                let bpm_tag = now_playing.as_ref().map(|t| bpm_status_tag(s, t));
+                let bpm_tag = bpm_status_tag(s, now_playing.as_ref());
                 let settings = if want_settings { settings_lines(s) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk "what the user is looking at" every
@@ -3243,7 +3243,7 @@ impl View for MedleyView {
         let scrubber = format!("{}/{} {bar}", ms(st.position_ms), ms(st.duration_ms));
         let prefix = format!("{state}  ");
         let gap = "  ";
-        let bpm = bpm_tag.map(|t| format!("{gap}{t}")).unwrap_or_default();
+        let bpm = format!("{gap}{bpm_tag}");
         let name_w = name_field_width(
             printer.size.x,
             prefix.chars().count(),
@@ -4112,10 +4112,12 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
     }
 }
 
-/// Bracketed BPM-scan status tag shown next to the status line's scrubber:
-/// `[bd]` with no scan driver or while paused (`B` / `:togglescan`), else
-/// `[Bd]` downloading, `[Be]` errored, `[Bs]` skipped, `[Bw]` waiting.
-fn bpm_status_tag(s: &Session, track: &core::Track) -> String {
+/// Bracketed BPM-scan status tag shown next to the status line's scrubber,
+/// regardless of whether anything's playing: `[bd]` with no scan driver or
+/// while paused (`B` / `:togglescan`), else `[Bd]` downloading, `[Be]`
+/// errored, `[Bs]` skipped, `[Bw]` waiting (also the no-track-loaded case —
+/// there's nothing to report a per-track status for).
+fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
     let Some(scan) = s.scan.as_ref() else {
         return "[bd]".to_string();
     };
@@ -4127,7 +4129,7 @@ fn bpm_status_tag(s: &Session, track: &core::Track) -> String {
     // track has no live status (see `ScanStatus`'s doc), so it falls into
     // the `None` arm below same as "never attempted", both being steady
     // states with nothing left for this plugin to do.
-    match scan.status("bpm", track.id) {
+    match track.and_then(|t| scan.status("bpm", t.id)) {
         Some(core::ScanStatus::Downloading) => "[Bd]",
         Some(core::ScanStatus::Error) => "[Be]",
         Some(core::ScanStatus::Skipped) => "[Bs]",

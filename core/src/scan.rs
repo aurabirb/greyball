@@ -333,12 +333,10 @@ impl ScanDriver {
         *view = if tracks.is_empty() { None } else { Some(ViewOrder { tracks, highlighted }) };
     }
 
-    /// Runtime pause/resume — stops/restarts the walk without dropping
-    /// anything already scanned (that's already durable in `Store`). Pausing
-    /// also drains `priority` and clears any in-flight `Downloading` status
-    /// so a paused scanner is fully inhibited, not just skipped on the next
-    /// tick — otherwise whatever was already queued/in-flight keeps acting
-    /// (or gets requeued) once resumed.
+    /// Runtime pause/resume (`B` / `:togglescan`) — stops/restarts the walk
+    /// without dropping anything already scanned. Also drains `priority`
+    /// and clears any in-flight `Downloading` status so pausing fully
+    /// inhibits the scanner rather than just skipping the next tick.
     pub fn set_paused(&self, paused: bool) {
         self.inner.paused.store(paused, Ordering::Relaxed);
         if paused {
