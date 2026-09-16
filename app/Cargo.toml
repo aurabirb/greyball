@@ -34,6 +34,9 @@ soulseek = ["dep:sources-soulseek"]
 medley-core = { package = "core", path = "../core" }
 sources-http = { path = "../sources/http" }
 sources-spotify = { path = "../sources/spotify", optional = true }
+# Not gated on a feature: the BPM scan plugin has no source-specific
+# dependency (see sources/bpm's doc), so it's always available.
+bpm = { path = "../sources/bpm" }
 sources-soundcloud = { path = "../sources/soundcloud", optional = true }
 sources-soulseek = { path = "../sources/soulseek", optional = true }
 player = { path = "../player" }

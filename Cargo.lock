@@ -89,6 +89,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "bpm",
  "chrono",
  "core",
  "cursive",
@@ -201,6 +202,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
 dependencies = [
  "objc2",
+]
+
+[[package]]
+name = "bpm"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "log",
+ "rustfft",
 ]
 
 [[package]]
@@ -3316,11 +3326,9 @@ dependencies = [
  "log",
  "player",
  "reqwest",
- "rustfft",
  "serde",
  "serde_json",
  "sha1",
- "symphonia",
  "tokio",
  "tokio-stream",
  "url",

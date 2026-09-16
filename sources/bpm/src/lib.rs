@@ -15,24 +15,15 @@
 //!    estimates), so an intro, breakdown or slight drift doesn't throw the
 //!    whole track off.
 
-use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::Duration;
 
 use core::{MediaCache, Outcome, ReadSeek, Rendition, ScanPlugin, Track, TrackMeta};
-use librespot_audio::{AudioDecrypt, AudioFile};
-use librespot_core::{Session, SpotifyId, SpotifyUri};
-use librespot_metadata::audio::{AudioFileFormat, AudioItem};
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
-/// Spotify prepends a proprietary header to its Ogg Vorbis streams; real Vorbis data starts here.
-const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
-
-/// librespot's fixed output sample rate (it resamples nothing; every Spotify stream is 44.1 kHz).
-/// The onset/tempo DSP below assumes this rate for its own analysis windows
-/// regardless of what `core::audio_decode::decode_stereo_prefix` reports for
-/// a non-Spotify source — out of scope here; only the decode/caching layer
-/// changed.
+/// librespot's fixed output sample rate — the onset/tempo DSP below assumes
+/// this rate for its own analysis windows regardless of what
+/// `core::audio_decode::decode_stereo_prefix` reports for a given source.
 const SAMPLE_RATE: f32 = 44_100.0;
 
 /// STFT window and hop for the onset envelope.
@@ -63,8 +54,8 @@ const WIN_HOP_SECONDS: f32 = 4.0;
 /// How many harmonics of a candidate period the comb filter sums over.
 const COMB_HARMONICS: usize = 4;
 
-/// `ScanPlugin` for local BPM detection. Registered iff
-/// `cfg.scan.bpm.enabled` and the `spotify` cargo feature.
+/// `ScanPlugin` for local BPM detection. Toggled at runtime via `B` /
+/// `:togglescan`, not by whether it's registered — see `ScanDriver::register_plugin`.
 pub struct BpmPlugin {
     min_interval: Duration,
 }
@@ -151,148 +142,6 @@ impl ScanPlugin for BpmPlugin {
     }
 }
 
-// --- Spotify audio retrieval (used by `SpotifyPlayer::open_for_scan`) --------------------------
-
-/// The Ogg Vorbis formats we're willing to analyze, smallest first.
-const OGG_FORMATS: [AudioFileFormat; 3] =
-    [AudioFileFormat::OGG_VORBIS_96, AudioFileFormat::OGG_VORBIS_160, AudioFileFormat::OGG_VORBIS_320];
-
-/// Fetch, decrypt and header-skip a Spotify `uri`'s Ogg Vorbis audio for
-/// offline analysis. Mirrors `PlayerTrackLoader::load_remote_track`, minus
-/// everything playback-specific. `mode`: see `core::ScanFetchMode` —
-/// `Full` keeps draining the stream after the returned reader is dropped so
-/// librespot commits the whole file to its on-disk cache; `CacheOnly` never
-/// fetches over the network at all.
-pub async fn fetch_scan_audio(
-    session: &Session,
-    uri: &str,
-    mode: core::ScanFetchMode,
-) -> core::Result<Box<dyn ReadSeek + Send>> {
-    let parsed = SpotifyUri::from_uri(uri).map_err(|_| core::Error::Unsupported("bad spotify uri"))?;
-    let (source, from_cache) = open_audio_stream(session, parsed, mode)
-        .await
-        .map_err(|reason| core::Error::Other(format!("spotify: scan audio unavailable: {reason}")))?;
-    // `Subfile` seeks to the offset on construction, skipping Spotify's
-    // custom Ogg header so symphonia sees a clean Vorbis stream.
-    let subfile = Subfile::new(source, SPOTIFY_OGG_HEADER_END)
-        .map_err(|_| core::Error::Unsupported("spotify: scan seek failed"))?;
-    let drain = mode == core::ScanFetchMode::Full && !from_cache;
-    Ok(Box::new(DrainOnDrop { inner: subfile, drain }))
-}
-
-/// Whether any Ogg Vorbis rendition of `uri` already sits fully in
-/// librespot's own on-disk cache. Metadata-only (`AudioItem::get_file`) —
-/// never calls `AudioFile::open`, so unlike `fetch_scan_audio` this can
-/// never itself originate (or race) a CDN fetch, and is safe for
-/// `SpotifyPlayer`'s worker to poll on every tick while a track loads.
-pub(crate) async fn is_materialized(session: &Session, uri: &str) -> bool {
-    let Ok(parsed) = SpotifyUri::from_uri(uri) else { return false };
-    let Ok(audio_item) = AudioItem::get_file(session, parsed).await else { return false };
-    let Some(audio_item) = find_available(session, audio_item).await else { return false };
-    let Some(cache) = session.cache() else { return false };
-    OGG_FORMATS
-        .iter()
-        .filter_map(|f| audio_item.files.get(f))
-        .any(|id| cache.file_path(*id).is_some_and(|p| p.exists()))
-}
-
-async fn open_audio_stream(
-    session: &Session,
-    uri: SpotifyUri,
-    mode: core::ScanFetchMode,
-) -> Result<(AudioDecrypt<AudioFile>, bool), String> {
-    let Some(track_id): Option<SpotifyId> = (&uri).try_into().ok() else {
-        return Err("uri isn't a track id, can't fetch scan audio".to_string());
-    };
-
-    let audio_item = AudioItem::get_file(session, uri)
-        .await
-        .map_err(|e| format!("{track_id:?}: AudioItem::get_file failed: {e}"))?;
-    let Some(audio_item) = find_available(session, audio_item).await else {
-        return Err(format!("{track_id:?}: no available (region-relinked) audio item"));
-    };
-
-    // Prefer whichever Vorbis file is already in the local audio cache (i.e.
-    // the bitrate the track was played at) so analysis reuses those bytes
-    // and never touches the CDN. Only when nothing is cached do we fall
-    // back to the smallest available file, to keep that download light.
-    let available = || {
-        OGG_FORMATS.iter().filter_map(|f| audio_item.files.get(f).map(|id| (*f, *id)))
-    };
-    let cache = session.cache();
-    let cached = available()
-        .find(|(_, id)| cache.and_then(|c| c.file_path(*id)).is_some_and(|p| p.exists()));
-    let (format, file_id) = match cached {
-        Some(hit) => hit,
-        // `CacheOnly` (the prioritized now-playing path) never
-        // originates a network fetch — the live player is already fetching
-        // this exact track, so racing it here would risk a duplicate CDN
-        // hit and a corrupt interleaved cache write. Bail out exactly as if
-        // no audio were available at all.
-        None if mode == core::ScanFetchMode::CacheOnly => {
-            return Err(format!("{track_id:?}: not yet cached, skipping (CacheOnly)"));
-        }
-        None => match available().next() {
-            Some(f) => f,
-            None => return Err(format!("{track_id:?}: no Ogg Vorbis file available at all")),
-        },
-    };
-
-    let bytes_per_second = stream_data_rate(format);
-    let encrypted = AudioFile::open(session, file_id, bytes_per_second)
-        .await
-        .map_err(|e| format!("{track_id:?}: AudioFile::open (fetch) failed: {e}"))?;
-    let from_cache = matches!(encrypted, AudioFile::Cached(_));
-
-    // Some files aren't encrypted; if the key request fails, continue
-    // undecrypted and let the decoder bail if it turns out the data really
-    // was scrambled (same policy as librespot).
-    let key = match session.audio_key().request(track_id, file_id).await {
-        Ok(k) => Some(k),
-        Err(e) => {
-            log::debug!("bpm: spotify {track_id:?} — audio key request failed, trying undecrypted: {e}");
-            None
-        }
-    };
-
-    Ok((AudioDecrypt::new(key, encrypted), from_cache))
-}
-
-/// A track is playable as-is if it has files and is available; otherwise
-/// follow its alternatives (region-relinked equivalents) and take the first
-/// that is. Condensed from `PlayerTrackLoader::find_available_alternative`.
-async fn find_available(session: &Session, audio_item: AudioItem) -> Option<AudioItem> {
-    if audio_item.availability.is_err() {
-        return None;
-    }
-    if !audio_item.files.is_empty() {
-        return Some(audio_item);
-    }
-
-    for alt_uri in audio_item.alternatives?.0 {
-        if let Ok(alt) = AudioItem::get_file(session, alt_uri).await
-            && alt.availability.is_ok()
-            && !alt.files.is_empty()
-        {
-            return Some(alt);
-        }
-    }
-    None
-}
-
-/// Nominal bytes per second for a format, used to size streaming reads.
-/// Values match librespot's `PlayerTrackLoader::stream_data_rate`
-/// (kilobytes/s * 1024).
-fn stream_data_rate(format: AudioFileFormat) -> usize {
-    let kbps = match format {
-        AudioFileFormat::OGG_VORBIS_96 => 12.0,
-        AudioFileFormat::OGG_VORBIS_160 => 20.0,
-        _ => 40.0,
-    };
-    (kbps * 1024.0_f32).ceil() as usize
-}
-
-/// Fold a stereo signal to mono (equal-weight L/R average).
 fn downmix(stereo: &[[f32; 2]]) -> Vec<f32> {
     stereo.iter().map(|[l, r]| (l + r) * 0.5).collect()
 }
@@ -625,72 +474,3 @@ fn detrend(data: &mut [f32], w: usize) {
         *value = (*value - mean).max(0.0);
     }
 }
-
-// --- Subfile / DrainOnDrop -------------------------------------------------------------------
-
-/// A read-only window into `stream` starting at `offset`, `length` bytes long, with positions
-/// reported relative to `offset`. Reimplemented from librespot's private `player::Subfile` so
-/// symphonia sees the Vorbis data without Spotify's leading header.
-struct Subfile<T: Read + Seek> {
-    stream: T,
-    offset: u64,
-}
-
-impl<T: Read + Seek> Subfile<T> {
-    fn new(mut stream: T, offset: u64) -> io::Result<Self> {
-        stream.seek(SeekFrom::Start(offset))?;
-        Ok(Self { stream, offset })
-    }
-}
-
-impl<T: Read + Seek> Read for Subfile<T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.read(buf)
-    }
-}
-
-impl<T: Read + Seek> Seek for Subfile<T> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let pos = match pos {
-            SeekFrom::Start(offset) => SeekFrom::Start(offset + self.offset),
-            other => other,
-        };
-        let newpos = self.stream.seek(pos)?;
-        Ok(newpos.saturating_sub(self.offset))
-    }
-}
-
-/// Wraps a `Read + Seek` stream (a `Subfile`)
-/// so that, with `drain` set, dropping it (once the plugin's `analyze` is
-/// done reading) pulls the rest of the stream to completion — this is what
-/// makes librespot's fetcher commit the whole file to its on-disk cache
-/// instead of just the bytes the plugin actually read. This mirrors
-/// `ScanOptions::cache_full` behaviour, applied on the fetch side
-/// (`Player::open_for_scan`).
-struct DrainOnDrop<S: Read + Seek> {
-    inner: S,
-    drain: bool,
-}
-
-impl<S: Read + Seek> Read for DrainOnDrop<S> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
-    }
-}
-
-impl<S: Read + Seek> Seek for DrainOnDrop<S> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.inner.seek(pos)
-    }
-}
-
-impl<S: Read + Seek> Drop for DrainOnDrop<S> {
-    fn drop(&mut self) {
-        if !self.drain {
-            return;
-        }
-        let mut buf = [0u8; 32 * 1024];
-        while matches!(self.inner.read(&mut buf), Ok(n) if n > 0) {}
-    }
-}
-

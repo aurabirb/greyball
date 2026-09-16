@@ -241,7 +241,7 @@ impl Player for SpotifyPlayer {
         };
         let (handle, session) = (handle.clone(), session.clone());
         drop(guard);
-        handle.block_on(crate::bpm::fetch_scan_audio(&session, &r.uri, mode))
+        handle.block_on(crate::scan_audio::fetch_scan_audio(&session, &r.uri, mode))
     }
 }
 
@@ -610,7 +610,7 @@ async fn run(
                     }
                     if !materialized_sent
                         && let Some((source, uri)) = cur.clone()
-                        && crate::bpm::is_materialized(&session, &uri).await
+                        && crate::scan_audio::is_materialized(&session, &uri).await
                     {
                         materialized_sent = true;
                         log::debug!("spotify: materialized {uri}");

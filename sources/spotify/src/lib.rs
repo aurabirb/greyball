@@ -9,16 +9,15 @@
 //! * [`auth::Auth`] — librespot OAuth login + credential/token cache.
 
 pub mod auth;
-mod bpm;
 mod player;
 mod plugin;
+mod scan_audio;
 mod source;
 pub mod uri;
 mod web_player;
 mod webapi;
 
 pub use auth::Auth;
-pub use bpm::BpmPlugin;
 pub use player::SpotifyPlayer;
 pub use plugin::SpotifyPlugin;
 pub use source::SpotifySource;

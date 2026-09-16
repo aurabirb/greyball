@@ -363,7 +363,6 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // (see `register_plugin` below), not passed in here.
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
     let bpm_enabled_default = cfg.scan.bpm.enabled;
-    #[cfg(feature = "spotify")]
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
 
     log_registered_sources(&sources);
@@ -388,11 +387,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     );
     if let Some(scan) = &session.scan {
         scan.set_paused(load_scan_paused(!bpm_enabled_default));
-        // Not Spotify-specific — just lives in this crate/feature. Runtime
-        // on/off is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
-        // seeds the initial paused state.
-        #[cfg(feature = "spotify")]
-        scan.register_plugin(Arc::new(sources_spotify::BpmPlugin::new(bpm_min_interval_secs)));
+        // Runtime on/off is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
+        // only seeds the initial paused state.
+        scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
     }
     session.set_hotkeys(load_hotkeys());
     let session = Arc::new(Mutex::new(session));

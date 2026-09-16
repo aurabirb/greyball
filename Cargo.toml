@@ -6,6 +6,7 @@ members = [
     "sources/spotify",
     "sources/soundcloud",
     "sources/soulseek",
+    "sources/bpm",
     "player",
     "ui",
     "app",
