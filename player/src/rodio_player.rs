@@ -486,7 +486,7 @@ fn open_media(
         .or_else(|| media.get(&http_id()))
         .ok_or_else(|| core::Error::NoSource(uri.to_string()))?;
 
-    Ok(match provider.open(r)? {
+    let resolved = match provider.open(r)? {
         Media::Path(p) => (p, None),
         Media::Url(url) => {
             let started = std::time::Instant::now();
@@ -505,7 +505,13 @@ fn open_media(
             let p = tmp.path().to_path_buf();
             (p, Some(tmp))
         }
-    })
+    };
+    // Best-effort: also stash a copy in the shared MediaCache for CacheOnly
+    // scanning, mirroring Spotify's own playback-triggered materializer.
+    if let Err(e) = media_cache.put_file(&r.source, &r.uri, &resolved.0) {
+        log::debug!("player: couldn't populate media cache for {source} {uri}: {e}");
+    }
+    Ok(resolved)
 }
 
 fn toggle(audio: &Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
