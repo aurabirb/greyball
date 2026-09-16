@@ -399,13 +399,13 @@ impl Cell {
 struct Row {
     tags: Cell,
     main: Cell,
+    /// Hotkey chars of every hotkey-bound (non-synthetic) playlist this
+    /// row's track belongs to, sorted and concatenated (e.g. "Cgm") — blank
+    /// if none match, or if a relevant playlist's membership hasn't loaded
+    /// into `ViewCache` yet.
+    hotkeys: Cell,
     source: Cell,
     duration: Cell,
-    /// Hotkey chars of every hotkey-bound (non-synthetic) playlist this
-    /// row's track belongs to, comma-joined (e.g. "b,T,v") — blank if none
-    /// match, or if a relevant playlist's membership hasn't loaded into
-    /// `ViewCache` yet.
-    hotkeys: Cell,
     current: bool,
 }
 
@@ -2465,9 +2465,9 @@ fn build_help_lines(
 enum Column {
     Tags,
     Main,
+    Hotkeys,
     Source,
     Duration,
-    Hotkeys,
 }
 
 /// The single per-column cell renderer: given a track and whatever context a
@@ -2494,13 +2494,9 @@ fn render_cell(
         Column::Source => Cell::plain(t.source(cached)),
         Column::Duration => Cell::plain(t.duration()),
         Column::Hotkeys => {
-            let text = hotkeys
-                .iter()
-                .filter(|(_, ids)| ids.contains(&t.id))
-                .map(|(ch, _)| ch.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            Cell::plain(text)
+            let mut chars: Vec<char> = hotkeys.iter().filter(|(_, ids)| ids.contains(&t.id)).map(|(ch, _)| *ch).collect();
+            chars.sort_unstable();
+            Cell::plain(chars.into_iter().collect::<String>())
         }
     }
 }
@@ -2523,9 +2519,9 @@ fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>) -> Vec<Row> {
             Row {
                 tags: render_cell(Column::Tags, &t, cached, visible, &hotkeys),
                 main: render_cell(Column::Main, &t, cached, visible, &hotkeys),
+                hotkeys: render_cell(Column::Hotkeys, &t, cached, visible, &hotkeys),
                 source: render_cell(Column::Source, &t, cached, visible, &hotkeys),
                 duration: render_cell(Column::Duration, &t, cached, visible, &hotkeys),
-                hotkeys: render_cell(Column::Hotkeys, &t, cached, visible, &hotkeys),
                 current: t.is_current(now_playing),
             }
         })
@@ -2781,9 +2777,9 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
             five_col(
                 &row.tags.text,
                 &row.main.text,
+                &row.hotkeys.text,
                 &row.source.text,
                 &row.duration.text,
-                &row.hotkeys.text,
                 content_w.saturating_sub(2),
             )
         );
@@ -2826,15 +2822,15 @@ fn column_layout(width: usize, row: &Row) -> Vec<(usize, usize, bool, &Cell)> {
     let main_w = width - fixed;
     let tags_start = 0;
     let main_start = TAGS_COL_W + 1;
-    let source_start = main_start + main_w + 1;
+    let hotkeys_start = main_start + main_w + 1;
+    let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
     let duration_start = source_start + SOURCE_COL_W + 1;
-    let hotkeys_start = duration_start + DURATION_COL_W + 1;
     vec![
         (tags_start, TAGS_COL_W, true, &row.tags),
         (main_start, main_w, false, &row.main),
+        (hotkeys_start, HOTKEYS_COL_W, false, &row.hotkeys),
         (source_start, SOURCE_COL_W, false, &row.source),
         (duration_start, DURATION_COL_W, false, &row.duration),
-        (hotkeys_start, HOTKEYS_COL_W, false, &row.hotkeys),
     ]
 }
 
@@ -3971,21 +3967,21 @@ fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, offset: usi
     });
 }
 
-/// Fixed widths for the tags/source/duration/hotkeys columns of a track row
+/// Fixed widths for the tags/hotkeys/source/duration columns of a track row
 /// (see `ui::row::RowItem`); the main (artist/title) column takes whatever's
 /// left. `TAGS_COL_W` is bpm's own width (the canonical MVP tag) — a rounded
 /// number right-aligned in a 3-wide field, so 60-200 BPM all line up
 /// (mirrors `sort-tab-features`'s `Track::bpm_display`); `SOURCE_COL_W` fits
 /// two "+"-joined 2-char source badges plus the cached-track "*" prefix
 /// (e.g. "*sp+sc") before truncating. `DURATION_COL_W` is "M:SS"/"MM:SS"
-/// left-aligned in 6. `HOTKEYS_COL_W` fits a handful of comma-joined hotkey
-/// chars (e.g. "b,T,v,q") before truncating.
+/// left-aligned in 6. `HOTKEYS_COL_W` fits a handful of sorted, concatenated
+/// hotkey chars (e.g. "Cgm") before truncating.
 const TAGS_COL_W: usize = 3;
 const SOURCE_COL_W: usize = 6;
 const DURATION_COL_W: usize = 6;
 const HOTKEYS_COL_W: usize = 8;
 
-fn five_col(tags: &str, main: &str, source: &str, duration: &str, hotkeys: &str, width: usize) -> String {
+fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str, width: usize) -> String {
     let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4; // 4 single-space gaps
     if width <= fixed {
         return truncate(main, width);
@@ -3995,9 +3991,9 @@ fn five_col(tags: &str, main: &str, source: &str, duration: &str, hotkeys: &str,
         "{} {} {} {} {}",
         pad_right_aligned(tags, TAGS_COL_W),
         pad(main, main_w),
+        pad(hotkeys, HOTKEYS_COL_W),
         pad(source, SOURCE_COL_W),
         pad(duration, DURATION_COL_W),
-        pad(hotkeys, HOTKEYS_COL_W),
     )
 }
 
