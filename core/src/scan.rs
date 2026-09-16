@@ -213,6 +213,14 @@ const FAILURE_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 /// instead of re-checking the same fully-analyzed list every `TICK`.
 const IDLE_BACKOFF: Duration = Duration::from_secs(10);
 
+/// How long the now-playing fast path (`ScanDriver::prioritize`) keeps
+/// retrying a track every tick before giving up and letting the general
+/// walk's own (idle-backed-off) cadence take over instead. Bounds the cost
+/// of a source with no way to ever materialize this track under
+/// `CacheOnly` (no playback-triggered materializer, e.g. SoundCloud/HTTP)
+/// busy-looping every `TICK` forever.
+const PRIORITY_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The order + position the UI's current view reports via
 /// `ScanDriver::follow_view` — the walk's primary traversal order once set.
 #[derive(Clone, PartialEq, Eq)]
@@ -230,8 +238,10 @@ struct Inner {
     /// regardless, never `Full`/`Partial`.
     cache_full: bool,
     mode: AtomicU8,
-    /// Track ids that jumped the queue (currently-playing), oldest first.
-    priority: Mutex<VecDeque<TrackId>>,
+    /// Track ids that jumped the queue (currently-playing), oldest first,
+    /// paired with when each was first prioritized — see
+    /// `PRIORITY_RETRY_TIMEOUT`.
+    priority: Mutex<VecDeque<(TrackId, Instant)>>,
     last_run: Mutex<HashMap<&'static str, Instant>>,
     /// Per-(plugin, track) live status, for `ScanDriver::status` — cleared on
     /// `Outcome::Done` since a resolved value already lives in `Track::attrs`
@@ -344,9 +354,12 @@ impl ScanDriver {
     /// `PlayerEvent::Playing`.
     pub fn prioritize(&self, track: TrackId) {
         let mut q = self.inner.priority.lock().unwrap();
-        if !q.contains(&track) {
-            q.push_front(track);
-        }
+        // A fresh call (e.g. `PlayerEvent::Materialized` firing after
+        // `Playing` already queued it) resets the retry window rather than
+        // being a no-op, since it's new evidence there's something worth
+        // trying again for.
+        q.retain(|(t, _)| *t != track);
+        q.push_front((track, Instant::now()));
     }
 
     /// Reports "the list the user is currently looking at, and which row is
@@ -417,7 +430,7 @@ fn run(
         let ctx = ScanCtx { media: &media, players: &players, media_cache: &media_cache };
 
         let prio = inner.priority.lock().unwrap().pop_front();
-        if let Some(id) = prio {
+        if let Some((id, started)) = prio {
             match store.get_track(id) {
                 Ok(Some(track)) => {
                     // Always attempted with `ScanFetchMode::CacheOnly` (see
@@ -426,10 +439,20 @@ fn run(
                     // finds it not materialized yet. Either way, re-check
                     // `needs()` and requeue if there's still something to
                     // do, so a not-yet-materialized now-playing track keeps
-                    // getting retried every tick instead of just once.
+                    // getting retried every tick instead of just once — but
+                    // only up to `PRIORITY_RETRY_TIMEOUT`, since a source
+                    // with nothing that will ever materialize this track
+                    // under `CacheOnly` would otherwise retry forever.
                     let attempted = scan_one(&inner, &plugins, &catalog, &ctx, &track, true, mode);
                     if any_plugin_needs(&inner, &plugins, &track) {
-                        inner.priority.lock().unwrap().push_front(id);
+                        if started.elapsed() < PRIORITY_RETRY_TIMEOUT {
+                            inner.priority.lock().unwrap().push_front((id, started));
+                        } else {
+                            log::debug!(
+                                "scan: priority track {id:?} still unresolved after {PRIORITY_RETRY_TIMEOUT:?}, \
+                                 falling back to the general walk's own cadence"
+                            );
+                        }
                     } else {
                         log::debug!("scan: priority track {id:?} has nothing left to do");
                     }
