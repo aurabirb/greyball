@@ -648,7 +648,12 @@ fn scan_one(
                 // Not a verdict — just not materialized yet under a mode
                 // that was never allowed to fetch. Leave "waiting" (no
                 // status entry) so a later `Active` attempt gets a fresh
-                // try instead of finding this sticky-`Skipped`.
+                // try instead of finding this sticky-`Skipped`. And unlike
+                // every other outcome, nothing was actually accomplished —
+                // report "not scanned" so the general walk's idle backoff
+                // still engages instead of busy-looping every `TICK`
+                // forever on a track nothing will ever materialize under
+                // `CacheOnly` (e.g. no playback-triggered materializer).
                 log::debug!(
                     "scan[{}]: \"{}\" ({:?}) not materialized yet (CacheOnly)",
                     plugin.id(),
@@ -656,6 +661,7 @@ fn scan_one(
                     track.id
                 );
                 inner.status.lock().unwrap().remove(&(plugin.id(), track.id));
+                return false;
             }
             Outcome::Skip => {
                 log::debug!(
