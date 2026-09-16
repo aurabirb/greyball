@@ -85,16 +85,37 @@ impl MediaCache {
         })
     }
 
+    /// Records that `(source, uri)`'s audio already exists locally at
+    /// `src` — a symlink, not a copy, since nothing needs duplicating (e.g.
+    /// Soulseek's own downloads dir). If `src` later disappears, so does
+    /// this entry: `cached_path`'s `exists()` follows symlinks and fails
+    /// closed on a dangling one, so a deleted/moved source just goes back
+    /// to "not cached" instead of serving a broken path.
+    pub fn link_local(&self, source: &SourceId, uri: &str, src: &std::path::Path) -> io::Result<PathBuf> {
+        let lock = self.lock(source, uri);
+        let _guard = lock.lock().unwrap();
+        let dest = self.path_for(source, uri);
+        std::fs::create_dir_all(dest.parent().expect("path_for always has a parent"))?;
+        let _ = std::fs::remove_file(&dest);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(src, &dest)?;
+        #[cfg(not(unix))]
+        std::fs::copy(src, &dest).map(|_| ())?;
+        Ok(dest)
+    }
+
+    fn lock(&self, source: &SourceId, uri: &str) -> Arc<Mutex<()>> {
+        let mut inflight = self.inflight.lock().unwrap();
+        inflight.entry(Self::key(source, uri)).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+    }
+
     fn store(
         &self,
         source: &SourceId,
         uri: &str,
         write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
     ) -> io::Result<PathBuf> {
-        let lock = {
-            let mut inflight = self.inflight.lock().unwrap();
-            inflight.entry(Self::key(source, uri)).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
-        };
+        let lock = self.lock(source, uri);
         let _guard = lock.lock().unwrap();
 
         let dest = self.path_for(source, uri);

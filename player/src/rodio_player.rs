@@ -488,9 +488,14 @@ fn open_media(
 
     Ok(match provider.open(r)? {
         // Already sitting on local disk (e.g. Soulseek's own downloads
-        // dir) — nothing was fetched, so there's nothing worth duplicating
-        // into MediaCache.
-        Media::Path(p) => (p, None),
+        // dir) — nothing was fetched, so MediaCache only gets a symlink to
+        // it, not a duplicate copy.
+        Media::Path(p) => {
+            if let Err(e) = media_cache.link_local(&r.source, &r.uri, &p) {
+                log::debug!("player: couldn't link {source} {uri} into media cache: {e}");
+            }
+            (p, None)
+        }
         Media::Url(url) => {
             let started = std::time::Instant::now();
             let mut tmp = NamedTempFile::new().map_err(|e| core::Error::Other(e.to_string()))?;
