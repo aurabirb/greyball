@@ -48,15 +48,14 @@ impl<R: Read + Seek + Send> MediaSource for SourceAdapter<R> {
     }
 }
 
-/// Decode the entirety of `audio` to interleaved stereo f32 frames,
-/// auto-detecting the container/codec (no format hint — the probe's own
-/// magic-byte sniffing already handles Ogg/MP3/AAC/FLAC/... uniformly). The
-/// whole track, not a bounded prefix — the result also backs the
-/// fallback-playback path (`Session::play_from_cache`), which needs the
-/// full track, not a preview; BPM analysis just uses however many of its own
-/// windows fit. `None` on a decode failure or a stream too short to be
-/// useful for either.
-pub fn decode_stereo_prefix(audio: Box<dyn ReadSeek + Send>) -> Option<(Vec<[f32; 2]>, u32)> {
+/// Decode `audio` to interleaved stereo f32 frames, auto-detecting the
+/// container/codec. `max_frames` (`None` for the whole file) stops decoding
+/// once that many frames are in. `None` on a decode failure or a stream too
+/// short to be useful.
+pub fn decode_stereo_prefix(
+    audio: Box<dyn ReadSeek + Send>,
+    max_frames: Option<usize>,
+) -> Option<(Vec<[f32; 2]>, u32)> {
     let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio)), Default::default());
     let probed = symphonia::default::get_probe()
         .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
@@ -76,11 +75,16 @@ pub fn decode_stereo_prefix(audio: Box<dyn ReadSeek + Send>) -> Option<(Vec<[f32
         }
         let Ok(decoded) = decoder.decode(&packet) else { continue };
         push_frames(decoded, &mut frames);
+        if max_frames.is_some_and(|m| frames.len() >= m) {
+            break;
+        }
+    }
+    if let Some(m) = max_frames {
+        frames.truncate(m);
     }
 
     // Require at least a second — anything shorter isn't useful for
-    // analysis, and playing back a fraction of a second as a "fallback"
-    // isn't worth the complexity of a shorter-than-a-second special case.
+    // analysis.
     (frames.len() >= sample_rate as usize).then_some((frames, sample_rate))
 }
 

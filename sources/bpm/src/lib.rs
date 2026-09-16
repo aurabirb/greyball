@@ -51,6 +51,9 @@ const MAX_BPM: f32 = 200.0;
 const WIN_SECONDS: f32 = 8.0;
 const WIN_HOP_SECONDS: f32 = 4.0;
 
+/// How much of a track to decode and analyze — the first minute, not the whole file.
+const ANALYSIS_SECONDS: f32 = 60.0;
+
 /// How many harmonics of a candidate period the comb filter sums over.
 const COMB_HARMONICS: usize = 4;
 
@@ -90,12 +93,13 @@ impl ScanPlugin for BpmPlugin {
         audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
         media_cache: &MediaCache,
     ) -> Outcome {
+        let max_frames = (ANALYSIS_SECONDS * SAMPLE_RATE) as usize;
         let cached = track
             .renditions
             .iter()
             .find_map(|r| media_cache.cached_path(&r.source, &r.uri))
             .and_then(|p| std::fs::File::open(p).ok())
-            .and_then(|f| core::audio_decode::decode_stereo_prefix(Box::new(f)));
+            .and_then(|f| core::audio_decode::decode_stereo_prefix(Box::new(f), Some(max_frames)));
         let stereo = match cached {
             Some((stereo, _)) => stereo,
             None => {
@@ -110,9 +114,10 @@ impl ScanPlugin for BpmPlugin {
                 // Decode from a copy: `raw` itself (already-fetched,
                 // already-unencrypted bytes) is what populates `media_cache`
                 // below, as-is — no re-encode needed or wanted.
-                let Some((stereo, _)) =
-                    core::audio_decode::decode_stereo_prefix(Box::new(std::io::Cursor::new(raw.clone())))
-                else {
+                let Some((stereo, _)) = core::audio_decode::decode_stereo_prefix(
+                    Box::new(std::io::Cursor::new(raw.clone())),
+                    Some(max_frames),
+                ) else {
                     log::warn!(
                         "bpm: \"{}\" — decode failed or too short to analyze, skipping",
                         track.title
