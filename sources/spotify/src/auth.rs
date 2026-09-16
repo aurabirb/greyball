@@ -14,11 +14,10 @@
 //!
 //! The Web API side supports several named credential *pairs* at once
 //! (`TokenStore`, `webapi_tokens.json`) instead of a single cached token:
-//! `_spotify addlogin [name]` (see `crate::plugin`) adds one without
-//! disturbing whatever's already stored, and `webapi.rs`'s `403` fallback
-//! (`fallback_webapi_token`) switches the active one when the current pair
-//! is refused a call medley's own app isn't approved for — see
-//! [`NCSPOT_CLIENT_ID`].
+//! `_spotify addlogin [name] [client_id]` (see `crate::plugin`) adds one
+//! without disturbing whatever's already stored, and `webapi.rs`'s `403`
+//! fallback (`fallback_webapi_token`) switches the active one when the
+//! current pair is refused a call medley's own app isn't approved for.
 //!
 //! Artefacts are cached under the medley data dir (`$XDG_DATA_HOME/medley/
 //! spotify/`):
@@ -60,20 +59,12 @@ const WEBAPI_CLIENT_ID: &str = "89485716cfd24928b4d7ffc2bee5e07e";
 /// local listener for an `http://127.0.0.1:<port>/…` redirect_uri.)
 const WEBAPI_REDIRECT_URI: &str = "http://127.0.0.1:3121/callback";
 
-/// ncspot's own published Web API client id — verbatim from its own source
-/// (`src/authentication.rs`, `NCSPOT_CLIENT_ID` in
-/// https://github.com/hrkfdn/ncspot), a third-party app id, not one medley
-/// registered. medley's own Development-mode `WEBAPI_CLIENT_ID` app 403s on
-/// some endpoints outright (e.g. `/me/tracks` PUT, i.e. Like) regardless of
-/// the granted scope; ncspot's app already has working access to the same
-/// endpoints, so a Web API token minted under it is a working fallback
-/// credential pair. Its redirect matching is loopback-any-port, like
-/// `MUSIC_CLIENT_ID`, not the fixed `WEBAPI_REDIRECT_URI` medley's own app
-/// requires.
+/// ncspot's own published Web API client id (`src/authentication.rs`,
+/// https://github.com/hrkfdn/ncspot) — a working fallback for endpoints
+/// medley's own Development-mode app 403s on (e.g. `/me/tracks` PUT, Like).
+/// The default for `addlogin`'s `client_id`. Redirect matching is
+/// loopback-any-port, like `MUSIC_CLIENT_ID`.
 const NCSPOT_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
-/// The account name `_spotify addlogin ncspot` stores that credential pair
-/// under, and the one `fallback_webapi_token` switches to on a `403`.
-pub const NCSPOT_ACCOUNT: &str = "ncspot";
 /// Name of the original single Web API credential pair, from before
 /// multiple pairs existed — the one `Auth::login`/`probe`/`wiring` use
 /// unless something promoted a different one active.
@@ -122,31 +113,35 @@ const WEBAPI_SCOPES: &[&str] = &[
 /// 60 s slack so a token that is about to expire is treated as expired.
 const EXPIRY_SLACK_SECS: i64 = 60;
 
-/// A named credential pair's client id — every account but
-/// [`NCSPOT_ACCOUNT`] uses medley's own [`webapi_client_id`] (a second,
-/// third, ... account under medley's own app, just a different user's OAuth
-/// grant); `NCSPOT_ACCOUNT` always uses [`NCSPOT_CLIENT_ID`].
-fn expected_client_id(name: &str) -> String {
-    if name == NCSPOT_ACCOUNT {
-        NCSPOT_CLIENT_ID.to_string()
-    } else {
-        webapi_client_id()
+fn scopes_match(tok: &CachedToken) -> bool {
+    tok.scopes == WEBAPI_SCOPES.join(" ")
+}
+
+/// `addlogin`'s `client_id` argument: `"medley"`/`"ncspot"` are shorthands
+/// for the two apps' ids, anything else is used verbatim, and omitted
+/// defaults to ncspot's (medley's own app 403s some endpoints outright).
+fn resolve_client_id(arg: Option<&str>) -> String {
+    match arg.map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("ncspot") => NCSPOT_CLIENT_ID.to_string(),
+        Some("medley") => webapi_client_id(),
+        Some(other) => other.to_string(),
     }
 }
 
-/// The OAuth client to mint/refresh a named credential pair's token with —
-/// `NCSPOT_ACCOUNT` needs ncspot's client id and its loopback-any-port
-/// redirect; every other name is a medley-app login, same as before
-/// multiple pairs existed.
-fn oauth_client_for(name: &str) -> Result<librespot_oauth::OAuthClient, String> {
-    if name == NCSPOT_ACCOUNT {
+/// The OAuth client to mint/refresh a token with, for `client_id` —
+/// medley's own app requires its fixed, exactly-registered
+/// `WEBAPI_REDIRECT_URI`; any other client id (ncspot's, or a custom one
+/// pasted via `addlogin`) uses loopback-any-port instead, like
+/// `MUSIC_CLIENT_ID`.
+fn oauth_client_for_id(client_id: &str) -> Result<librespot_oauth::OAuthClient, String> {
+    if client_id == webapi_client_id() {
+        webapi_oauth_client()
+    } else {
         let redirect = format!("http://127.0.0.1:{}/login", free_port()?);
-        OAuthClientBuilder::new(NCSPOT_CLIENT_ID, &redirect, WEBAPI_SCOPES.to_vec())
+        OAuthClientBuilder::new(client_id, &redirect, WEBAPI_SCOPES.to_vec())
             .open_in_browser()
             .build()
             .map_err(|e| e.to_string())
-    } else {
-        webapi_oauth_client()
     }
 }
 
@@ -156,18 +151,12 @@ struct CachedToken {
     refresh_token: Option<String>,
     /// Unix seconds.
     expires_at: i64,
-    /// Which app this token was issued for — checked against
-    /// `expected_client_id` for its account name before trusting it, so a
-    /// pair stored under a stale/wrong client id (e.g. before the
-    /// music/web-api app split) is discarded rather than reused.
+    /// Which app this token was issued for — what `refresh` re-mints against.
     #[serde(default)]
     client_id: String,
-    /// `WEBAPI_SCOPES.join(" ")` at the time this token was issued — see
-    /// `account_is_usable`. `#[serde(default)]` so a store from before this
-    /// field existed deserializes to `""`, which never matches and is
-    /// correctly discarded: the grant Spotify actually returns is whatever
-    /// the user consented to on login, and doesn't grow just because
-    /// `WEBAPI_SCOPES` grew.
+    /// `WEBAPI_SCOPES.join(" ")` at the time this token was issued.
+    /// `#[serde(default)]` so a store from before this field existed
+    /// deserializes to `""`, which never matches and is correctly discarded.
     #[serde(default)]
     scopes: String,
 }
@@ -193,11 +182,8 @@ impl CachedToken {
     }
 }
 
-/// Whether `tok` is a usable, not-expired credential pair for the account it
-/// was loaded under — same client id and scope grant `Auth`/`webapi.rs`
-/// currently expect, and not past `expiry_fresh`.
-fn account_is_usable(tok: &CachedToken, expected_client_id: &str) -> bool {
-    tok.client_id == expected_client_id && tok.scopes == WEBAPI_SCOPES.join(" ") && tok.expiry_fresh()
+fn account_is_usable(tok: &CachedToken) -> bool {
+    scopes_match(tok) && tok.expiry_fresh()
 }
 
 fn now_unix() -> i64 {
@@ -302,7 +288,7 @@ impl Auth {
         let store = load_token_store(cache_dir);
         let name = store.active.clone().unwrap_or_else(|| DEFAULT_ACCOUNT.to_string());
         let cached = store.accounts.get(&name)?;
-        if !account_is_usable(cached, &expected_client_id(&name)) {
+        if !account_is_usable(cached) {
             return None;
         }
         Some(Auth {
@@ -317,7 +303,7 @@ impl Auth {
     /// something reusable is missing for it. Blocking (network, possibly a
     /// browser) — the `core::Plugin::setup` path; never called at startup.
     /// Only ever touches the `DEFAULT_ACCOUNT` pair (and makes it active
-    /// again) — any other stored pair (e.g. `NCSPOT_ACCOUNT`) is untouched.
+    /// again) — any other stored pair is untouched.
     pub fn login(cache_dir: &Path) -> Result<Auth, String> {
         std::fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
         let cache = Self::cache(cache_dir)?;
@@ -351,7 +337,7 @@ impl Auth {
                 Some(t.access_token)
             } else if let Some(rt) = &t.refresh_token {
                 log::info!("spotify: web-api token expired, refreshing");
-                refresh(rt, DEFAULT_ACCOUNT)
+                refresh(rt, &expected)
                     .inspect_err(|e| log::warn!("spotify: web-api token refresh failed: {e}"))
                     .ok()
                     .inspect(|new| {
@@ -393,27 +379,23 @@ impl Auth {
         })
     }
 
-    /// `_spotify addlogin [name]`: OAuth-login a new (or re-authenticate an
-    /// existing) Web API credential pair and store it under `name`
-    /// (trimmed; `DEFAULT_ACCOUNT` if empty/omitted), alongside whatever's
-    /// already stored — never touches any other account's entry. `name ==
-    /// NCSPOT_ACCOUNT` logs in under ncspot's own client id (the 403
-    /// workaround); any other name logs in under medley's own client id,
-    /// via its own separate browser OAuth flow (so the user can pick a
-    /// different Spotify account there) — a plain "add another account".
-    /// Doesn't change which pair is active; `webapi.rs`'s `403` fallback is
-    /// what starts actually using a newly added pair. Returns the name it
-    /// was stored under.
-    pub fn add_login(cache_dir: &Path, name: Option<&str>) -> Result<String, String> {
+    /// `_spotify addlogin [name] [client_id]`: OAuth-login a new (or
+    /// re-authenticate an existing) Web API credential pair and store it
+    /// under `name` — purely a storage key, trimmed, `DEFAULT_ACCOUNT` if
+    /// omitted — alongside whatever's already stored. See
+    /// `resolve_client_id` for `client_id`. Returns the name it was stored
+    /// under.
+    pub fn add_login(cache_dir: &Path, name: Option<&str>, client_id: Option<&str>) -> Result<String, String> {
         let name = name
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(DEFAULT_ACCOUNT)
             .to_string();
+        let client_id = resolve_client_id(client_id);
         std::fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
-        log::info!("spotify: opening browser for Spotify login — web API ({name})");
-        let tok = oauth_client_for(&name)?.get_access_token().map_err(|e| e.to_string())?;
-        let cached = CachedToken::from_oauth(&tok, expected_client_id(&name));
+        log::info!("spotify: opening browser for Spotify login — web API ({name}, client id {client_id})");
+        let tok = oauth_client_for_id(&client_id)?.get_access_token().map_err(|e| e.to_string())?;
+        let cached = CachedToken::from_oauth(&tok, client_id);
         let mut store = load_token_store(cache_dir);
         store.accounts.insert(name.clone(), cached);
         save_token_store(cache_dir, &store);
@@ -436,9 +418,7 @@ pub fn has_refresh_token(cache_dir: &Path) -> bool {
     let Some(cached) = store.accounts.get(&name) else {
         return false;
     };
-    cached.client_id == expected_client_id(&name)
-        && cached.scopes == WEBAPI_SCOPES.join(" ")
-        && cached.refresh_token.is_some()
+    scopes_match(cached) && cached.refresh_token.is_some()
 }
 
 /// Refresh the *active* Web API pair's token from its refresh_token and
@@ -452,7 +432,7 @@ pub fn refresh_and_persist(cache_dir: &Path) -> Option<String> {
     let name = store.active.clone().unwrap_or_else(|| DEFAULT_ACCOUNT.to_string());
     let cached = store.accounts.get(&name)?.clone();
     let rt = cached.refresh_token?;
-    let new = refresh(&rt, &name)
+    let new = refresh(&rt, &cached.client_id)
         .inspect_err(|e| log::warn!("spotify: web-api token refresh failed: {e}"))
         .ok()?;
     let access_token = new.access_token.clone();
@@ -480,11 +460,11 @@ pub fn fallback_webapi_token(cache_dir: &Path) -> Option<String> {
         let Some(cached) = store.accounts.get(&name).cloned() else {
             continue;
         };
-        let expected = expected_client_id(&name);
-        let token = if account_is_usable(&cached, &expected) {
+        let token = if account_is_usable(&cached) {
             Some(cached.access_token)
         } else {
-            cached.refresh_token.as_ref().and_then(|rt| refresh(rt, &name).ok()).map(|new| {
+            let client_id = cached.client_id.clone();
+            cached.refresh_token.as_ref().and_then(|rt| refresh(rt, &client_id).ok()).map(|new| {
                 let tok = new.access_token.clone();
                 store.accounts.insert(name.clone(), new);
                 tok
@@ -542,11 +522,11 @@ fn run_webapi_oauth() -> Result<librespot_oauth::OAuthToken, String> {
     webapi_oauth_client()?.get_access_token().map_err(|e| e.to_string())
 }
 
-fn refresh(refresh_token: &str, name: &str) -> Result<CachedToken, String> {
-    let tok = oauth_client_for(name)?
+fn refresh(refresh_token: &str, client_id: &str) -> Result<CachedToken, String> {
+    let tok = oauth_client_for_id(client_id)?
         .refresh_token(refresh_token)
         .map_err(|e| e.to_string())?;
-    let mut mapped = CachedToken::from_oauth(&tok, expected_client_id(name));
+    let mut mapped = CachedToken::from_oauth(&tok, client_id.to_string());
     // Spotify may omit the refresh token on refresh — keep the old one.
     if mapped.refresh_token.is_none() {
         mapped.refresh_token = Some(refresh_token.to_string());

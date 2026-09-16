@@ -127,11 +127,11 @@ impl Plugin for SpotifyPlugin {
     fn commands(&self) -> Vec<PluginCommand> {
         vec![PluginCommand {
             word: "_spotify".to_string(),
-            help: "addlogin [name] — (re)authenticate and add a Web API credential pair \
-                   alongside any already stored (never replaces one); omit name for another \
-                   account under medley's own app, or use \"ncspot\" for a pair under \
-                   ncspot's client id — a fallback for endpoints (e.g. Like) that 403 under \
-                   medley's own Development-mode app"
+            help: "addlogin [name] [client_id] — (re)authenticate and add a Web API credential \
+                   pair alongside any already stored (never replaces one). name is just a label, \
+                   default if omitted. client_id is \"medley\" or \"ncspot\" for those apps' own \
+                   ids, any other string to use verbatim, or omitted for ncspot's (medley's own \
+                   app 403s some endpoints, e.g. Like)"
                 .to_string(),
         }]
     }
@@ -140,11 +140,11 @@ impl Plugin for SpotifyPlugin {
         let arg = arg.unwrap_or_default();
         let mut parts = arg.split_whitespace();
         match parts.next() {
-            Some("addlogin") => match Auth::add_login(&self.cache_dir, parts.next()) {
+            Some("addlogin") => match Auth::add_login(&self.cache_dir, parts.next(), parts.next()) {
                 Ok(name) => format!("logged in — added Web API credential pair {name:?}"),
                 Err(e) => format!("login failed: {e}"),
             },
-            _ => "usage: _spotify addlogin [name]".to_string(),
+            _ => "usage: _spotify addlogin [name] [client_id]".to_string(),
         }
     }
 }
