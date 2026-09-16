@@ -142,7 +142,7 @@ fn hotkey_target_from_string(s: &str) -> Option<HotkeyTarget> {
 }
 
 /// Hotkeys (`` ` ``/`:keys` menu) — playlist bindings and built-in-command
-/// remaps alike — persisted the same way as `volume`/`scan_paused`: one
+/// remaps alike — persisted the same way as `volume`/`scan_mode`: one
 /// `[hotkeys]` table of `key = target` lines (see
 /// `hotkey_target_to_string`) at the end of `state.toml`, read back by
 /// `Session::set_hotkeys`. An unremapped built-in never appears here — only
