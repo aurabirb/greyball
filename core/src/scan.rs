@@ -479,7 +479,7 @@ fn run(
         // walk order — each plugin's own `min_interval` cooldown (plus the
         // per-track failure cooldown) already bounds how much real I/O this
         // does per tick.
-        let Some(tracks) = resolve_walk_list(&inner, &store) else {
+        let Some(tracks) = resolve_walk_list(&inner, &store, &plugins, &media_cache, mode) else {
             continue;
         };
         let ids: Vec<TrackId> = tracks.iter().map(|t| t.id).collect();
@@ -512,8 +512,20 @@ fn run(
 /// highlighted row and wrapping, if one is set; otherwise the full library
 /// in whatever order `store.all_tracks()` returns it. `None` only on a store
 /// read failure.
-fn resolve_walk_list(inner: &Inner, store: &Arc<dyn Store>) -> Option<Vec<Track>> {
-    if let Some(view) = inner.view.lock().unwrap().clone() {
+///
+/// Under `CacheOnly`, also drops any track that isn't already in
+/// `MediaCache` (or that no plugin still `needs()`) — nothing will ever
+/// materialize it under this mode besides the priority now-playing path,
+/// which walks independently of this list, so there's no point revisiting
+/// it every tick just to log the same miss.
+fn resolve_walk_list(
+    inner: &Inner,
+    store: &Arc<dyn Store>,
+    plugins: &[Arc<dyn ScanPlugin>],
+    media_cache: &MediaCache,
+    mode: ScanMode,
+) -> Option<Vec<Track>> {
+    let tracks = if let Some(view) = inner.view.lock().unwrap().clone() {
         let n = view.tracks.len();
         let start = view.highlighted % n;
         let mut out = Vec::with_capacity(n);
@@ -523,9 +535,23 @@ fn resolve_walk_list(inner: &Inner, store: &Arc<dyn Store>) -> Option<Vec<Track>
                 out.push(track);
             }
         }
-        return Some(out);
+        out
+    } else {
+        store.all_tracks().ok()?
+    };
+
+    if mode != ScanMode::CacheOnly {
+        return Some(tracks);
     }
-    store.all_tracks().ok()
+    Some(
+        tracks
+            .into_iter()
+            .filter(|t| {
+                any_plugin_needs(inner, plugins, t)
+                    && t.renditions.iter().any(|r| media_cache.cached_path(&r.source, &r.uri).is_some())
+            })
+            .collect(),
+    )
 }
 
 /// Whether any registered plugin still `needs()` `track` and hasn't
