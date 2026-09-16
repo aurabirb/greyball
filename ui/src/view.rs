@@ -4113,30 +4113,33 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
 
 /// Bracketed BPM-scan status tag shown next to the status line's scrubber,
 /// regardless of whether anything's playing: `[bd]` with no scan driver or
-/// while disabled, `[bc]` idle in cache-only mode (waiting on something else
-/// to materialize a track, never fetching itself), else `[Bd]` downloading,
-/// `[Be]` errored, `[Bs]` skipped, `[Bw]` idle in active mode (also the
-/// no-track-loaded case — there's nothing to report a per-track status for).
+/// while disabled. Otherwise the first letter names the mode — `B` active,
+/// `b` cache-only (lowercase throughout means "not fetching over the
+/// network right now") — and the second names the live per-track status:
+/// `w` idle/waiting (also the no-track-loaded case — there's nothing to
+/// report a per-track status for), `d` downloading, `e` errored, `s`
+/// skipped. E.g. `[Bd]` actively downloading, `[bw]` idle in cache-only mode.
 fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
     let Some(scan) = s.scan.as_ref() else {
         return "[bd]".to_string();
     };
-    let idle_tag = match scan.mode() {
+    let mode_letter = match scan.mode() {
         core::ScanMode::Disabled => return "[bd]".to_string(),
-        core::ScanMode::CacheOnly => "[bc]",
-        core::ScanMode::Active => "[Bw]",
+        core::ScanMode::CacheOnly => 'b',
+        core::ScanMode::Active => 'B',
     };
     // Purely a plugin-status indicator, never the resolved value itself —
     // that already has its own cell in `visible_track_attrs`. A resolved
     // track has no live status (see `ScanStatus`'s doc), so it falls into
     // the idle arm below same as "never attempted", both being steady
     // states with nothing left for this plugin to do.
-    match track.and_then(|t| scan.status("bpm", t.id)) {
-        Some(core::ScanStatus::Downloading) => "[Bd]".to_string(),
-        Some(core::ScanStatus::Error) => "[Be]".to_string(),
-        Some(core::ScanStatus::Skipped) => "[Bs]".to_string(),
-        None => idle_tag.to_string(),
-    }
+    let status_letter = match track.and_then(|t| scan.status("bpm", t.id)) {
+        Some(core::ScanStatus::Downloading) => 'd',
+        Some(core::ScanStatus::Error) => 'e',
+        Some(core::ScanStatus::Skipped) => 's',
+        None => 'w',
+    };
+    format!("[{mode_letter}{status_letter}]")
 }
 
 /// Full, un-scrolled terminal window title: `{icon} {artist} - {title}`,

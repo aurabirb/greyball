@@ -141,7 +141,7 @@ impl BuiltinAction {
             BuiltinAction::AddToPlaylistOrNew => "add to playlist / new playlist",
             BuiltinAction::Quit => "quit",
             BuiltinAction::ClearQueue => "clear the queue",
-            BuiltinAction::ToggleScan => "pause/resume background scan",
+            BuiltinAction::ToggleScan => "toggle background scan active/cache-only",
             BuiltinAction::CyclePaneLayout => "cycle embedded-pane layout",
             BuiltinAction::Enqueue => "enqueue selected track",
             BuiltinAction::Wedge => "wedge selected track to queue front",
@@ -243,9 +243,10 @@ pub enum Command {
     },
     /// Empty the queue (and stop playback).
     ClearQueue,
-    /// Cycles the background scan driver's mode: active -> cache-only ->
-    /// disabled -> active (`:togglescan`). No-op if no scan plugin is
-    /// registered.
+    /// Toggles the background scan driver's mode between active and
+    /// cache-only (`:togglescan`). Never enters or leaves `Disabled` — that's
+    /// config-only (`scan.bpm.enabled`). No-op if no scan plugin is
+    /// registered or it's currently disabled.
     ToggleScan,
     Quit,
 }

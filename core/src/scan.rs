@@ -120,11 +120,16 @@ pub enum ScanMode {
 }
 
 impl ScanMode {
+    /// `B`/`:togglescan`'s toggle — Active and CacheOnly only. `Disabled` is
+    /// reachable solely via `scan.bpm.enabled` in the config file (or, once
+    /// built, the Settings pane's toggle); `B` leaves it alone rather than
+    /// ever entering or leaving it, so fully turning the plugin off/on stays
+    /// a deliberate action distinct from the two-mode day-to-day toggle.
     pub fn cycle(self) -> Self {
         match self {
             ScanMode::Active => ScanMode::CacheOnly,
-            ScanMode::CacheOnly => ScanMode::Disabled,
-            ScanMode::Disabled => ScanMode::Active,
+            ScanMode::CacheOnly => ScanMode::Active,
+            ScanMode::Disabled => ScanMode::Disabled,
         }
     }
 

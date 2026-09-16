@@ -385,7 +385,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // BpmPlugin is registered into the running driver further down instead
     // (see `register_plugin` below), not passed in here.
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
-    let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::Active } else { ScanMode::Disabled };
+    let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::CacheOnly } else { ScanMode::Disabled };
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
 
     log_registered_sources(&sources);
@@ -541,7 +541,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let s = session.lock().unwrap();
     // Only persisted when it's an explicit override of the config default —
     // otherwise a later default change would be masked by today's value.
-    let default_mode = if s.cfg.scan.bpm.enabled { ScanMode::Active } else { ScanMode::Disabled };
+    let default_mode = if s.cfg.scan.bpm.enabled { ScanMode::CacheOnly } else { ScanMode::Disabled };
     let scan_mode = s.scan.as_ref().map(|d| d.mode()).filter(|&mode| mode != default_mode);
     save_state(s.player_status().volume, scan_mode, &s.hotkeys().into_iter().collect());
     s.save_queue();

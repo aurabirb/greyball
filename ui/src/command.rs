@@ -101,7 +101,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("vis", "toggle the real-audio bar-eq visualizer pane"),
     ("queue", "toggle the queue pane (dock it, or switch to it — see :panes)"),
     ("history", "toggle the history pane (dock it, or switch to it — see :panes)"),
-    ("togglescan", "pause/resume the background scan (bpm, ...)"),
+    ("togglescan", "toggle the background scan (bpm, ...) between active and cache-only"),
     (
         "panes [<pane>] [screen|embedded] [left|right|top|bottom] [horizontal|vertical]",
         "change where a pane renders — every pane places independently; \
