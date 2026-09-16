@@ -333,6 +333,10 @@ pub struct Session {
     /// silently supersedes a stale in-flight decode instead of it hijacking
     /// playback once it finishes.
     pending_cache_fallback: Option<TrackId>,
+    /// Sources already tried for the currently-playing track this attempt —
+    /// reset per `play_track`, so `LoadFailed` can retry the next-best
+    /// rendition instead of the one that just failed.
+    failed_playback_sources: Vec<SourceId>,
     /// Where the play-history M3U log lives — one entry appended per play,
     /// see `append_history_entry`. The whole `Session` already lives behind
     /// one `Arc<Mutex<Session>>` in `main.rs`, so every call in here is
@@ -453,6 +457,7 @@ impl Session {
             scan: None,
             media_cache,
             pending_cache_fallback: None,
+            failed_playback_sources: Vec::new(),
             history_path,
             now_playing: None,
             last_status,
@@ -824,16 +829,33 @@ impl Session {
                 if let Some(t) = self.store.track_by_rendition(source, uri)?
                     && self.queue.get_current() == Some(t.id)
                 {
-                    log::warn!(
-                        "player: load failed for \"{}\" ({source}) — trying local-cache fallback",
-                        t.title
-                    );
-                    self.pending_cache_fallback = None;
-                    if !self.play_from_cache(&t, true) {
-                        self.bus.send(CoreEvent::SourceError {
-                            source: source.clone(),
-                            message: format!("playback failed for {uri}"),
-                        });
+                    self.failed_playback_sources.push(source.clone());
+                    let retry = match Resolver::resolve_playback_excluding(&t, &self.failed_playback_sources) {
+                        Resolution::Ready(r) => self.pick_player(&r).map(|p| (r, p)),
+                        Resolution::Gap { .. } => None,
+                    };
+                    match retry {
+                        Some((r, p)) => {
+                            log::warn!(
+                                "player: load failed for \"{}\" ({source}) — trying {} instead",
+                                t.title,
+                                r.source
+                            );
+                            self.start_playback(&t, &r, p, true);
+                        }
+                        None => {
+                            log::warn!(
+                                "player: load failed for \"{}\" ({source}) — trying local-cache fallback",
+                                t.title
+                            );
+                            self.pending_cache_fallback = None;
+                            if !self.play_from_cache(&t, true) {
+                                self.bus.send(CoreEvent::SourceError {
+                                    source: source.clone(),
+                                    message: format!("playback failed for {uri}"),
+                                });
+                            }
+                        }
                     }
                 }
                 Ok(true)
@@ -1278,6 +1300,7 @@ impl Session {
         // Any fresh play call supersedes an outstanding decode-on-demand from
         // a previous one — see `pending_cache_fallback`'s doc.
         self.pending_cache_fallback = None;
+        self.failed_playback_sources.clear();
         let Some(track) = self.store.get_track(id).ok().flatten() else {
             return;
         };

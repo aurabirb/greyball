@@ -78,6 +78,19 @@ impl Resolver {
         }
     }
 
+    /// Like `resolve_track(t, &Target::Playback)`, skipping any rendition
+    /// whose source is in `exclude`.
+    pub fn resolve_playback_excluding(t: &Track, exclude: &[SourceId]) -> Resolution {
+        let best =
+            best_by_rank(t.renditions.iter().filter(|r| Self::is_live(r) && !exclude.contains(&r.source)));
+        match best {
+            Some(r) => Resolution::Ready(r.clone()),
+            None => Resolution::Gap {
+                reason: format!("no other rendition playable for \"{}\"", t.title),
+            },
+        }
+    }
+
     /// Is this rendition actually playable *right now*? A local file that has
     /// been deleted is not. Everything remote is assumed live (no network here).
     /// `path.exists()` is a cheap `stat`. (`// MVP:`)
