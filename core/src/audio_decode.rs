@@ -1,0 +1,133 @@
+//! Generic, format-agnostic decode of compressed audio to PCM (for BPM
+//! analysis), plus populating `MediaCache` from a source's raw fetched
+//! bytes. The decode side is shared by every scan plugin (`BpmPlugin`, ...)
+//! and the playback-cache-fallback path (`Session::play_from_cache`) —
+//! neither needs its own codec-specific decoder, regardless of whether the
+//! source was Ogg Vorbis (Spotify), MP3/AAC (SoundCloud/HTTP) or anything
+//! else symphonia recognises.
+
+use std::io::{self, Read, Seek, SeekFrom};
+
+use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
+use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+
+use crate::media_cache::MediaCache;
+use crate::traits::ReadSeek;
+use crate::types::SourceId;
+
+/// Wraps a `Box<dyn ReadSeek + Send>` (not `Sync`) so symphonia's
+/// `MediaSource` (which requires `Sync`) accepts it. Sound because the
+/// decode below only ever touches it from the single thread that owns it.
+struct SourceAdapter<R>(R);
+
+unsafe impl<R> Sync for SourceAdapter<R> {}
+
+impl<R: Read> Read for SourceAdapter<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Seek> Seek for SourceAdapter<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl<R: Read + Seek + Send> MediaSource for SourceAdapter<R> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// Decode the entirety of `audio` to interleaved stereo f32 frames,
+/// auto-detecting the container/codec (no format hint — the probe's own
+/// magic-byte sniffing already handles Ogg/MP3/AAC/FLAC/... uniformly). The
+/// whole track, not a bounded prefix — the result also backs the
+/// fallback-playback path (`Session::play_from_cache`), which needs the
+/// full track, not a preview; BPM analysis just uses however many of its own
+/// windows fit. `None` on a decode failure or a stream too short to be
+/// useful for either.
+pub fn decode_stereo_prefix(audio: Box<dyn ReadSeek + Send>) -> Option<(Vec<[f32; 2]>, u32)> {
+    let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio)), Default::default());
+    let probed = symphonia::default::get_probe()
+        .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
+    let mut format = probed.format;
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
+    let track_id = track.id;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+    let mut decoder =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
+
+    let mut frames: Vec<[f32; 2]> = Vec::new();
+
+    while let Ok(packet) = format.next_packet() {
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let Ok(decoded) = decoder.decode(&packet) else { continue };
+        push_frames(decoded, &mut frames);
+    }
+
+    // Require at least a second — anything shorter isn't useful for
+    // analysis, and playing back a fraction of a second as a "fallback"
+    // isn't worth the complexity of a shorter-than-a-second special case.
+    (frames.len() >= sample_rate as usize).then_some((frames, sample_rate))
+}
+
+/// Convert one decoded packet's samples (any symphonia sample format, any
+/// channel count) into stereo frames appended to `out`. Mono is duplicated
+/// to both channels; >2 channels keep only the first two.
+fn push_frames(decoded: AudioBufferRef, out: &mut Vec<[f32; 2]>) {
+    let spec = *decoded.spec();
+    let channels = spec.channels.count().max(1);
+    let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+    buf.copy_interleaved_ref(decoded);
+    for chunk in buf.samples().chunks(channels) {
+        let l = chunk[0];
+        let r = if channels >= 2 { chunk[1] } else { l };
+        out.push([l, r]);
+    }
+}
+
+/// Buffer `audio`'s entire byte stream into memory — for storing as-is in
+/// `MediaCache` (see `decode_and_cache`) and/or decoding from the same
+/// buffer without a second fetch (see `BpmPlugin::analyze`).
+pub fn read_all(mut audio: Box<dyn ReadSeek + Send>) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    audio.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// Populate `(source, uri)`'s `MediaCache` entry directly from `audio`'s raw
+/// bytes, returning the resulting file path — no decode/re-encode step.
+/// Every reader this is handed (an already-fetched HTTP/SoundCloud file,
+/// Spotify's already-decrypted, header-stripped Ogg Vorbis) is already a
+/// plain, unencrypted, playable file, so storing exactly what was fetched
+/// avoids both the CPU cost and the quality loss of a needless transcode.
+/// Used both by a scan plugin that had to fetch audio itself and by the
+/// playback-cache-fallback path caching on demand for a rendition no scan
+/// has cached yet.
+pub fn decode_and_cache(
+    cache: &MediaCache,
+    source: &SourceId,
+    uri: &str,
+    audio: Box<dyn ReadSeek + Send>,
+) -> Option<std::path::PathBuf> {
+    let bytes = read_all(audio)
+        .inspect_err(|e| log::debug!("audio_decode: read failed for {source} {uri}: {e}"))
+        .ok()?;
+    cache
+        .put(source, uri, &bytes)
+        .inspect_err(|e| log::debug!("audio_decode: couldn't populate media cache for {source} {uri}: {e}"))
+        .ok()
+}

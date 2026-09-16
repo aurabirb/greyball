@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "sources/http",
+    "sources/spotify",
+    "sources/soundcloud",
+    "sources/soulseek",
+    "player",
+    "ui",
+    "app",
+]
+
+[workspace.package]
+authors = ["medley"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/aurabirb/greyball"
+
+[workspace.lints.clippy]
+enum_glob_use = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1

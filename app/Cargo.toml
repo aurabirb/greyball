@@ -1,0 +1,63 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "medley"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Off by default so the normal build stays lean. Each enables one source
+# plugin, still gated at runtime by its `cfg.<name>.enabled`. See
+# SPEC-SPOTIFY.md / SPEC-SOUNDCLOUD.md.
+spotify = ["dep:sources-spotify"]
+soundcloud = ["dep:sources-soundcloud"]
+soulseek = ["dep:sources-soulseek"]
+
+[dependencies]
+# Renamed from the package's own name "core": a dependency literally named
+# `core` shadows the sysroot `core` crate for *unqualified* `core::` paths,
+# which breaks macro-generated code that assumes `core::` reaches sysroot
+# (hit by zbus's `#[interface]` macro in src/mpris.rs). Every other crate in
+# the workspace still depends on it as plain `core` — this rename is local
+# to the `app` crate.
+medley-core = { package = "core", path = "../core" }
+sources-http = { path = "../sources/http" }
+sources-spotify = { path = "../sources/spotify", optional = true }
+sources-soundcloud = { path = "../sources/soundcloud", optional = true }
+sources-soulseek = { path = "../sources/soulseek", optional = true }
+player = { path = "../player" }
+ui = { path = "../ui" }
+toml = "0.8"
+url = "2"
+log = "0.4"
+simplelog = "0.12"
+chrono = "0.4"
+cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
+
+# MPRIS (media keys) — Linux/BSD only, D-Bus. Listed unconditionally
+# (simpler than a target-cfg dependency table) but only ever used behind
+# `#[cfg(target_os = "linux")]` in src/mpris.rs.
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# Media keys / Now Playing info on macOS — MediaPlayer framework
+# (MPRemoteCommandCenter/MPNowPlayingInfoCenter), see src/media_keys_macos.rs.
+# Target-cfg'd (unlike zbus above): these crates carry Apple-framework
+# linkage metadata that has no business being parsed on non-macOS builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue"] }
+objc2-media-player = "0.3"
+block2 = "0.6"
+
