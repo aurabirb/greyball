@@ -1314,7 +1314,7 @@ impl Session {
                 other.stop();
             }
         }
-        p.load(r, false, 0);
+        p.load(r, false, 0, true);
         self.now_playing = Some(track.id);
         self.last_status = p.status();
         self.last_status.volume = self.volume;

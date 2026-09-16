@@ -189,7 +189,9 @@ impl Default for PlayerStatus {
 /// rendition. It has no notion of a logical `TrackId`.
 pub trait Player: Send + Sync {
     fn accepts(&self, r: &Rendition) -> bool;
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32);
+    /// `cache`: whether this play may populate `MediaCache`. Unused today —
+    /// every caller passes `true`.
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool);
     fn toggle(&self);
     fn seek(&self, position_ms: u32);
     /// clamp 0.0..=1.0

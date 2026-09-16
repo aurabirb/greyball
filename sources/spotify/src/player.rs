@@ -106,6 +106,7 @@ enum Cmd {
         duration_ms: u32,
         start_paused: bool,
         position_ms: u32,
+        cache: bool,
     },
     Toggle,
     Seek(u32),
@@ -196,12 +197,13 @@ impl Player for SpotifyPlayer {
         r.source.as_str() == "spotify"
     }
 
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32) {
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool) {
         let _ = self.tx.send(Cmd::Load {
             uri: r.uri.clone(),
             duration_ms: r.duration_ms,
             start_paused,
             position_ms,
+            cache,
         });
     }
 
@@ -496,6 +498,7 @@ async fn run(
         let mut events = player.get_player_event_channel();
 
         let mut cur: Option<(SourceId, String)> = None;
+        let mut cur_cache = true;
         let mut duration_ms: u32 = 0;
         let mut playback_start: Option<Instant> = None;
         // Whether `PlayerEvent::Materialized` has already been sent for
@@ -521,6 +524,7 @@ async fn run(
             .await
             {
                 cur = c;
+                cur_cache = true;
                 duration_ms = d;
                 playback_start = p;
                 materialized_sent = false;
@@ -531,10 +535,11 @@ async fn run(
             tokio::select! {
                     cmd = rx.recv() => match cmd {
                         None => break 'inner LoopExit::Shutdown,
-                        Some(Cmd::Load { uri, duration_ms: hint, start_paused, position_ms }) => {
+                        Some(Cmd::Load { uri, duration_ms: hint, start_paused, position_ms, cache }) => {
                         let ctx = LoadCtx { session: &session, player: &player, bus: &bus, snap: &snap };
                         if let Some((c, d, p)) = do_load(ctx, uri, hint, start_paused, position_ms).await {
                             cur = c;
+                            cur_cache = cache;
                             duration_ms = d;
                             playback_start = p;
                             materialized_sent = false;
@@ -616,7 +621,9 @@ async fn run(
                         materialized_sent = true;
                         log::debug!("spotify: materialized {uri}");
                         bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
-                        spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri);
+                        if cur_cache {
+                            spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri);
+                        }
                     }
                 }
             }

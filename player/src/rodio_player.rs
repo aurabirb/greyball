@@ -54,6 +54,7 @@ enum Cmd {
         rendition: Rendition,
         start_paused: bool,
         position_ms: u32,
+        cache: bool,
     },
     /// Reported by the background thread `Load` spawns once resolving +
     /// opening the decoder finishes, one way or the other. Dropped if
@@ -117,11 +118,12 @@ impl Player for RodioPlayer {
         true
     }
 
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32) {
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool) {
         let _ = self.tx.send(Cmd::Load {
             rendition: r.clone(),
             start_paused,
             position_ms,
+            cache,
         });
     }
 
@@ -207,6 +209,7 @@ fn worker(
                 rendition,
                 start_paused,
                 position_ms,
+                cache,
             }) => start_load(
                 &mut audio,
                 &inner,
@@ -218,6 +221,7 @@ fn worker(
                 rendition,
                 start_paused,
                 position_ms,
+                cache,
             ),
             Ok(Cmd::Loaded {
                 generation,
@@ -320,6 +324,7 @@ fn start_load(
     r: Rendition,
     start_paused: bool,
     position_ms: u32,
+    cache: bool,
 ) {
     audio.generation += 1;
     let generation = audio.generation;
@@ -361,7 +366,7 @@ fn start_load(
     let tx = tx.clone();
     let bus = bus.clone();
     std::thread::spawn(move || {
-        let result = resolve_and_decode(&media, &media_cache, &r, &tap);
+        let result = resolve_and_decode(&media, &media_cache, &r, &tap, cache);
         if result.is_ok() {
             // Fetch (if any) is done — the source's own materialization,
             // announced the same way Spotify's worker announces its own.
@@ -390,6 +395,7 @@ fn resolve_and_decode(
     media_cache: &MediaCache,
     r: &Rendition,
     tap: &Arc<AudioTap>,
+    cache: bool,
 ) -> core::Result<LoadedTrack> {
     let source = &r.source;
     let uri = &r.uri;
@@ -401,7 +407,7 @@ fn resolve_and_decode(
         if core::is_local_source(source) && !media.contains_key(source) {
             (PathBuf::from(core::local_path_from_uri(uri)), None)
         } else {
-            open_media(media, media_cache, source, r, uri)?
+            open_media(media, media_cache, source, r, uri, cache)?
         };
 
     let file = File::open(&path).map_err(|e| core::Error::Other(e.to_string()))?;
@@ -473,6 +479,7 @@ fn open_media(
     source: &SourceId,
     r: &Rendition,
     uri: &str,
+    cache: bool,
 ) -> core::Result<(std::path::PathBuf, Option<NamedTempFile>)> {
     // Any source: a `MediaCache` hit plays straight from disk, skipping a
     // live fetch entirely — checked before asking the provider to do
@@ -491,7 +498,7 @@ fn open_media(
         // dir) — nothing was fetched, so MediaCache only gets a symlink to
         // it, not a duplicate copy.
         Media::Path(p) => {
-            if let Err(e) = media_cache.link_local(&r.source, &r.uri, &p) {
+            if cache && let Err(e) = media_cache.link_local(&r.source, &r.uri, &p) {
                 log::debug!("player: couldn't link {source} {uri} into media cache: {e}");
             }
             (p, None)
@@ -503,7 +510,9 @@ fn open_media(
                 .map_err(|e| core::Error::Other(format!("download {url}: {e}")))?;
             log::info!("player: fetched {url} in {:?}", started.elapsed());
             let p = tmp.path().to_path_buf();
-            cache_fetched(media_cache, r, &p, source, uri);
+            if cache {
+                cache_fetched(media_cache, r, &p, source, uri);
+            }
             (p, Some(tmp))
         }
         Media::Reader(mut rdr) => {
@@ -512,7 +521,9 @@ fn open_media(
             std::io::copy(&mut rdr, tmp.as_file_mut())
                 .map_err(|e| core::Error::Other(e.to_string()))?;
             let p = tmp.path().to_path_buf();
-            cache_fetched(media_cache, r, &p, source, uri);
+            if cache {
+                cache_fetched(media_cache, r, &p, source, uri);
+            }
             (p, Some(tmp))
         }
     })
