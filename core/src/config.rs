@@ -122,12 +122,14 @@ pub struct ScanConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BpmScanConfig {
-    /// Whether background BPM scanning starts active. The plugin itself is
-    /// always registered (so `B` / `:togglescan` can flip this live) — this
-    /// only sets the initial paused state, and only on the very first run;
-    /// after that the last `B`-toggled state (persisted in `state.toml`)
-    /// wins. Off by default since it downloads/decodes audio in the
-    /// background.
+    /// Whether the scan driver starts in `CacheOnly` (`true`) or fully
+    /// `Disabled` (`false`). The plugin itself is always registered (so `B`
+    /// only ever moves between `Active`/`CacheOnly`, never in or out of
+    /// `Disabled`) — this only sets the initial state, and only on the very
+    /// first run; after that the last `B`-toggled state (persisted in
+    /// `state.toml`) wins. On by default: `CacheOnly` never originates a
+    /// fetch, only reads audio something else already materialized, so
+    /// there's no network cost to leaving it on.
     pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
@@ -212,7 +214,7 @@ impl Default for ScanConfig {
 impl Default for BpmScanConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             min_interval_secs: 15,
         }
     }
