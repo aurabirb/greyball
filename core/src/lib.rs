@@ -30,7 +30,7 @@ pub use config::{
 };
 pub use audio_decode::decode_and_cache;
 pub use event::{Bus, CoreEvent, PlayerEvent};
-pub use http_fetch::{fetch_url_bytes, fetch_url_to};
+pub use http_fetch::{fetch_url_bytes, fetch_url_to, start_get};
 pub use logbuf::LogBuf;
 pub use audio::audio_ext;
 pub use matcher::Matcher;

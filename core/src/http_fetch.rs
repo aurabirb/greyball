@@ -36,3 +36,21 @@ pub fn fetch_url_bytes(url: &str) -> io::Result<Vec<u8>> {
     fetch_url_to(url, &mut buf)?;
     Ok(buf)
 }
+
+/// A GET whose headers have arrived but whose body hasn't been read yet —
+/// lets a caller decide whether to stream it progressively (checking
+/// `content_length` first) instead of `fetch_url_to`'s "block for the whole
+/// body" semantics. `body` is boxed so callers (e.g. `player`) don't need a
+/// direct `reqwest` dependency just to hold onto it.
+pub struct Fetch {
+    pub content_length: Option<u64>,
+    pub body: Box<dyn io::Read + Send>,
+}
+
+/// GETs `url` and returns as soon as the response headers are in, without
+/// reading the body — see `Fetch`.
+pub fn start_get(url: &str) -> io::Result<Fetch> {
+    let resp = client().get(url).send().and_then(|r| r.error_for_status()).map_err(io::Error::other)?;
+    let content_length = resp.content_length();
+    Ok(Fetch { content_length, body: Box::new(resp) })
+}
