@@ -617,6 +617,14 @@ pub struct MedleyView {
     /// The track being added, captured when the picker opens (`+` on that
     /// track's row) so it stays fixed even if the underlying list scrolls.
     playlist_picker_track: Option<TrackId>,
+    /// (last now-playing text seen, when its marquee scroll started) for the
+    /// tab bar's own marquee (`draw_tab_bar`), shown next to the tabs when
+    /// the screen is too narrow for their detail text. A `Mutex` rather than
+    /// a plain field only because `draw` takes `&self` (mirrors
+    /// `filter_cache`'s interior-mutability cache below) — single-threaded,
+    /// never contended. Mirrors `app::title::WindowTitle`'s own
+    /// `full`/`scroll_start` pair so both marquees use the same timing.
+    tab_marquee: std::sync::Mutex<(String, Instant)>,
 }
 
 impl MedleyView {
@@ -669,6 +677,7 @@ impl MedleyView {
             playlist_picker_cursor: 0,
             playlist_picker_offset: 0,
             playlist_picker_track: None,
+            tab_marquee: std::sync::Mutex::new((String::new(), Instant::now())),
         }
     }
 
@@ -2970,19 +2979,34 @@ fn screen_name(screen: usize) -> &'static str {
 
 /// A tab's rendered button text: its 1-based hotkey number plus name,
 /// padded with a leading/trailing space so the active tab's background
-/// highlight doesn't hug the text.
-fn tab_label(index: usize, name: &str) -> String {
-    format!(" [{}] {name} ", index + 1)
+/// highlight doesn't hug the text. `collapsed` (too narrow for full labels —
+/// see `tab_layout`) shows just the name's first letter instead.
+fn tab_label(index: usize, name: &str, collapsed: bool) -> String {
+    if collapsed {
+        let letter = name.chars().next().unwrap_or('?');
+        format!(" {letter} ")
+    } else {
+        format!(" [{}] {name} ", index + 1)
+    }
+}
+
+/// Total width of every tab label plus the gaps between them, for the given
+/// `collapsed` mode — the threshold `draw_tab_bar`/`tab_at_x` collapse at.
+fn tabs_width(collapsed: bool) -> usize {
+    let gap = 1;
+    TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label, collapsed).chars().count()).sum::<usize>()
+        + gap * TABS.len().saturating_sub(1)
 }
 
 /// Each tab's screen, start column and width, left-aligned starting at
 /// column 0 with a 1-column gap between tabs — pure (independent of the
 /// screen width; overflow past it is the caller's problem, see
 /// `draw_tab_bar`/`tab_at_x`) so both agree on where each tab sits without
-/// duplicating the layout.
-fn tab_layout() -> Vec<(usize, usize, usize)> {
+/// duplicating the layout. `collapsed`: single-letter labels instead of the
+/// full `"[N] Name"` form — see `tab_label`.
+fn tab_layout(collapsed: bool) -> Vec<(usize, usize, usize)> {
     let widths: Vec<usize> =
-        TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label).chars().count()).collect();
+        TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label, collapsed).chars().count()).collect();
     let gap = 1;
     let mut x = 0;
     TABS
@@ -3001,12 +3025,90 @@ fn tab_layout() -> Vec<(usize, usize, usize)> {
 }
 
 /// Which tab (if any) occupies column `x` of a tab bar `width` columns
-/// wide — `None` over the gap/detail area.
-fn tab_at_x(x: usize, width: usize) -> Option<usize> {
-    tab_layout()
+/// wide — `None` over the gap/detail area. Collapse state is a pure function
+/// of `width` (see `draw_tab_bar`), so a click always agrees with what was
+/// last drawn there.
+fn tab_at_x(x: usize, width: usize, state: &PlayerState) -> Option<usize> {
+    let collapsed = tab_bar_collapsed(width, state);
+    tab_layout(collapsed)
         .into_iter()
         .find(|&(_, start, w)| x >= start && x < start + w && start < width)
         .map(|(screen, ..)| screen)
+}
+
+/// Whether the tab bar's full `"[N] Name"` labels have to collapse to
+/// single letters (see `tab_label`) to leave room for the transport-button
+/// strip (`transport_layout`) right after them within `content_w` — the one
+/// place this trade-off is decided, shared by `draw_tab_bar`/`tab_at_x`/
+/// `transport_at_x` so all three always agree on the current layout.
+fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
+    let gap = 1;
+    let transport_w = transport_layout(0, state).last().map_or(0, |&(_, s, w)| s + w);
+    tabs_width(false) + gap + transport_w > content_w
+}
+
+/// One of the top-bar's transport buttons, drawn right after the tabs (see
+/// `transport_layout`/`draw_tab_bar`) — click targets for the same commands
+/// as the `<`/`Space`/`>` keys.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Transport {
+    Prev,
+    PlayPause,
+    Next,
+}
+
+impl Transport {
+    fn command(self) -> Command {
+        match self {
+            Transport::Prev => Command::Previous,
+            Transport::PlayPause => Command::PlayPause,
+            Transport::Next => Command::Next,
+        }
+    }
+}
+
+/// The three transport buttons' text, space-padded like `tab_label` — the
+/// middle one is `player_state_icon` so it always shows the current
+/// play/pause/stop state.
+fn transport_labels(state: &PlayerState) -> [(Transport, String); 3] {
+    [
+        (Transport::Prev, " ⏮ ".to_string()),
+        (Transport::PlayPause, format!(" {} ", player_state_icon(state))),
+        (Transport::Next, " ⏭ ".to_string()),
+    ]
+}
+
+/// Transport buttons' start column and width, packed left-to-right from
+/// `start` with no gap between them (they already carry their own padding —
+/// see `transport_labels`) — shared by `draw_tab_bar` and `transport_at_x`
+/// so a click always agrees with what was last drawn.
+fn transport_layout(start: usize, state: &PlayerState) -> Vec<(Transport, usize, usize)> {
+    let mut x = start;
+    transport_labels(state)
+        .into_iter()
+        .map(|(button, label)| {
+            let w = label.width();
+            let s = x;
+            x += w;
+            (button, s, w)
+        })
+        .collect()
+}
+
+/// Which transport button (if any) occupies column `x`, given the current
+/// tab-bar `width` and `active`/`detail`-independent tab collapse state —
+/// `None` when `x` isn't over a button, or the buttons weren't drawn at all
+/// because they didn't fit (mirrors `draw_tab_bar`'s own fit check).
+fn transport_at_x(x: usize, width: usize, state: &PlayerState) -> Option<Transport> {
+    let collapsed = tab_bar_collapsed(width, state);
+    let tabs_end = tab_layout(collapsed).last().map_or(0, |&(_, start, w)| start + w);
+    let start = tabs_end + 1;
+    let layout = transport_layout(start, state);
+    let end = layout.last().map_or(start, |&(_, s, w)| s + w);
+    if end > width {
+        return None;
+    }
+    layout.into_iter().find(|&(_, s, w)| x >= s && x < s + w).map(|(b, ..)| b)
 }
 
 /// Row 0 of the whole screen — fixed, full width, drawn on the raw
@@ -3014,19 +3116,38 @@ fn tab_at_x(x: usize, width: usize) -> Option<usize> {
 /// screen tabs left-aligned from column 0 — default colors, except the
 /// active tab gets a red background with white text — and `detail` (the
 /// active tab's extra context, e.g. a playlist/search-query name, already
-/// fully punctuated by the caller, or empty) right-aligned past them. If
-/// everything doesn't fit, `detail` is dropped first, then truncated; the
-/// tab buttons are only truncated as a last resort.
-fn draw_tab_bar(printer: &Printer, active: usize, detail: &str) {
+/// fully punctuated by the caller, or empty) right-aligned past them.
+///
+/// Too narrow for the tabs' full `"[N] Name"` labels: they collapse to a
+/// single letter each (`tab_label`) instead of being truncated mid-label.
+/// If there's *still* not enough room for `detail` next to the collapsed
+/// tabs, `marquee` (the same now-playing text as the terminal window title,
+/// scrolled by `marquee_offset` real-time columns — see `marquee_offset`)
+/// is shown there instead of the static `detail` string, since a static
+/// truncation would just show a few unreadable characters.
+///
+/// Between the tabs and `detail`/`marquee` sits a fixed transport-button
+/// strip (`⏮`/play-pause/`⏭` — see `transport_layout`), drawn whenever it
+/// fits past the tabs; dropped silently otherwise (`detail`/the marquee
+/// take priority over the buttons on a very narrow screen).
+fn draw_tab_bar(
+    printer: &Printer,
+    active: usize,
+    detail: &str,
+    marquee: &str,
+    marquee_offset: usize,
+    player_state: &PlayerState,
+) {
     let content_w = printer.size.x.saturating_sub(1);
-    let layout = tab_layout();
+    let collapsed = tab_bar_collapsed(content_w, player_state);
+    let layout = tab_layout(collapsed);
 
     for (i, &(screen, start, w)) in layout.iter().enumerate() {
         if start >= content_w {
             continue;
         }
         let label = TABS[i].1;
-        let text: String = tab_label(i, label).chars().take(w.min(content_w - start)).collect();
+        let text: String = tab_label(i, label, collapsed).chars().take(w.min(content_w - start)).collect();
         if screen == active {
             let style = ColorStyle::new(Color::Dark(BaseColor::White), ACTIVE_TAB_BG);
             printer.with_color(style, |p| p.print((start, 0), &text));
@@ -3037,13 +3158,35 @@ fn draw_tab_bar(printer: &Printer, active: usize, detail: &str) {
 
     let tabs_end = layout.last().map_or(0, |&(_, start, w)| start + w);
     let gap = 1;
-    let detail_start = tabs_end + gap;
-    if !detail.is_empty() && detail_start < content_w {
-        let avail = content_w - detail_start;
-        let text = truncate_ellipsis(detail, avail);
-        let start = content_w - text.width();
-        printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
+    let transport_start = tabs_end + gap;
+    let transport_labels = transport_labels(player_state);
+    let transport = transport_layout(transport_start, player_state);
+    let transport_end = transport.last().map_or(transport_start, |&(_, s, w)| s + w);
+    let detail_start = if transport_end <= content_w {
+        for ((_, label), &(_, start, _)) in transport_labels.iter().zip(transport.iter()) {
+            printer.print((start, 0), label);
+        }
+        transport_end + gap
+    } else {
+        transport_start
+    };
+    if detail_start >= content_w {
+        return;
     }
+    let avail = content_w - detail_start;
+    // Only fall back to the marquee once tabs are already collapsed and
+    // `detail` itself wouldn't fit whole (or there's no `detail` to show at
+    // all) — a collapsed tab bar with plenty of room left still shows the
+    // real (static) `detail` text.
+    let text = if collapsed && (detail.is_empty() || detail.width() > avail) {
+        scroll_title(marquee, avail, marquee_offset)
+    } else if !detail.is_empty() {
+        truncate_ellipsis(detail, avail)
+    } else {
+        return;
+    };
+    let start = content_w - text.width();
+    printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
 }
 
 /// Updates the Log pane's pin point (`log_pin`) after `scroll` changes.
@@ -3320,7 +3463,15 @@ impl View for MedleyView {
 
         // Row 0 of the whole screen — fixed, full width, never `main_rect`
         // (which panes may have narrowed) — see `split`/`draw_tab_bar`.
-        draw_tab_bar(printer, self.screen, &detail);
+        let marquee_offset = {
+            let mut m = self.tab_marquee.lock().unwrap();
+            if m.0 != np {
+                m.0 = np.clone();
+                m.1 = Instant::now();
+            }
+            m.1.elapsed().as_secs() as usize
+        };
+        draw_tab_bar(printer, self.screen, &detail, &np, marquee_offset, &st.state);
         draw_list_body(&printer.windowed(main_rect), &rows, offset, sel, total);
 
         // command / hint line (row above the status line) — also the whole
@@ -3807,9 +3958,13 @@ impl View for MedleyView {
             && local.y == 0
             && local.x < self.last_screen_size.x
         {
-            self.focus = Focus::Main;
             let width = self.last_screen_size.x.saturating_sub(1);
-            return match tab_at_x(local.x, width) {
+            let player_state = self.with_session(|s| s.player_status().state);
+            if let Some(button) = transport_at_x(local.x, width, &player_state) {
+                return self.run(button.command());
+            }
+            self.focus = Focus::Main;
+            return match tab_at_x(local.x, width, &player_state) {
                 Some(target) => self.handle_action(Action::Screen(target)),
                 None => EventResult::consumed(),
             };
