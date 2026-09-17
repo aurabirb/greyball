@@ -725,7 +725,8 @@ impl MedleyView {
                 draw_pane(pane, &content, &lines, scroll, true);
             }
             Pane::Settings => {
-                let entries = self.with_session(settings_entries);
+                let pane_cfg = self.pane_cfg;
+                let entries = self.with_session(|s| settings_entries(s, pane_cfg));
                 draw_settings_pane(&content, &entries, self.settings_offset, self.settings_cursor, true);
             }
             // `toggle_pane` never routes these two here — a `Screen`-mode
@@ -889,7 +890,7 @@ impl MedleyView {
             } else if let Some(msg) = self.with_session(|s| s.membership_feedback()) {
                 format!("  {msg}")
             } else {
-                "  select a row and press `   [Backspace] clear   [Tab] filter   [Esc] close".to_string()
+                "  select a row and press Enter   [Backspace] clear   [Tab] filter   [Esc] close".to_string()
             };
             p.print((0, bottom), &pad(&line, p.size.x));
         });
@@ -1075,7 +1076,8 @@ impl MedleyView {
     /// Settings pane's row cursor — a `CursorWindow` list like Queue/History
     /// rather than Log's wrapped-line scroll, since each entry is one row.
     fn jump_settings(&mut self, up: bool, step: usize) {
-        let n = self.with_session(|s| settings_entries(s).len());
+        let pane_cfg = self.pane_cfg;
+        let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
         let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
         CursorWindow { cursor: &mut self.settings_cursor, offset: &mut self.settings_offset }.jump(up, step, n, h);
     }
@@ -1083,7 +1085,10 @@ impl MedleyView {
     /// Enter/Space on the Settings pane's selected row.
     fn toggle_selected_setting(&mut self) {
         let cursor = self.settings_cursor;
-        let Some(entry) = self.with_session(|s| settings_entries(s).into_iter().nth(cursor)) else { return };
+        let pane_cfg = self.pane_cfg;
+        let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
+            return;
+        };
         match entry {
             SettingsEntry::Source { name, enabled } => {
                 self.with_session_mut(|s| s.set_source_enabled(name, !enabled));
@@ -1858,10 +1863,15 @@ impl MedleyView {
         self.hotkey_menu_offset = 0;
         self.hotkey_capture = None;
         self.hotkey_feedback = None;
+        // Context-aware default: opened from the Playlists screen shows
+        // playlist bindings first (what's actionable there); anywhere else
+        // shows built-ins first. `Tab` still cycles through all three.
+        self.hotkey_menu_filter =
+            if self.screen == PLAYLISTS { HotkeyMenuFilter::Playlists } else { HotkeyMenuFilter::Builtins };
         self.with_session(|s| s.clear_membership_feedback());
     }
 
-    /// Backtick on the selected hotkey-menu row: opens the "press a key to
+    /// Enter on the selected hotkey-menu row: opens the "press a key to
     /// bind" sub-popup for that row (playlist, remote folder, or built-in).
     fn open_hotkey_capture(&mut self) {
         let target =
@@ -2767,8 +2777,11 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
 }
 
 /// Effective config as togglable/info rows, for both the embedded pane and
-/// the screen-mode modal.
-fn settings_entries(s: &Session) -> Vec<SettingsEntry> {
+/// the screen-mode modal. `pane_cfg` is the view's live layout state, not
+/// `s.cfg.panes` — `P`/`:panes` update it in the view only (MVP, not
+/// persisted to `cfg`), so reading `cfg.panes` here would show a stale value
+/// until the next full config reload.
+fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntry> {
     let cfg = &s.cfg;
     let mut v = vec![
         SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
@@ -2785,9 +2798,9 @@ fn settings_entries(s: &Session) -> Vec<SettingsEntry> {
         available: s.scan.is_some(),
     });
     v.push(SettingsEntry::Info(String::new()));
-    v.push(SettingsEntry::Info(format!("panes.mode:       {:?}", cfg.panes.mode)));
-    v.push(SettingsEntry::Info(format!("panes.side:       {:?}", cfg.panes.side)));
-    v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", cfg.panes.stack)));
+    v.push(SettingsEntry::Info(format!("panes.mode:       {:?}", pane_cfg.mode)));
+    v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
+    v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
     v
 }
 
@@ -3191,7 +3204,7 @@ impl View for MedleyView {
                     .unwrap_or_else(|| "nothing playing".to_string());
                 let bpm_tag = bpm_status_tag(s, now_playing.as_ref());
                 let shuffle = s.shuffle();
-                let settings = if want_settings { settings_entries(s) } else { Vec::new() };
+                let settings = if want_settings { settings_entries(s, self.pane_cfg) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk "what the user is looking at" every
                 // redraw (cheap, and this already runs at BASELINE_FPS) so
@@ -3704,7 +3717,7 @@ impl View for MedleyView {
                     self.hotkey_feedback = None;
                     EventResult::consumed()
                 }
-                Event::Char('`') => {
+                Event::Key(Key::Enter) => {
                     self.open_hotkey_capture();
                     EventResult::consumed()
                 }
