@@ -1562,9 +1562,20 @@ impl MedleyView {
                         tracks_to_rows(s, s.playlist_window(id, offset, limit)),
                     )
                 } else if let Some((sid, name, node)) = &self.open_remote {
+                    let mut rows = tracks_to_rows(s, s.remote_playlist_window(sid, node, offset, limit));
+                    // Room left on this page (i.e. the real tail was
+                    // reached) — append tracks still mid-add so they don't
+                    // look like the add silently failed while the source's
+                    // playlist fetch catches up (see `pending_remote_adds`).
+                    for track_name in s.pending_remote_adds(sid, node) {
+                        if rows.len() >= limit {
+                            break;
+                        }
+                        rows.push(plain_row(format!("{track_name}  (adding…)")));
+                    }
                     (
                         format!(": [{sid}] {name}  (Esc to go back)"),
-                        tracks_to_rows(s, s.remote_playlist_window(sid, node, offset, limit)),
+                        rows,
                     )
                 } else {
                     // Was unwindowed — mismatched draw()'s `idx = i + offset`.

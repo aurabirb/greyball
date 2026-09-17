@@ -83,9 +83,6 @@
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings).
 - [ ] Ignore mouse events in the log panel so the user can select/copy text with the mouse instead of the panel capturing clicks/drags as input.
-- [ ] When a track is added to a playlist, it doesn't show up in the playlists column at all until
-  some later point — draw a progress indicator there in the meantime (e.g. an ellipsis/spinner on the
-  row) instead of the track appearing to not have been added.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 
 ### Audits / cleanup tasks

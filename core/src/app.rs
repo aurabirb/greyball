@@ -305,6 +305,9 @@ struct PlaybackContext {
     name: Option<String>,
 }
 
+/// `Session::pending_remote_adds`' entry shape — see its field doc.
+type PendingRemoteAdd = (SourceId, BrowseNode, TrackId, String);
+
 pub struct Session {
     pub bus: Bus,
     pub store: Arc<dyn Store>,
@@ -379,6 +382,15 @@ pub struct Session {
     /// lock across the network round trip. Polled (not pushed) by the UI's
     /// hotkey-menu footer, same pull-on-redraw pattern as `plugin_statuses`.
     membership_feedback: Arc<Mutex<Option<String>>>,
+
+    /// Tracks whose `toggle_remote_playlist_membership` add is still running
+    /// on its background thread, keyed by the `(source, node)` they're being
+    /// added to — the UI's Playlists screen reads this to draw a "still
+    /// adding" placeholder row for a track that isn't in
+    /// `remote_playlist_track_ids` yet, instead of the add looking like it
+    /// silently failed while the real fetch catches up. Cleared once that
+    /// thread finishes (success or failure) — see `toggle_remote_playlist_membership`.
+    pending_remote_adds: Arc<Mutex<Vec<PendingRemoteAdd>>>,
 
     /// Most recent `Plugin::setup` outcome per plugin, until superseded — see
     /// `plugin_statuses`. Written by the UI's `run_plugin_setup` once
@@ -479,6 +491,7 @@ impl Session {
             hotkeys: HashMap::new(),
             view: ViewCache::default(),
             membership_feedback: Arc::new(Mutex::new(None)),
+            pending_remote_adds: Arc::new(Mutex::new(Vec::new())),
             last_setup: HashMap::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
         }
@@ -1864,6 +1877,11 @@ impl Session {
         let is_member = self.remote_playlist_track_ids(&source, &node).contains(&track);
         let name = track_display_name(&t);
         let feedback = self.membership_feedback.clone();
+        let pending = self.pending_remote_adds.clone();
+        if !is_member {
+            pending.lock().unwrap().push((source.clone(), node.clone(), track, name.clone()));
+        }
+        let (pending_source, pending_node) = (source.clone(), node.clone());
         std::thread::spawn(move || {
             let result = if is_member {
                 src.remove_from_playlist(&node, &rendition.uri)
@@ -1879,7 +1897,24 @@ impl Session {
                 }
             };
             *feedback.lock().unwrap() = Some(msg);
+            pending
+                .lock()
+                .unwrap()
+                .retain(|(s, n, t, _)| !(*s == pending_source && *n == pending_node && *t == track));
         });
+    }
+
+    /// Tracks currently mid-add to `source`'s playlist `node` (see
+    /// `pending_remote_adds`) — display names for a placeholder row while
+    /// the real fetch hasn't caught up yet.
+    pub fn pending_remote_adds(&self, source: &SourceId, node: &BrowseNode) -> Vec<String> {
+        self.pending_remote_adds
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(s, n, ..)| s == source && n == node)
+            .map(|(.., name)| name.clone())
+            .collect()
     }
 
     /// Every (source, liked/favorites node, rendition uri) triple for `track`
