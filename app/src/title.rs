@@ -1,5 +1,5 @@
 //! Terminal window title: a fixed `{icon} ` prefix (never scrolled — see
-//! `player_state_icon`) followed by `{Artist} - {Title}`, scrolled
+//! `player_state_glyph`) followed by `{Artist} - {Title}`, scrolled
 //! marquee-style once that track text alone is wider than the remaining
 //! budget of a classic 80-column terminal (the `scroll_title` windowing
 //! itself lives in `ui`, shared with the tab bar's own marquee).
@@ -47,7 +47,7 @@ impl WindowTitle {
         // The icon is a fixed prefix outside the scrolled window, so it's
         // always visible and never eats into the marquee's own timing.
         let prefix = match track {
-            Some(_) => format!("{} ", ui::player_state_icon(state)),
+            Some(_) => format!("{} ", ui::player_state_glyph(state)),
             None => String::new(),
         };
         let avail = MAX_WIDTH.saturating_sub(prefix.chars().count());

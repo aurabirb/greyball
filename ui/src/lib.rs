@@ -29,7 +29,7 @@ mod vis;
 
 pub use row::RowItem;
 pub use view::{
-    MedleyView, SCROLL_GAP, marquee_offset, player_state_icon, scroll_title, window_title_track_text,
+    MedleyView, SCROLL_GAP, marquee_offset, player_state_glyph, scroll_title, window_title_track_text,
 };
 
 /// Cursive only flushes queued backend-side calls (e.g. `set_window_title`)

@@ -613,7 +613,8 @@ pub struct MedleyView {
     hotkey_menu_open: bool,
     /// Selected row within the hotkey-menu modal.
     hotkey_menu_cursor: usize,
-    /// Scroll window into the hotkey-menu modal's list — see `warnings_offset`.
+    /// Scroll window into the hotkey-menu modal's list, in visual (on-screen)
+    /// row space, not `hotkey_menu_cursor`'s logical `hotkey_rows` space.
     hotkey_menu_offset: usize,
     /// The "press a key to bind" sub-popup, open on top of the hotkey menu —
     /// `Some(target)` while waiting for the next raw keypress to become that
@@ -917,8 +918,7 @@ impl MedleyView {
             lines.insert(split, String::new());
         }
         let visual_cursor = hotkey_menu_visual(divider, self.hotkey_menu_cursor);
-        let visual_offset = hotkey_menu_visual(divider, self.hotkey_menu_offset);
-        self.draw_rows(printer, &lines, visual_cursor, visual_offset, HOTKEY_LIST_TOP);
+        self.draw_rows(printer, &lines, visual_cursor, self.hotkey_menu_offset, HOTKEY_LIST_TOP);
 
         let bottom = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
@@ -1805,12 +1805,12 @@ impl MedleyView {
             .jump(up, step, n, h);
     }
 
-    /// Same idea as `jump_warnings`, for the hotkey-menu modal.
+    /// Same idea as `jump_warnings`, for the hotkey-menu modal — `cursor`
+    /// stays logical; `offset` is visual (see `follow_hotkey_menu_offset`).
     fn jump_hotkey_menu(&mut self, up: bool, step: usize) {
         let n = self.with_session(|s| self.hotkey_rows(s).len());
-        let h = modal_list_h(self.last_screen_size.y, HOTKEY_LIST_TOP);
-        CursorWindow { cursor: &mut self.hotkey_menu_cursor, offset: &mut self.hotkey_menu_offset }
-            .jump(up, step, n, h);
+        self.hotkey_menu_cursor = stepped_cursor(self.hotkey_menu_cursor, n, up, step);
+        self.follow_hotkey_menu_offset();
     }
 
     /// Same idea as `jump_warnings`, for the "Add to Playlist" picker.
@@ -1828,13 +1828,14 @@ impl MedleyView {
         CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }.follow(h);
     }
 
-    /// Same idea as `follow_warnings_offset`, for the hotkey-menu modal —
-    /// also called after a cursor move that isn't itself a `jump` (opening
-    /// the "press a key to bind" popup on a specific row, cycling the
-    /// filter).
+    /// Same idea as `follow_warnings_offset`, but `hotkey_menu_offset` is a
+    /// visual row index (the blank divider eats one row of the viewport),
+    /// so the logical cursor is translated to visual before comparing.
     fn follow_hotkey_menu_offset(&mut self) {
         let h = modal_list_h(self.last_screen_size.y, HOTKEY_LIST_TOP);
-        CursorWindow { cursor: &mut self.hotkey_menu_cursor, offset: &mut self.hotkey_menu_offset }.follow(h);
+        let divider = self.with_session(|s| hotkey_menu_divider(&self.hotkey_rows(s)));
+        let visual_cursor = hotkey_menu_visual(divider, self.hotkey_menu_cursor);
+        self.hotkey_menu_offset = follow_cursor_offset(visual_cursor, self.hotkey_menu_offset, h);
     }
 
     /// Same idea as `follow_warnings_offset`, for the "Add to Playlist" picker.
@@ -3134,12 +3135,12 @@ const NEXT_ICON: &str = "⏭";
 const TRANSPORT_GAP: usize = 2;
 
 /// The three transport buttons' text, space-padded like `tab_label` — the
-/// middle one is `player_state_icon` so it always shows the current
+/// middle one is `player_state_glyph` so it always shows the current
 /// play/pause/stop state.
 fn transport_labels(state: &PlayerState) -> [(Transport, String); 3] {
     [
         (Transport::Prev, format!(" {PREV_ICON} ")),
-        (Transport::PlayPause, format!(" {} ", player_state_icon(state))),
+        (Transport::PlayPause, format!(" {} ", player_state_glyph(state))),
         (Transport::Next, format!(" {NEXT_ICON} ")),
     ]
 }
@@ -3573,7 +3574,7 @@ impl View for MedleyView {
         // for the column math and `on_event`'s mirror of it for click
         // targets. `bpm_tag`/`shuffle_tag` are always shown now, since both
         // are clickable toggles rather than passive indicators.
-        let icon = player_state_icon(&st.state);
+        let icon = player_state_glyph(&st.state);
         let curtime = ms(st.position_ms);
         let totaltime = ms(st.duration_ms);
         let bar = progress_bar(st.position_ms, st.duration_ms, STATUS_BAR_WIDTH);
@@ -3593,7 +3594,7 @@ impl View for MedleyView {
         );
         let title_field = pad(&scroll_title(&np, name_w, marquee_offset), name_w);
         let status = format!(
-            "{PREV_ICON}{icon}{NEXT_ICON}  {title_field}  {curtime} {bar} {totaltime}  {bpm_tag} {shuffle_tag}"
+            "{PREV_ICON} {icon} {NEXT_ICON}  {title_field}  {curtime} {bar} {totaltime}  {bpm_tag} {shuffle_tag}"
         );
         let y = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
@@ -3659,8 +3660,13 @@ impl View for MedleyView {
             if screen_size_changed {
                 self.follow_hotkey_menu_offset();
             } else {
-                let n = self.with_session(|s| self.hotkey_rows(s).len());
-                self.hotkey_menu_offset = bound_offset(self.hotkey_menu_offset, n, h);
+                // Offset is visual-space, so bound it against rows + divider.
+                let (n, divider) = self.with_session(|s| {
+                    let rows = self.hotkey_rows(s);
+                    (rows.len(), hotkey_menu_divider(&rows))
+                });
+                let visual_len = n + divider.is_some() as usize;
+                self.hotkey_menu_offset = bound_offset(self.hotkey_menu_offset, visual_len, h);
             }
         }
         if self.playlist_picker_open {
@@ -3992,8 +3998,7 @@ impl View for MedleyView {
                             let rows = self.hotkey_rows(s);
                             (rows.len(), hotkey_menu_divider(&rows))
                         });
-                        let visual_offset = hotkey_menu_visual(divider, self.hotkey_menu_offset);
-                        let visual_idx = visual_offset + (local.y - HOTKEY_LIST_TOP);
+                        let visual_idx = self.hotkey_menu_offset + (local.y - HOTKEY_LIST_TOP);
                         if let Some(idx) = hotkey_menu_logical(divider, visual_idx)
                             && idx < n
                         {
@@ -4095,7 +4100,7 @@ impl View for MedleyView {
                     let bpm_tag = bpm_status_tag(s, np.as_ref());
                     let shuffle_tag = if s.shuffle() { "[S]" } else { "[s]" };
                     (
-                        player_state_icon(&st.state),
+                        player_state_glyph(&st.state),
                         ms(st.position_ms).width(),
                         ms(st.duration_ms).width(),
                         bpm_tag.width(),
@@ -4550,15 +4555,17 @@ struct StatusLineWidths {
     shuffle: usize,
 }
 
-/// Column layout for the status line: `{prev}{playpause}{next}  {title}
+/// Column layout for the status line: `{prev} {playpause} {next}  {title}
 /// {curtime} {scrubber} {totaltime}  {bpm} {shuffle}` — transport buttons
-/// clustered at the far left, then [`name_field_width`] for the title.
+/// clustered at the far left (one column of breathing room between each,
+/// same as the top-bar cluster's own button padding), then
+/// [`name_field_width`] for the title.
 fn status_line_layout(total_w: usize, w: &StatusLineWidths) -> (usize, StatusLineLayout) {
     let gap = 2;
     let prev = (0, w.prev);
-    let playpause = (w.prev, w.playpause);
-    let next = (w.prev + w.playpause, w.next);
-    let cluster_w = w.prev + w.playpause + w.next;
+    let playpause = (w.prev + 1, w.playpause);
+    let next = (w.prev + 1 + w.playpause + 1, w.next);
+    let cluster_w = w.prev + 1 + w.playpause + 1 + w.next;
     let title_start = cluster_w + gap;
     let reserved =
         gap + w.curtime + 1 + w.bar + 1 + w.totaltime + gap + w.bpm + 1 + w.shuffle;
@@ -4588,7 +4595,7 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
 }
 
-/// `▶`/`▮▮`/`◼` for the given playback state — the single source of truth
+/// `▶`/`⏸`/`⏹` for the given playback state — the single source of truth
 /// for this icon, shared between the status line (above) and the terminal
 /// window title (`app`'s event loop), so the two never disagree.
 pub fn player_state_icon(state: &PlayerState) -> &'static str {
@@ -4597,6 +4604,15 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
         PlayerState::Paused => "⏸",
         PlayerState::Stopped => "⏹",
     }
+}
+
+/// `player_state_icon`, with an extra leading space — most terminal fonts
+/// render `▶` a column narrower than `⏸`/`⏹`, so without it the play glyph
+/// looks shifted left of where pause/stop sit. Every place the icon is
+/// actually displayed (top-bar cluster, status line, window title) uses
+/// this instead of the raw glyph, so they all stay visually aligned.
+pub fn player_state_glyph(state: &PlayerState) -> String {
+    format!(" {}", player_state_icon(state))
 }
 
 /// Bracketed BPM-scan status tag shown next to the status line's scrubber,
@@ -4635,7 +4651,7 @@ fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
 /// `core::app::build_entry`). Falls back to a bare `"medley"` when nothing
 /// is loaded. Deliberately excludes the play/pause icon — that's a fixed
 /// prefix `app`'s `WindowTitle` adds outside the scrolled portion, so it
-/// never scrolls along with the title text (see `player_state_icon`).
+/// never scrolls along with the title text (see `player_state_glyph`).
 pub fn window_title_track_text(track: Option<&core::Track>) -> String {
     match track {
         Some(t) => format!("{} - {}", t.display_artist(), t.title),
