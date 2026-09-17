@@ -3067,14 +3067,20 @@ impl Transport {
     }
 }
 
+/// Prev/next glyphs — shared by the top-bar transport strip
+/// (`transport_labels`) and the bottom status line's own prev/next buttons
+/// (`draw`) so both always show the same icons.
+const PREV_ICON: &str = "⏮";
+const NEXT_ICON: &str = "⏭";
+
 /// The three transport buttons' text, space-padded like `tab_label` — the
 /// middle one is `player_state_icon` so it always shows the current
 /// play/pause/stop state.
 fn transport_labels(state: &PlayerState) -> [(Transport, String); 3] {
     [
-        (Transport::Prev, " ⏮ ".to_string()),
+        (Transport::Prev, format!(" {PREV_ICON} ")),
         (Transport::PlayPause, format!(" {} ", player_state_icon(state))),
-        (Transport::Next, " ⏭ ".to_string()),
+        (Transport::Next, format!(" {NEXT_ICON} ")),
     ]
 }
 
@@ -3500,20 +3506,32 @@ impl View for MedleyView {
         };
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
-        // status line — now-playing, pinned to the very last row
-        let state = player_state_icon(&st.state);
-        let bar = progress_bar(st.position_ms, st.duration_ms, 20);
-        let scrubber = format!("{}/{} {bar}", ms(st.position_ms), ms(st.duration_ms));
-        let prefix = format!("{state}  ");
-        let gap = "  ";
+        // status line — now-playing, pinned to the very last row. Order:
+        // play/pause, scrolling title (same marquee as the terminal window
+        // title), prev/next, current time, scrubber, total time, bandwidth/
+        // scan-status tag — see `status_line_layout` for the column math and
+        // `on_event`'s mirror of it for the click targets this creates.
+        let icon = player_state_icon(&st.state);
+        let curtime = ms(st.position_ms);
+        let totaltime = ms(st.duration_ms);
+        let bar = progress_bar(st.position_ms, st.duration_ms, STATUS_BAR_WIDTH);
         let shuffle_tag = if shuffle { " [S]" } else { "" };
-        let bpm = format!("{gap}{bpm_tag}{shuffle_tag}");
-        let name_w = name_field_width(
+        let bw = format!("{bpm_tag}{shuffle_tag}");
+        let (name_w, _) = status_line_layout(
             printer.size.x,
-            prefix.chars().count(),
-            gap.chars().count() + scrubber.chars().count() + bpm.chars().count(),
+            &StatusLineWidths {
+                playpause: icon.width(),
+                prev: PREV_ICON.width(),
+                next: NEXT_ICON.width(),
+                curtime: curtime.width(),
+                bar: STATUS_BAR_WIDTH,
+                totaltime: totaltime.width(),
+                bw: bw.width(),
+            },
         );
-        let status = format!("{prefix}{}{gap}{scrubber}{bpm}", pad(&np, name_w));
+        let title_field = pad(&scroll_title(&np, name_w, marquee_offset), name_w);
+        let status =
+            format!("{icon}  {title_field}  {PREV_ICON}{NEXT_ICON}  {curtime} {bar} {totaltime}  {bw}");
         let y = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
             p.print((0, y), &pad(&status, p.size.x));
@@ -3986,6 +4004,60 @@ impl View for MedleyView {
             return EventResult::consumed();
         }
 
+        // The bottom status line's play/pause, prev/next and scrubber — see
+        // `status_line_layout`, which this mirrors exactly so a click always
+        // lands on whatever `draw` actually put there. Lives on the fixed
+        // last row of the whole screen, same "regardless of current focus"
+        // treatment as the tab bar / warnings button above.
+        if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
+            && let Some(local) = position.checked_sub(offset)
+            && local.x < self.last_screen_size.x
+            && local.y == self.last_screen_size.y.saturating_sub(1)
+        {
+            let (icon, curtime_w, totaltime_w, bw_w, duration_ms, position_ms) = self.with_session(|s| {
+                let np = s.now_playing();
+                let st = s.player_status();
+                let bpm_tag = bpm_status_tag(s, np.as_ref());
+                let shuffle_tag = if s.shuffle() { " [S]" } else { "" };
+                let bw = format!("{bpm_tag}{shuffle_tag}");
+                (
+                    player_state_icon(&st.state),
+                    ms(st.position_ms).width(),
+                    ms(st.duration_ms).width(),
+                    bw.width(),
+                    st.duration_ms,
+                    st.position_ms,
+                )
+            });
+            let (_, layout) = status_line_layout(
+                self.last_screen_size.x,
+                &StatusLineWidths {
+                    playpause: icon.width(),
+                    prev: PREV_ICON.width(),
+                    next: NEXT_ICON.width(),
+                    curtime: curtime_w,
+                    bar: STATUS_BAR_WIDTH,
+                    totaltime: totaltime_w,
+                    bw: bw_w,
+                },
+            );
+            if in_span(local.x, layout.playpause) {
+                return self.run(Command::PlayPause);
+            }
+            if in_span(local.x, layout.prev) {
+                return self.run(Command::Previous);
+            }
+            if in_span(local.x, layout.next) {
+                return self.run(Command::Next);
+            }
+            if in_span(local.x, layout.scrubber) && duration_ms > 0 {
+                let frac = (local.x - layout.scrubber.0) as f64 / layout.scrubber.1 as f64;
+                let target_ms = (frac * duration_ms as f64).round() as u32;
+                return self.run(Command::Seek(target_ms as i64 - position_ms as i64));
+            }
+            return EventResult::consumed();
+        }
+
         // Mouse: routed separately from the keyboard path below entirely,
         // and returned early — a wheel scroll deliberately skips the
         // trailing `clamp_scroll()` the keyboard arms get (see
@@ -4362,6 +4434,61 @@ fn ms(ms: u32) -> String {
 /// accounted for. Saturates to 0 rather than underflowing on narrow terminals.
 fn name_field_width(total_w: usize, prefix_w: usize, reserved_w: usize) -> usize {
     total_w.saturating_sub(prefix_w).saturating_sub(reserved_w)
+}
+
+/// The status line's scrubber width — the original 20 columns, 20% longer
+/// (requested explicitly, rather than derived from anything else).
+const STATUS_BAR_WIDTH: usize = 24;
+
+/// Click targets on the bottom status line — `(start column, width)` each,
+/// in screen columns. Built by [`status_line_layout`], the one place that
+/// decides where every segment of that row sits, so `draw`'s rendering and
+/// `on_event`'s hit-testing can never drift apart.
+struct StatusLineLayout {
+    playpause: (usize, usize),
+    prev: (usize, usize),
+    next: (usize, usize),
+    scrubber: (usize, usize),
+}
+
+/// Every segment's already-rendered display width, for [`status_line_layout`]
+/// — a struct rather than a long parameter list since the caller needs the
+/// actual rendered text for all of these anyway (to draw them, or, for a
+/// click, to size a freshly recomputed layout the same way).
+struct StatusLineWidths {
+    playpause: usize,
+    prev: usize,
+    next: usize,
+    curtime: usize,
+    bar: usize,
+    totaltime: usize,
+    bw: usize,
+}
+
+/// Column layout for the status line: `{playpause} {title} {prev}{next}
+/// {curtime} {scrubber} {totaltime} {bw}` — the "reserved" columns (every
+/// segment except the scrolling title field) followed by
+/// [`name_field_width`] for however much of `total_w` that leaves the
+/// title.
+fn status_line_layout(total_w: usize, w: &StatusLineWidths) -> (usize, StatusLineLayout) {
+    let gap = 2;
+    let playpause = (0, w.playpause);
+    let title_start = w.playpause + gap;
+    let reserved = gap + w.prev + w.next + gap + w.curtime + 1 + w.bar + 1 + w.totaltime + gap + w.bw;
+    let name_w = name_field_width(total_w, title_start, reserved);
+
+    let mut x = title_start + name_w + gap;
+    let prev = (x, w.prev);
+    x += w.prev;
+    let next = (x, w.next);
+    x += w.next + gap + w.curtime + 1;
+    let scrubber = (x, w.bar);
+    (name_w, StatusLineLayout { playpause, prev, next, scrubber })
+}
+
+/// `true` if column `x` falls inside `(start, width)`.
+fn in_span(x: usize, (start, width): (usize, usize)) -> bool {
+    x >= start && x < start + width
 }
 
 fn progress_bar(pos: u32, dur: u32, width: usize) -> String {

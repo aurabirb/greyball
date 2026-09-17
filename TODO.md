@@ -74,7 +74,6 @@
 
 ### Features
 - [ ] make shuffle mode actually shuffle which track plays next, do not shuffle the queue. only the advance in a playlist context should be shuffled.
-- [ ] make the playpause button in the bottom bar clickable (playpause), add ⏮  ⏭  before the scrubber and move total time after the scrubber (playpause, scrollable title just like in the terminal title, prevnext, curtime, scrubber, totaltime, bw status). make the scrubber 20% longer and clickable.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
