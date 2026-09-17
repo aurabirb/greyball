@@ -78,6 +78,10 @@
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings).
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
+- [ ] Make media-cache filenames human-readable (`artist-track.ext`) instead of whatever opaque
+  naming is used now, and store the actual source/track ids in a redb database alongside the cache
+  directory to map filenames back to their real identity. Entries whose track is no longer found
+  (e.g. removed from the source) should be automatically pruned from that db.
 
 ### Audits / cleanup tasks
 - [ ] Review how plugin/source failures are surfaced to the user and make the channel match the
