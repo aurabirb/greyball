@@ -22,10 +22,13 @@ working-agreement rule is established, add it here directly rather than only in 
 
 ## Testing the running app
 - To exercise a real code path (playback, scanning, cache behavior) rather than just reading code,
-  launch `./target/debug/medley` inside tmux (`tmux new-session -d -s medley -x 200 -y 50 '...'`) and
+  launch `./target/debug/medley` inside tmux (`tmux new-session -d -s medley -x 80 -y 40 '...'`) and
   drive it with `send-keys`/`capture-pane` — it's a TUI, so it needs a real terminal. Use at least
-  `-x 200 -y 50`; a narrower/shorter pane truncates rows and wraps status lines, making
+  `-x 80 -y 40`; a narrower/shorter pane truncates rows and wraps status lines, making
   `capture-pane` output misleading rather than just smaller.
+- When looking for a specific string/value in `capture-pane` output (e.g. confirming a status tag or
+  a piece of text appeared), pipe it through `grep` for that string instead of reading the whole pane
+  dump — it's faster to check and doesn't burn tokens on unrelated rows.
 - Redirect stderr to a file (`2>debug_run.log`) and prefer reading `~/.local/state/medley/medley.log`
   (the app's own `RUST_LOG=debug` log) over repeated `capture-pane` calls — the pane is for confirming
   what's on screen, the log is for confirming what actually happened. Delete the redirected log file

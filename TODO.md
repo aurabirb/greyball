@@ -15,7 +15,8 @@
 ### Bugs
 - [ ] When downloading a long track (tested on Soundcloud "planetary natural love gas webbin 19999"), the playback starts but it plays silence for a long time (even after the track is reported to be *cached). The log shows "invalid frame" errors.
 - [ ] After :spotify addlogin (btw remove the _ from the name) it should use the token right away, it seems to be using the old one since the likes are not working unless i restart the app. 
-- [ ] Sometimes a stray [S] shows up and i dont know what it means
+- [ ] The `[S]` status tag is the shuffle-mode indicator (not a bug) — bind the `S` key to toggle
+  shuffle by default, since it currently isn't reachable by that key.
 - [ ] In settings, the pane values do not update as I press P
 - [ ] Very rarely the player can play two tracks simultaneously — this should never happen. Playback commands/state should be routed through a single state machine tracking play state, so that a new play request always stops the previous track before starting the next.
 - [ ] Spotify playback occasionally dies mid-song ("session invalid (dead access-point connection)")
@@ -76,6 +77,14 @@
 - [ ] The `[bd]` BPM-scan status tag (`bpm_status_tag` in `ui/src/view.rs`) isn't visible on app
   startup even though the BPM plugin is disabled/paused at that point — investigate why the status
   line's tag doesn't show until some later redraw/state change and fix it to appear immediately.
+- [ ] The keyboard shortcut menu is opened with `` ` `` but tells the user to press `` ` `` again to
+  select/confirm instead of Enter, which is inconsistent with normal navigation — it should behave
+  like every other menu: `` ` `` only opens it, then Enter selects and Escape closes it, navigating
+  normally in between. It should also open contextually: triggered from the playlist view it should
+  open showing playlist-context bindings, and triggered from the hotkey/menu view it should show that
+  view's bindings, instead of always showing the same list regardless of where it was opened from.
+  Also, in playlist context it currently accepts PgUp/PgDn/Up/Down as if they were bindable — reject
+  those as bindable keys for playlists, and make `j`/`k`/`J`/`K` bindable there instead.
 
 ### Features
 - [ ] make shuffle mode actually shuffle which track plays next, do not shuffle the queue. only the advance in a playlist context should be shuffled.
@@ -88,6 +97,9 @@
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings).
 - [ ] Ignore mouse events in the log panel so the user can select/copy text with the mouse instead of the panel capturing clicks/drags as input.
+- [ ] When a track is added to a playlist, it doesn't show up in the playlists column at all until
+  some later point — draw a progress indicator there in the meantime (e.g. an ellipsis/spinner on the
+  row) instead of the track appearing to not have been added.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 
 ### Audits / cleanup tasks
