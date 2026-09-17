@@ -17,4 +17,4 @@ core = { path = "../core" }
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 fuzzy-matcher = "0.3"
 log = "0.4"
-unicode-width = "0.2"
+cellwidth = "1"
