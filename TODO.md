@@ -70,6 +70,16 @@
      allow an idle second authenticated session per account). Scope this as its own project if pursued,
      not a quick fix bundled with option 1.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
+- [ ] Track rows with certain emoji in the title (e.g. plain bird/door-style emoji with no
+  variation selector) visually misalign the tags/hotkeys/source/duration columns after them in some
+  terminals, even though `pad`/`truncate` in `ui/src/view.rs` compute widths correctly per
+  `unicode-width` (confirmed against both `unicode-width` 0.1 — what `cursive_core` itself uses when
+  it draws to the screen — and 0.2, plus the grapheme-aware `cellwidth` crate: all three agree these
+  code points are width 2). The mismatch is between that agreed-on width and what the user's specific
+  terminal/font actually advances the cursor by when rendering the glyph — not something a Rust-side
+  width-table crate can fix. Needs reproducing against the user's actual terminal/font to find which
+  glyphs it renders narrower than standard width tables say, before any fix (if one exists on our side
+  at all) can be scoped.
 ### Features
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings
