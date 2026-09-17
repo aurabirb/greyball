@@ -348,6 +348,32 @@ fn hotkey_row_name(row: &HotkeyRow, playlists: &[Playlist]) -> String {
     }
 }
 
+/// Row index where a blank divider goes between playlists and built-ins
+/// (`None` if one section is empty). Cursor/offset stay in `rows`' own
+/// index space; `hotkey_menu_visual`/`_logical` translate at render time.
+fn hotkey_menu_divider(rows: &[HotkeyRow]) -> Option<usize> {
+    let split = rows.iter().position(|r| matches!(r, HotkeyRow::Builtin(_)))?;
+    (split > 0).then_some(split)
+}
+
+/// A logical `hotkey_rows` index's row on screen, once `divider` pushes
+/// everything after it down by one.
+fn hotkey_menu_visual(divider: Option<usize>, logical: usize) -> usize {
+    match divider {
+        Some(split) if logical >= split => logical + 1,
+        _ => logical,
+    }
+}
+
+/// Inverse of `hotkey_menu_visual` — `None` on the divider row itself.
+fn hotkey_menu_logical(divider: Option<usize>, visual: usize) -> Option<usize> {
+    match divider {
+        Some(split) if visual == split => None,
+        Some(split) if visual > split => Some(visual - 1),
+        _ => Some(visual),
+    }
+}
+
 /// Which rows `:keys`/the hotkey menu shows — cycled with `Tab` while the
 /// menu is open. The underlying table/bind mechanism is the same regardless;
 /// this only narrows what `hotkey_rows` returns.
@@ -860,10 +886,11 @@ impl MedleyView {
     /// Fullscreen "Playlist Hotkeys" modal (backtick) — same shape as
     /// `draw_warnings`: row 0 title, row 1 blank, then the row list (from
     /// `hotkey_rows`, narrowed by `hotkey_menu_filter`) from `HOTKEY_LIST_TOP`,
-    /// each row showing `{name:<24} {key}` (`-` if unbound — only possible
-    /// for a playlist; a built-in always has at least its default). While
-    /// `hotkey_capture` is set, the footer becomes a "press a key" prompt
-    /// instead of the usual hint/feedback line.
+    /// each row showing `{name:<name_w} {key}` (`-` if unbound). `name_w`
+    /// is sized off the terminal width rather than a fixed column, and
+    /// `hotkey_menu_divider` blank-separates the playlist/built-in sections.
+    /// While `hotkey_capture` is set, the footer becomes a "press a key"
+    /// prompt instead of the usual hint/feedback line.
     fn draw_hotkey_menu(&self, printer: &Printer) {
         let (rows, playlists) = self.with_session(|s| (self.hotkey_rows(s), s.playlists()));
         printer.with_color(ColorStyle::title_primary(), |p| {
@@ -873,17 +900,25 @@ impl MedleyView {
         if rows.is_empty() {
             printer.print((0, HOTKEY_LIST_TOP), "(no playlists — :newplaylist <name> to make one)");
         }
-        let lines: Vec<String> = rows
+        let name_w = printer.size.x.saturating_sub(3);
+        let divider = hotkey_menu_divider(&rows);
+        let mut lines: Vec<String> = rows
             .iter()
             .map(|row| {
                 let key = self
                     .with_session(|s| s.effective_hotkey(&row.target()))
                     .map(|k| k.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                format!("{:<24} {key}", truncate(&hotkey_row_name(row, &playlists), 24))
+                let name = pad(&truncate_ellipsis(&hotkey_row_name(row, &playlists), name_w), name_w);
+                format!("{name} {key}")
             })
             .collect();
-        self.draw_rows(printer, &lines, self.hotkey_menu_cursor, self.hotkey_menu_offset, HOTKEY_LIST_TOP);
+        if let Some(split) = divider {
+            lines.insert(split, String::new());
+        }
+        let visual_cursor = hotkey_menu_visual(divider, self.hotkey_menu_cursor);
+        let visual_offset = hotkey_menu_visual(divider, self.hotkey_menu_offset);
+        self.draw_rows(printer, &lines, visual_cursor, visual_offset, HOTKEY_LIST_TOP);
 
         let bottom = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
@@ -1907,6 +1942,13 @@ impl MedleyView {
     /// by backtick on a selected playlist row in the Playlists screen, which
     /// skips the "pick from the list" step since the target is already known.
     fn open_hotkey_capture_for(&mut self, target: HotkeyTarget) {
+        // Same context-aware filter default as `open_hotkey_menu`, since
+        // backtick on a selected row jumps straight here without going
+        // through it.
+        if !self.hotkey_menu_open {
+            self.hotkey_menu_filter =
+                if self.screen == PLAYLISTS { HotkeyMenuFilter::Playlists } else { HotkeyMenuFilter::Builtins };
+        }
         self.hotkey_menu_open = true;
         self.hotkey_menu_cursor = self
             .with_session(|s| self.hotkey_rows(s).into_iter().position(|r| r.target() == target))
@@ -2270,13 +2312,28 @@ impl MedleyView {
             Command::Previous => Some("Wedged"),
             _ => None,
         };
+        let is_toggle_shuffle = matches!(cmd, Command::ToggleShuffle);
+        let is_toggle_scan = matches!(cmd, Command::ToggleScan);
         let res = self.with_session_mut(|s| s.dispatch(cmd));
-        if matches!(res, Ok(Dispatch::Ok))
-            && let (Some(before), Some(kind)) = (tracks_queue_len, feedback_kind)
-        {
-            let after = self.with_session(|s| s.queue_len());
-            if kind == "Queued" || after > before {
-                self.queue_feedback = Some(format!("  {kind}: {after} tracks"));
+        if matches!(res, Ok(Dispatch::Ok)) {
+            if let (Some(before), Some(kind)) = (tracks_queue_len, feedback_kind) {
+                let after = self.with_session(|s| s.queue_len());
+                if kind == "Queued" || after > before {
+                    self.queue_feedback = Some(format!("  {kind}: {after} tracks"));
+                }
+            }
+            // Flash feedback for the two now-clickable status-line tags.
+            if is_toggle_shuffle {
+                let on = self.with_session(|s| s.shuffle());
+                self.queue_feedback = Some(format!("  Shuffle: {}", if on { "on" } else { "off" }));
+            } else if is_toggle_scan {
+                let label = self.with_session(|s| s.scan.as_ref().map(|scan| scan.mode()));
+                let label = match label {
+                    Some(core::ScanMode::Active) => "active",
+                    Some(core::ScanMode::CacheOnly) => "cache-only",
+                    Some(core::ScanMode::Disabled) | None => "off",
+                };
+                self.queue_feedback = Some(format!("  Scan: {label}"));
             }
         }
         match res {
@@ -3040,7 +3097,7 @@ fn tab_at_x(x: usize, width: usize, state: &PlayerState) -> Option<usize> {
 /// place this trade-off is decided, shared by `draw_tab_bar`/`tab_at_x`/
 /// `transport_at_x` so all three always agree on the current layout.
 fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
-    let gap = 1;
+    let gap = TRANSPORT_GAP;
     let transport_w = transport_layout(0, state).last().map_or(0, |&(_, s, w)| s + w);
     tabs_width(false) + gap + transport_w > content_w
 }
@@ -3070,6 +3127,11 @@ impl Transport {
 /// (`draw`) so both always show the same icons.
 const PREV_ICON: &str = "⏮";
 const NEXT_ICON: &str = "⏭";
+
+/// Gap on either side of the top-bar transport cluster — 2 columns, matching
+/// the padding already inside each button, so the strip reads as evenly
+/// spaced. Shared by `tab_bar_collapsed`/`draw_tab_bar`/`transport_at_x`.
+const TRANSPORT_GAP: usize = 2;
 
 /// The three transport buttons' text, space-padded like `tab_label` — the
 /// middle one is `player_state_icon` so it always shows the current
@@ -3106,7 +3168,7 @@ fn transport_layout(start: usize, state: &PlayerState) -> Vec<(Transport, usize,
 fn transport_at_x(x: usize, width: usize, state: &PlayerState) -> Option<Transport> {
     let collapsed = tab_bar_collapsed(width, state);
     let tabs_end = tab_layout(collapsed).last().map_or(0, |&(_, start, w)| start + w);
-    let start = tabs_end + 1;
+    let start = tabs_end + TRANSPORT_GAP;
     let layout = transport_layout(start, state);
     let end = layout.last().map_or(start, |&(_, s, w)| s + w);
     if end > width {
@@ -3161,7 +3223,7 @@ fn draw_tab_bar(
     }
 
     let tabs_end = layout.last().map_or(0, |&(_, start, w)| start + w);
-    let gap = 1;
+    let gap = TRANSPORT_GAP;
     let transport_start = tabs_end + gap;
     let transport_labels = transport_labels(player_state);
     let transport = transport_layout(transport_start, player_state);
@@ -3493,43 +3555,46 @@ impl View for MedleyView {
             // `membership_feedback` was only ever drawn inside the hotkey
             // menu, so a bare `f`/`F` outside it produced no visible
             // feedback at all.
-            Editing::None => self
-                .queue_feedback
-                .clone()
-                .or(membership_feedback.map(|m| format!("  {m}")))
-                .unwrap_or_else(|| {
-                    "  [:] cmd (:vis)  [space] play/pause [p/n] prev/next [q] queue [w] wedge [s] shuffle  [?] shortcuts"
-                        .to_string()
-                }),
+            Editing::None => self.queue_feedback.clone().or(membership_feedback.map(|m| format!("  {m}"))).unwrap_or_else(|| {
+                let (menu_key, shuffle_key) = self.with_session(|s| {
+                    (
+                        s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHotkeyMenu)),
+                        s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::ToggleShuffle)),
+                    )
+                });
+                let menu_key = menu_key.map(String::from).unwrap_or_default();
+                let shuffle_key = shuffle_key.map(String::from).unwrap_or_default();
+                format!("  [{menu_key}] shortcuts  [{shuffle_key}] shuffle")
+            }),
         };
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
-        // status line — now-playing, pinned to the very last row. Order:
-        // play/pause, scrolling title (same marquee as the terminal window
-        // title), prev/next, current time, scrubber, total time, bandwidth/
-        // scan-status tag — see `status_line_layout` for the column math and
-        // `on_event`'s mirror of it for the click targets this creates.
+        // status line, pinned to the very last row — see `status_line_layout`
+        // for the column math and `on_event`'s mirror of it for click
+        // targets. `bpm_tag`/`shuffle_tag` are always shown now, since both
+        // are clickable toggles rather than passive indicators.
         let icon = player_state_icon(&st.state);
         let curtime = ms(st.position_ms);
         let totaltime = ms(st.duration_ms);
         let bar = progress_bar(st.position_ms, st.duration_ms, STATUS_BAR_WIDTH);
-        let shuffle_tag = if shuffle { " [S]" } else { "" };
-        let bw = format!("{bpm_tag}{shuffle_tag}");
+        let shuffle_tag = if shuffle { "[S]" } else { "[s]" };
         let (name_w, _) = status_line_layout(
             printer.size.x,
             &StatusLineWidths {
-                playpause: icon.width(),
                 prev: PREV_ICON.width(),
+                playpause: icon.width(),
                 next: NEXT_ICON.width(),
                 curtime: curtime.width(),
                 bar: STATUS_BAR_WIDTH,
                 totaltime: totaltime.width(),
-                bw: bw.width(),
+                bpm: bpm_tag.width(),
+                shuffle: shuffle_tag.width(),
             },
         );
         let title_field = pad(&scroll_title(&np, name_w, marquee_offset), name_w);
-        let status =
-            format!("{icon}  {title_field}  {PREV_ICON}{NEXT_ICON}  {curtime} {bar} {totaltime}  {bw}");
+        let status = format!(
+            "{PREV_ICON}{icon}{NEXT_ICON}  {title_field}  {curtime} {bar} {totaltime}  {bpm_tag} {shuffle_tag}"
+        );
         let y = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
             p.print((0, y), &pad(&status, p.size.x));
@@ -3653,8 +3718,16 @@ impl View for MedleyView {
         // `hotkey_feedback`'s "until the next thing happens" convention.
         // `membership_feedback` (like/unlike, playlist-hotkey toggle) gets
         // the same treatment on the main screen — see the hint-line draw.
-        self.queue_feedback = None;
-        self.with_session(|s| s.clear_membership_feedback());
+        // Skipped for a mouse release/hold: those always follow the press
+        // that actually triggered a command, one input gesture later, and
+        // would otherwise wipe that command's flash message before it's
+        // ever drawn.
+        let is_mouse_followup =
+            matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
+        if !is_mouse_followup {
+            self.queue_feedback = None;
+            self.with_session(|s| s.clear_membership_feedback());
+        }
         // Active text field: capture everything, except a click elsewhere
         // (releases focus, same as Esc, instead of being swallowed) or a
         // digit as Search's very first keystroke (reinterpreted as the
@@ -3915,9 +3988,15 @@ impl View for MedleyView {
                     if let Some(local) = position.checked_sub(offset)
                         && local.y >= HOTKEY_LIST_TOP
                     {
-                        let idx = self.hotkey_menu_offset + (local.y - HOTKEY_LIST_TOP);
-                        let n = self.with_session(|s| self.hotkey_rows(s).len());
-                        if idx < n {
+                        let (n, divider) = self.with_session(|s| {
+                            let rows = self.hotkey_rows(s);
+                            (rows.len(), hotkey_menu_divider(&rows))
+                        });
+                        let visual_offset = hotkey_menu_visual(divider, self.hotkey_menu_offset);
+                        let visual_idx = visual_offset + (local.y - HOTKEY_LIST_TOP);
+                        if let Some(idx) = hotkey_menu_logical(divider, visual_idx)
+                            && idx < n
+                        {
                             self.hotkey_menu_cursor = idx;
                             self.hotkey_feedback = None;
                         }
@@ -4002,41 +4081,40 @@ impl View for MedleyView {
             return EventResult::consumed();
         }
 
-        // The bottom status line's play/pause, prev/next and scrubber — see
-        // `status_line_layout`, which this mirrors exactly so a click always
-        // lands on whatever `draw` actually put there. Lives on the fixed
-        // last row of the whole screen, same "regardless of current focus"
-        // treatment as the tab bar / warnings button above.
+        // The bottom status line's transport cluster, scrubber, and
+        // bpm/shuffle tags — mirrors `status_line_layout` exactly.
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(local) = position.checked_sub(offset)
             && local.x < self.last_screen_size.x
             && local.y == self.last_screen_size.y.saturating_sub(1)
         {
-            let (icon, curtime_w, totaltime_w, bw_w, duration_ms, position_ms) = self.with_session(|s| {
-                let np = s.now_playing();
-                let st = s.player_status();
-                let bpm_tag = bpm_status_tag(s, np.as_ref());
-                let shuffle_tag = if s.shuffle() { " [S]" } else { "" };
-                let bw = format!("{bpm_tag}{shuffle_tag}");
-                (
-                    player_state_icon(&st.state),
-                    ms(st.position_ms).width(),
-                    ms(st.duration_ms).width(),
-                    bw.width(),
-                    st.duration_ms,
-                    st.position_ms,
-                )
-            });
+            let (icon, curtime_w, totaltime_w, bpm_w, shuffle_w, duration_ms, position_ms) =
+                self.with_session(|s| {
+                    let np = s.now_playing();
+                    let st = s.player_status();
+                    let bpm_tag = bpm_status_tag(s, np.as_ref());
+                    let shuffle_tag = if s.shuffle() { "[S]" } else { "[s]" };
+                    (
+                        player_state_icon(&st.state),
+                        ms(st.position_ms).width(),
+                        ms(st.duration_ms).width(),
+                        bpm_tag.width(),
+                        shuffle_tag.width(),
+                        st.duration_ms,
+                        st.position_ms,
+                    )
+                });
             let (_, layout) = status_line_layout(
                 self.last_screen_size.x,
                 &StatusLineWidths {
-                    playpause: icon.width(),
                     prev: PREV_ICON.width(),
+                    playpause: icon.width(),
                     next: NEXT_ICON.width(),
                     curtime: curtime_w,
                     bar: STATUS_BAR_WIDTH,
                     totaltime: totaltime_w,
-                    bw: bw_w,
+                    bpm: bpm_w,
+                    shuffle: shuffle_w,
                 },
             );
             if in_span(local.x, layout.playpause) {
@@ -4052,6 +4130,12 @@ impl View for MedleyView {
                 let frac = (local.x - layout.scrubber.0) as f64 / layout.scrubber.1 as f64;
                 let target_ms = (frac * duration_ms as f64).round() as u32;
                 return self.run(Command::Seek(target_ms as i64 - position_ms as i64));
+            }
+            if in_span(local.x, layout.bpm) {
+                return self.run(Command::ToggleScan);
+            }
+            if in_span(local.x, layout.shuffle) {
+                return self.run(Command::ToggleShuffle);
             }
             return EventResult::consumed();
         }
@@ -4443,10 +4527,12 @@ const STATUS_BAR_WIDTH: usize = 24;
 /// decides where every segment of that row sits, so `draw`'s rendering and
 /// `on_event`'s hit-testing can never drift apart.
 struct StatusLineLayout {
-    playpause: (usize, usize),
     prev: (usize, usize),
+    playpause: (usize, usize),
     next: (usize, usize),
     scrubber: (usize, usize),
+    bpm: (usize, usize),
+    shuffle: (usize, usize),
 }
 
 /// Every segment's already-rendered display width, for [`status_line_layout`]
@@ -4454,34 +4540,38 @@ struct StatusLineLayout {
 /// actual rendered text for all of these anyway (to draw them, or, for a
 /// click, to size a freshly recomputed layout the same way).
 struct StatusLineWidths {
-    playpause: usize,
     prev: usize,
+    playpause: usize,
     next: usize,
     curtime: usize,
     bar: usize,
     totaltime: usize,
-    bw: usize,
+    bpm: usize,
+    shuffle: usize,
 }
 
-/// Column layout for the status line: `{playpause} {title} {prev}{next}
-/// {curtime} {scrubber} {totaltime} {bw}` — the "reserved" columns (every
-/// segment except the scrolling title field) followed by
-/// [`name_field_width`] for however much of `total_w` that leaves the
-/// title.
+/// Column layout for the status line: `{prev}{playpause}{next}  {title}
+/// {curtime} {scrubber} {totaltime}  {bpm} {shuffle}` — transport buttons
+/// clustered at the far left, then [`name_field_width`] for the title.
 fn status_line_layout(total_w: usize, w: &StatusLineWidths) -> (usize, StatusLineLayout) {
     let gap = 2;
-    let playpause = (0, w.playpause);
-    let title_start = w.playpause + gap;
-    let reserved = gap + w.prev + w.next + gap + w.curtime + 1 + w.bar + 1 + w.totaltime + gap + w.bw;
+    let prev = (0, w.prev);
+    let playpause = (w.prev, w.playpause);
+    let next = (w.prev + w.playpause, w.next);
+    let cluster_w = w.prev + w.playpause + w.next;
+    let title_start = cluster_w + gap;
+    let reserved =
+        gap + w.curtime + 1 + w.bar + 1 + w.totaltime + gap + w.bpm + 1 + w.shuffle;
     let name_w = name_field_width(total_w, title_start, reserved);
 
     let mut x = title_start + name_w + gap;
-    let prev = (x, w.prev);
-    x += w.prev;
-    let next = (x, w.next);
-    x += w.next + gap + w.curtime + 1;
+    x += w.curtime + 1;
     let scrubber = (x, w.bar);
-    (name_w, StatusLineLayout { playpause, prev, next, scrubber })
+    x += w.bar + 1 + w.totaltime + gap;
+    let bpm = (x, w.bpm);
+    x += w.bpm + 1;
+    let shuffle = (x, w.shuffle);
+    (name_w, StatusLineLayout { prev, playpause, next, scrubber, bpm, shuffle })
 }
 
 /// `true` if column `x` falls inside `(start, width)`.
@@ -4504,8 +4594,8 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
 pub fn player_state_icon(state: &PlayerState) -> &'static str {
     match state {
         PlayerState::Playing => "▶",
-        PlayerState::Paused => "▮▮",
-        PlayerState::Stopped => "◼",
+        PlayerState::Paused => "⏸",
+        PlayerState::Stopped => "⏹",
     }
 }
 
