@@ -1,7 +1,8 @@
-//! Terminal window title: `{icon} {Artist} - {Title}`, scrolled marquee-style
-//! once the full text is wider than a classic 80-column terminal (the
-//! `scroll_title` windowing itself lives in `ui`, shared with the status
-//! line's icon logic).
+//! Terminal window title: a fixed `{icon} ` prefix (never scrolled — see
+//! `player_state_icon`) followed by `{Artist} - {Title}`, scrolled
+//! marquee-style once that track text alone is wider than the remaining
+//! budget of a classic 80-column terminal (the `scroll_title` windowing
+//! itself lives in `ui`, shared with the tab bar's own marquee).
 //!
 //! Driven from `main.rs`'s event loop, right where it already reacts to
 //! "track/playback state changed" once per iteration for the MPRIS/media-keys
@@ -11,7 +12,7 @@
 //! ticks); it freezes while paused/stopped, which is fine — nothing's "now
 //! playing" to scroll urgently about then.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cursive::Cursive;
 use medley_core::{PlayerState, Track};
@@ -19,20 +20,6 @@ use medley_core::{PlayerState, Track};
 /// Classic 80-column terminal width — a long-standing, widely-used
 /// convention for "the usual max width" a terminal title is shown at.
 const MAX_WIDTH: usize = 80;
-
-/// How many seconds' worth of real time correspond to one column of scroll.
-const SECS_PER_STEP: u64 = 1;
-
-/// Offset into a `cycle_len`-long looping text after `elapsed` real time,
-/// advancing one step every [`SECS_PER_STEP`] seconds. Pure wall-clock math
-/// (not a per-loop-iteration counter), so the scroll speed stays correct
-/// regardless of how often the surrounding loop happens to wake.
-fn scroll_offset(elapsed: Duration, cycle_len: usize) -> usize {
-    if cycle_len == 0 {
-        return 0;
-    }
-    ((elapsed.as_secs() / SECS_PER_STEP) as usize) % cycle_len
-}
 
 /// Stateful driver: tracks the full title text and when its scroll started,
 /// and only calls `Cursive::set_window_title` when the rendered text
@@ -51,20 +38,29 @@ impl WindowTitle {
     /// Recompute the title for the current `track`/`state` and push it to
     /// `siv` if it differs from what was last set there.
     pub fn update(&mut self, siv: &mut Cursive, track: Option<&Track>, state: &PlayerState) {
-        let full = ui::window_title_text(track, state);
+        let full = ui::window_title_track_text(track);
         if full != self.full {
             self.full = full;
             self.scroll_start = Instant::now();
         }
 
+        // The icon is a fixed prefix outside the scrolled window, so it's
+        // always visible and never eats into the marquee's own timing.
+        let prefix = match track {
+            Some(_) => format!("{} ", ui::player_state_icon(state)),
+            None => String::new(),
+        };
+        let avail = MAX_WIDTH.saturating_sub(prefix.chars().count());
+
         let len = self.full.chars().count();
-        let text = if len <= MAX_WIDTH {
+        let body = if len <= avail {
             self.full.clone()
         } else {
             let cycle_len = len + ui::SCROLL_GAP.chars().count();
-            let offset = scroll_offset(self.scroll_start.elapsed(), cycle_len);
-            ui::scroll_title(&self.full, MAX_WIDTH, offset)
+            let offset = ui::marquee_offset(self.scroll_start.elapsed(), cycle_len);
+            ui::scroll_title(&self.full, avail, offset)
         };
+        let text = format!("{prefix}{body}");
 
         if self.last_set.as_deref() != Some(text.as_str()) {
             siv.set_window_title(text.clone());

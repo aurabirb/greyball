@@ -28,7 +28,9 @@ mod view;
 mod vis;
 
 pub use row::RowItem;
-pub use view::{MedleyView, SCROLL_GAP, player_state_icon, scroll_title, window_title_text};
+pub use view::{
+    MedleyView, SCROLL_GAP, marquee_offset, player_state_icon, scroll_title, window_title_track_text,
+};
 
 /// Cursive only flushes queued backend-side calls (e.g. `set_window_title`)
 /// from inside its own `step()` — either right after a real input event, or,

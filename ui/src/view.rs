@@ -4260,13 +4260,15 @@ fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
     format!("[{mode_letter}{status_letter}]")
 }
 
-/// Full, un-scrolled terminal window title: `{icon} {artist} - {title}`,
-/// matching the `"{artist} - {title}"` convention used elsewhere (e.g.
+/// Full, un-scrolled track text for the terminal window title:
+/// `"{artist} - {title}"`, matching the convention used elsewhere (e.g.
 /// `core::app::build_entry`). Falls back to a bare `"medley"` when nothing
-/// is loaded.
-pub fn window_title_text(track: Option<&core::Track>, state: &PlayerState) -> String {
+/// is loaded. Deliberately excludes the play/pause icon — that's a fixed
+/// prefix `app`'s `WindowTitle` adds outside the scrolled portion, so it
+/// never scrolls along with the title text (see `player_state_icon`).
+pub fn window_title_track_text(track: Option<&core::Track>) -> String {
     match track {
-        Some(t) => format!("{} {} - {}", player_state_icon(state), t.display_artist(), t.title),
+        Some(t) => format!("{} - {}", t.display_artist(), t.title),
         None => "medley".to_string(),
     }
 }
@@ -4276,6 +4278,18 @@ pub fn window_title_text(track: Option<&core::Track>, state: &PlayerState) -> St
 /// same cycle length (`full.chars().count() + SCROLL_GAP.chars().count()`)
 /// without duplicating the literal.
 pub const SCROLL_GAP: &str = "   ";
+
+/// Offset into a `cycle_len`-long looping [`scroll_title`] after `elapsed`
+/// real time, advancing one column per second — shared by the terminal
+/// window title (`app`'s `WindowTitle`) and the tab bar's own marquee
+/// (`draw_tab_bar`) so both scroll at the same, wall-clock-correct speed
+/// regardless of how often their surrounding redraw happens to wake.
+pub fn marquee_offset(elapsed: Duration, cycle_len: usize) -> usize {
+    if cycle_len == 0 {
+        return 0;
+    }
+    (elapsed.as_secs() as usize) % cycle_len
+}
 
 /// A marquee-style `width`-character window over `full`, sliding by one
 /// character per unit of `offset`. Used when `full` is too long for the

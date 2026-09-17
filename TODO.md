@@ -74,7 +74,6 @@
 
 ### Features
 - [ ] make shuffle mode actually shuffle which track plays next, do not shuffle the queue. only the advance in a playlist context should be shuffled.
-- [ ] Make the play/pause symbol permanent in the terminal title, only the title should rotate.
 - [ ] Make the top tab list collapse to single letters on narrow screens and use the same rotating text in the title next to the top tabs if there is not enough space.
 - [ ] Create ⏮   ▶/⏸  ⏭   controls in the top bar (between tabs and title)
 - [ ] make the playpause button in the bottom bar clickable (playpause), add ⏮  ⏭  before the scrubber and move total time after the scrubber (playpause, scrollable title just like in the terminal title, prevnext, curtime, scrubber, totaltime, bw status). make the scrubber 20% longer and clickable.
