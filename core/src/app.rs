@@ -715,8 +715,13 @@ impl Session {
                 }
                 Ok(true)
             }
+            CoreEvent::PluginStatusChanged => {
+                // Health can improve outside setup()/run_command() (e.g. an
+                // auto-refresh) — rewire so that isn't stuck until a manual setup.
+                self.rewire_all_plugins();
+                Ok(true)
+            }
             CoreEvent::SourceError { .. }
-            | CoreEvent::PluginStatusChanged
             | CoreEvent::PluginLoginSucceeded
             | CoreEvent::PluginCommandResult => Ok(true),
         }
@@ -813,6 +818,15 @@ impl Session {
         }
         if let Some(p) = wiring.player {
             self.players.insert(id.clone(), p);
+        }
+    }
+
+    /// Re-pulls and re-applies every plugin's current `wiring()`.
+    fn rewire_all_plugins(&mut self) {
+        for p in self.plugins.clone() {
+            let id = p.id();
+            let wiring = p.wiring();
+            self.apply_wiring(&id, wiring);
         }
     }
 

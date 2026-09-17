@@ -126,7 +126,7 @@ impl Plugin for SpotifyPlugin {
 
     fn commands(&self) -> Vec<PluginCommand> {
         vec![PluginCommand {
-            word: "_spotify".to_string(),
+            word: "spotify".to_string(),
             help: "addlogin [name] [client_id] — (re)authenticate and add a Web API credential \
                    pair alongside any already stored (never replaces one). name is just a label, \
                    default if omitted. client_id is \"medley\" or \"ncspot\" for those apps' own \
@@ -144,7 +144,7 @@ impl Plugin for SpotifyPlugin {
                 Ok(name) => format!("logged in — added Web API credential pair {name:?}"),
                 Err(e) => format!("login failed: {e}"),
             },
-            _ => "usage: _spotify addlogin [name] [client_id]".to_string(),
+            _ => "usage: spotify addlogin [name] [client_id]".to_string(),
         }
     }
 }

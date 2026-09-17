@@ -14,7 +14,7 @@
 //!
 //! The Web API side supports several named credential *pairs* at once
 //! (`TokenStore`, `webapi_tokens.json`) instead of a single cached token:
-//! `_spotify addlogin [name] [client_id]` (see `crate::plugin`) adds one
+//! `spotify addlogin [name] [client_id]` (see `crate::plugin`) adds one
 //! without disturbing whatever's already stored, and `webapi.rs`'s `403`
 //! fallback (`fallback_webapi_token`) switches the active one when the
 //! current pair is refused a call medley's own app isn't approved for.
@@ -379,7 +379,7 @@ impl Auth {
         })
     }
 
-    /// `_spotify addlogin [name] [client_id]`: OAuth-login a new (or
+    /// `spotify addlogin [name] [client_id]`: OAuth-login a new (or
     /// re-authenticate an existing) Web API credential pair and store it
     /// under `name` — purely a storage key, trimmed, `DEFAULT_ACCOUNT` if
     /// omitted — alongside whatever's already stored. See

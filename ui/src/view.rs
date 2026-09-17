@@ -2012,18 +2012,16 @@ impl MedleyView {
         });
     }
 
-    /// Run a plugin-registered `:`-command (e.g. `:_spotify addlogin`) on a
+    /// Run a plugin-registered `:`-command (e.g. `:spotify addlogin`) on a
     /// background thread — same never-block-the-UI-thread reasoning as
-    /// `run_plugin_setup`, since `Plugin::run_command` is allowed to block
-    /// (an OAuth browser flow). Reports its result through
-    /// `plugin_command_result`/`CoreEvent::PluginCommandResult` instead of
-    /// re-taking the session lock afterward — `main`'s event loop shows it
-    /// as a modal.
+    /// `run_plugin_setup`. Also sends `PluginStatusChanged` so the fresh
+    /// auth state gets rewired in, not just the modal shown below.
     fn run_plugin_command(&self, plugin: Arc<dyn Plugin>, word: String, arg: Option<String>) -> EventResult {
         let feedback = self.with_session(|s| s.plugin_command_result_handle());
         let bus = self.with_session(|s| s.bus.clone());
         thread::spawn(move || {
             let msg = plugin.run_command(&word, arg);
+            bus.send(CoreEvent::PluginStatusChanged);
             *feedback.lock().unwrap() = Some(msg);
             bus.send(CoreEvent::PluginCommandResult);
         });

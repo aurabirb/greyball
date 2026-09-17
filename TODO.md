@@ -13,7 +13,6 @@
 ## TODOs:
 
 ### Bugs
-- [ ] After :spotify addlogin (btw remove the _ from the name) it should use the token right away, it seems to be using the old one since the likes are not working unless i restart the app. 
 - [ ] Spotify playback occasionally dies mid-song ("session invalid (dead access-point connection)")
   and reconnects, producing an audible ~1-2s gap while a whole new `Session`/mixer/player is rebuilt
   from scratch (`sources/spotify/src/player.rs`'s reconnect path is a full cold teardown-and-rebuild,
@@ -71,19 +70,6 @@
      allow an idle second authenticated session per account). Scope this as its own project if pursued,
      not a quick fix bundled with option 1.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
-- [ ] On startup, Spotify sometimes shows a warning ("spotify: refreshing session — should clear on its own") even though the warnings menu shows Spotify's item already ticked/healthy — clicking the already-ticked item anyway clears the warning and playback starts working. The warning isn't actually clearing itself despite the log message claiming it should. Sample log:
-  ```
-  19:06:41 INFO spotify: refreshing session — should clear on its own
-  19:06:41 INFO sources registered: http, soulseek, soundcloud
-  19:06:41 DEBUG starting new connection: https://accounts.spotify.com/
-  19:07:56 INFO spotify: using cached web-api token
-  19:07:56 DEBUG new Session
-  19:07:56 DEBUG new ApResolver
-  19:07:56 DEBUG Requesting https://apresolve.spotify.com/?type=accesspoint&type=dealer&type=spclient
-  19:07:56 DEBUG spotify: GET https://api.spotify.com/v1/me/playlists?limit=50
-  ```
-  Find where this warning is raised/cleared (likely `sources/spotify`) and fix the stale-warning state instead of requiring a manual click to force the clear.
-
 ### Features
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings

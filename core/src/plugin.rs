@@ -66,10 +66,10 @@ pub struct Wiring {
 }
 
 /// A `:`-command a plugin registers at startup — the generic seam so a
-/// plugin-specific command (e.g. Spotify's `_spotify`) doesn't need
+/// plugin-specific command (e.g. Spotify's `spotify`) doesn't need
 /// hand-adding to `ui::command`. Namespaced under the plugin's own leading
 /// word, with everything after it handed to [`Plugin::run_command`] as
-/// `arg` verbatim — so a plugin can grow its own sub-vocabulary (`_spotify
+/// `arg` verbatim — so a plugin can grow its own sub-vocabulary (`spotify
 /// addlogin ncspot`, say) without a second registration mechanism.
 pub struct PluginCommand {
     /// The bare `:`-word, no leading `:`.

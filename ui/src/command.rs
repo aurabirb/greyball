@@ -76,7 +76,7 @@ pub enum Parsed {
     /// Any word not recognized as a built-in above — checked against the
     /// live `Session`'s plugin-registered commands in `resolve` (`parse`
     /// itself has no `Session` to consult), since a plugin's own command
-    /// word (e.g. Spotify's `_spotify`) isn't known here. `arg` is the rest
+    /// word (e.g. Spotify's `spotify`) isn't known here. `arg` is the rest
     /// of the line, verbatim.
     PluginCommand { word: String, arg: Option<String> },
 }

@@ -506,7 +506,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
                 dirty |= s.on_event(ev).unwrap_or(false);
             }
             // Read here (still under the lock) — `s` drops just below, and a
-            // plugin command's result (e.g. `:_spotify addlogin`) is shown
+            // plugin command's result (e.g. `:spotify addlogin`) is shown
             // as a modal via `siv` directly, once per result.
             if events.iter().any(|ev| matches!(ev, medley_core::CoreEvent::PluginCommandResult)) {
                 plugin_command_result = s.take_plugin_command_result();
