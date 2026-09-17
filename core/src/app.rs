@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use rand::prelude::*;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
@@ -303,6 +304,13 @@ struct PlaybackContext {
     remote: Option<(SourceId, BrowseNode)>,
     /// See `Command::PlayContext::name`.
     name: Option<String>,
+    /// Remaining draw order for shuffle mode: a randomized permutation of
+    /// indices into `tracks` not yet played this pass, consumed from the
+    /// back by `play_next_in_context`. Refilled with a fresh shuffle of
+    /// every index once exhausted, so shuffle plays each track once before
+    /// any repeats rather than picking fully at random every time. Ignored
+    /// (and left to go stale) while shuffle is off.
+    shuffle_bag: Vec<usize>,
 }
 
 /// `Session::pending_remote_adds`' entry shape — see its field doc.
@@ -452,6 +460,7 @@ impl Session {
                     index,
                     remote: None,
                     name: (!p.name.is_empty()).then_some(p.name),
+                    shuffle_bag: Vec::new(),
                 }
             });
         let volume = cfg.volume.clamp(0.0, 1.0);
@@ -512,7 +521,7 @@ impl Session {
                 let Some(&id) = tracks.get(index) else {
                     return Ok(Dispatch::Ok);
                 };
-                self.context = Some(PlaybackContext { tracks, index, remote, name });
+                self.context = Some(PlaybackContext { tracks, index, remote, name, shuffle_bag: Vec::new() });
                 self.save_now_playing_context();
                 // `play_now` never touches the manual queue's contents
                 // beyond pulling `id` out of it if it happens to already be
@@ -1478,32 +1487,72 @@ impl Session {
 
     /// Play the next track in `self.context`, if there is one, advancing its
     /// index. Returns `false` (and leaves `self.context` untouched) when
-    /// there's no context or it's already at its end.
+    /// there's no context or it's already at its end. Under shuffle, "next"
+    /// is drawn from a no-repeat shuffle bag over `ctx.tracks` instead of
+    /// `ctx.index + 1` — see `next_shuffled_context_index`. Shuffle never
+    /// touches the manual queue (`Session::queue`), only this context-driven
+    /// path, so an ad-hoc/manually-queued track list always advances in
+    /// order regardless of the shuffle setting.
     fn play_next_in_context(&mut self) -> bool {
         let Some(ctx) = self.context.as_ref() else {
             return false;
         };
-        let next_index = ctx.index + 1;
-        // The snapshot ended, but if it came from a remote node still
-        // loading in the background, re-check the live list before giving
-        // up — it may have grown past what was captured at play time.
-        if ctx.tracks.get(next_index).is_none()
-            && let Some((source, node)) = ctx.remote.clone()
-        {
-            let live = self.remote_playlist_track_ids(&source, &node);
-            let ctx = self.context.as_mut().unwrap();
-            if live.len() > ctx.tracks.len() {
-                ctx.tracks = live;
-            }
-        }
-        let ctx = self.context.as_ref().unwrap();
-        let Some(&next_id) = ctx.tracks.get(next_index) else {
+        if ctx.tracks.is_empty() {
             return false;
+        }
+        let next_index = if self.queue.get_shuffle() {
+            let Some(next_index) = self.next_shuffled_context_index() else {
+                return false;
+            };
+            next_index
+        } else {
+            let next_index = ctx.index + 1;
+            // The snapshot ended, but if it came from a remote node still
+            // loading in the background, re-check the live list before
+            // giving up — it may have grown past what was captured at play
+            // time.
+            if ctx.tracks.get(next_index).is_none()
+                && let Some((source, node)) = ctx.remote.clone()
+            {
+                let live = self.remote_playlist_track_ids(&source, &node);
+                let ctx = self.context.as_mut().unwrap();
+                if live.len() > ctx.tracks.len() {
+                    ctx.tracks = live;
+                }
+            }
+            let ctx = self.context.as_ref().unwrap();
+            if ctx.tracks.get(next_index).is_none() {
+                return false;
+            }
+            next_index
         };
+        let ctx = self.context.as_ref().unwrap();
+        let next_id = ctx.tracks[next_index];
         self.context.as_mut().unwrap().index = next_index;
         self.save_now_playing_context();
         self.play_now(next_id);
         true
+    }
+
+    /// Draw the next index for shuffle mode from `ctx.shuffle_bag`,
+    /// refilling and reshuffling it with every index in `ctx.tracks` once
+    /// exhausted — a no-repeat shuffle bag, so every track in the context
+    /// gets a turn before any repeats. Excludes the currently-playing index
+    /// from a freshly-dealt bag when there's more than one track, so
+    /// refilling never immediately replays what just finished.
+    fn next_shuffled_context_index(&mut self) -> Option<usize> {
+        let ctx = self.context.as_mut().unwrap();
+        if ctx.shuffle_bag.is_empty() {
+            let mut bag: Vec<usize> = (0..ctx.tracks.len()).collect();
+            bag.shuffle(&mut rand::rng());
+            if bag.len() > 1
+                && let Some(pos) = bag.iter().position(|&i| i == ctx.index)
+            {
+                bag.swap(pos, 0);
+            }
+            ctx.shuffle_bag = bag;
+        }
+        ctx.shuffle_bag.pop()
     }
 
     fn active_player(&self) -> Option<Arc<dyn Player>> {

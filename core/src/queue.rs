@@ -24,7 +24,6 @@ use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
 use log::info;
-use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::event::{Bus, CoreEvent};
@@ -185,19 +184,12 @@ impl Queue {
     }
 
     /// Add `track` to the back of the queue — plays last among what's
-    /// currently queued. Under shuffle, inserts at a random position instead
-    /// so newly enqueued tracks blend into the shuffled order rather than
-    /// always landing dead last.
+    /// currently queued. Unaffected by shuffle: the manual queue always
+    /// keeps its insertion order, on screen and in what plays next — only
+    /// advancing through a `PlaybackContext` (a playlist) is randomized, see
+    /// `Session::play_next_in_context`.
     pub fn append(&self, track: TrackId) {
-        {
-            let mut q = self.queue.write().unwrap();
-            if *self.shuffle.read().unwrap() && !q.is_empty() {
-                let pos = rand::rng().random_range(0..=q.len());
-                q.insert(pos, track);
-            } else {
-                q.push_back(track);
-            }
-        }
+        self.queue.write().unwrap().push_back(track);
         self.bus.send(CoreEvent::QueueChanged);
     }
 
@@ -319,22 +311,12 @@ impl Queue {
         *self.shuffle.read().unwrap()
     }
 
-    /// Toggle shuffle. Turning it on immediately shuffles whatever's
-    /// currently queued, in place, once. There's no separate "unshuffled
-    /// order" kept to restore when turning it back off — a draining FIFO
-    /// has no fixed original order to remember, so turning shuffle back off
-    /// just leaves the (now-shuffled) order as-is and stops randomizing
-    /// future `append`s.
+    /// Toggle shuffle. Doesn't touch the manual queue's contents or order at
+    /// all — it only changes how `Session::play_next_in_context` picks the
+    /// next track once a `PlaybackContext` (playlist) takes over from an
+    /// empty manual queue.
     pub fn set_shuffle(&self, new: bool) {
         *self.shuffle.write().unwrap() = new;
-        if new {
-            let mut q = self.queue.write().unwrap();
-            let mut v: Vec<TrackId> = q.drain(..).collect();
-            v.shuffle(&mut rand::rng());
-            *q = v.into();
-            drop(q);
-            self.bus.send(CoreEvent::QueueChanged);
-        }
     }
 }
 
