@@ -13,9 +13,7 @@
 ## TODOs:
 
 ### Bugs
-- [ ] When downloading a long track (tested on Soundcloud "planetary natural love gas webbin 19999"), the playback starts but it plays silence for a long time (even after the track is reported to be *cached). The log shows "invalid frame" errors.
 - [ ] After :spotify addlogin (btw remove the _ from the name) it should use the token right away, it seems to be using the old one since the likes are not working unless i restart the app. 
-- [ ] Very rarely the player can play two tracks simultaneously — this should never happen. Playback commands/state should be routed through a single state machine tracking play state, so that a new play request always stops the previous track before starting the next.
 - [ ] Spotify playback occasionally dies mid-song ("session invalid (dead access-point connection)")
   and reconnects, producing an audible ~1-2s gap while a whole new `Session`/mixer/player is rebuilt
   from scratch (`sources/spotify/src/player.rs`'s reconnect path is a full cold teardown-and-rebuild,
@@ -47,9 +45,23 @@
      just bump to). Cheaper/smaller: skip re-resolving track metadata in the reconnect path when
      duration is unchanged, to shave a network round-trip off the resume gap.
      Done: `sources/spotify`'s `librespot-*` deps are now pinned to `dev` git rev
-     `939dc5ee9d833e1980f9495241219d9d4868a061`, which includes both fixes. Not yet confirmed
-     whether this actually fixes the disconnect — it's an intermittent, network-dependent bug
-     that needs real-world runtime to verify.
+     `939dc5ee9d833e1980f9495241219d9d4868a061`, which includes both fixes — confirmed present by
+     inspecting `~/.cargo/git/checkouts/librespot-*/939dc5e`'s own history at that exact rev:
+     `34f9cd2` ("fix: try all resolved socket addrs for connection") rewrites
+     `core/src/socket.rs::connect` to call `TcpStream::connect((host, port))` (tokio tries every
+     resolved address) instead of `.to_socket_addrs()?.next()` (only the first); `db1ef7a` ("audio:
+     fall back to the next CDN URL when a fetch returns a non-206 status") moves the
+     `StatusCode::PARTIAL_CONTENT` check inside `AudioFileStreaming::open()`'s per-URL loop in
+     `audio/src/fetch/mod.rs` so a non-206 response (e.g. a CDN edge returning 500) falls through to
+     the next resolved CDN URL instead of the loop breaking on the first response regardless of
+     status. Workspace builds clean against the pin (`cargo build --workspace --all-features`), and
+     live-tested normal Spotify playback in tmux against a real account: session connects/
+     authenticates, a Spotify-only search hit loads and plays, position advances, and `:vis` shows a
+     real, growing audio-level bar (not just wall-clock position ticking) — so the pin doesn't
+     regress ordinary playback. Still not confirmed whether it actually reduces the reconnect-gap
+     bug itself — that requires the AP connection to genuinely go bad mid-session (the
+     `session.is_invalid()` / "dead access-point connection" path), which is intermittent and
+     network-dependent and wasn't reproducible on demand in this session.
   2. Making drops actually inaudible (gapless reconnect) is a separate, much bigger feature, not a
      tweak: it needs a real ring/jitter buffer between decode and the output sink (decoupled from
      `Session` lifetime — today `TappedSink` forwards every decoded packet straight through with zero
