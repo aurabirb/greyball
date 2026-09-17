@@ -79,7 +79,12 @@ enum Cmd {
     Toggle,
     Seek(u32),
     SetVolume(f32),
-    Stop,
+    /// `ack` is signaled once this player's sink has actually stopped
+    /// producing audio — `Player::stop` blocks on it so a caller switching
+    /// to a different player (`Session::start_playback`) can't start the
+    /// new one before this one has gone silent, which is what closed the
+    /// rare two-tracks-at-once race (see that call site's doc).
+    Stop { ack: Sender<()> },
 }
 
 /// What the background thread spawned by `Cmd::Load` hands back: everything
@@ -256,8 +261,13 @@ impl Player for RodioPlayer {
         let _ = self.tx.send(Cmd::SetVolume(clamp_volume(v)));
     }
 
+    /// Blocks until the worker has actually silenced its sink — see
+    /// `Cmd::Stop`'s doc.
     fn stop(&self) {
-        let _ = self.tx.send(Cmd::Stop);
+        let (ack, rx) = crossbeam_channel::bounded(1);
+        if self.tx.send(Cmd::Stop { ack }).is_ok() {
+            let _ = rx.recv_timeout(Duration::from_secs(2));
+        }
     }
 
     fn status(&self) -> PlayerStatus {
@@ -381,7 +391,7 @@ fn worker(
                     sink.set_volume(v);
                 }
             }
-            Ok(Cmd::Stop) => {
+            Ok(Cmd::Stop { ack }) => {
                 audio.generation += 1;
                 if let Some(sink) = &audio.sink {
                     sink.stop();
@@ -390,6 +400,7 @@ fn worker(
                 audio.playing = None;
                 set_state(&inner, PlayerState::Stopped, 0);
                 bus.send(CoreEvent::Player(PlayerEvent::Stopped));
+                let _ = ack.send(());
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => tick(&mut audio, &inner, &bus),
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => unreachable!("handled above"),

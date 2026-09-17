@@ -37,7 +37,7 @@ use librespot_playback::mixer::MixerConfig;
 use librespot_playback::player::{Player as LsPlayer, PlayerEvent as LsEvent};
 use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use player::AudioTap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::{Auth, MUSIC_CLIENT_ID};
 
@@ -111,7 +111,11 @@ enum Cmd {
     Toggle,
     Seek(u32),
     SetVolume(f32),
-    Stop,
+    /// `ack` fires once `player.stop()` has been issued to librespot —
+    /// `Player::stop` blocks on it so `Session::start_playback` can't start
+    /// a different player before this one has been told to go silent (see
+    /// that call site's doc for the race this closes).
+    Stop { ack: oneshot::Sender<()> },
 }
 
 /// What to re-`load` once a `SessionDied` reconnect succeeds — captured from
@@ -219,8 +223,13 @@ impl Player for SpotifyPlayer {
         let _ = self.tx.send(Cmd::SetVolume(v));
     }
 
+    /// Blocks until the worker has issued the stop to librespot — see
+    /// `Cmd::Stop`'s doc.
     fn stop(&self) {
-        let _ = self.tx.send(Cmd::Stop);
+        let (ack, rx) = oneshot::channel();
+        if self.tx.send(Cmd::Stop { ack }).is_ok() {
+            let _ = rx.blocking_recv();
+        }
     }
 
     fn status(&self) -> PlayerStatus {
@@ -560,12 +569,13 @@ async fn run(
                         mixer.set_volume(vol_to_ls(v));
                         snap.lock().unwrap_or_else(|e| e.into_inner()).volume = v.clamp(0.0, 1.0);
                     }
-                    Some(Cmd::Stop) => {
+                    Some(Cmd::Stop { ack }) => {
                         player.stop();
                         cur = None;
                         playback_start = None;
                         set_state(&snap, PlayerState::Stopped, 0);
                         bus.send(CoreEvent::Player(PlayerEvent::Stopped));
+                        let _ = ack.send(());
                     }
                 },
                 ev = events.recv() => match ev {

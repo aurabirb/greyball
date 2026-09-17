@@ -1374,7 +1374,11 @@ impl Session {
         // the sink within `p` itself, but a track can route to a *different*
         // `Player` instance than the one currently playing (e.g. Spotify vs.
         // the shared Rodio player) — stop everyone else first so it doesn't
-        // keep playing underneath the new track.
+        // keep playing underneath the new track. `Player::stop` blocks until
+        // that player has actually gone silent (not just posted a Stop
+        // command) — the two independent audio backends racing here (one
+        // still tearing down while the other starts) was the rare
+        // simultaneous-double-playback bug.
         for other in self.players.values() {
             if !Arc::ptr_eq(other, &p) {
                 other.stop();
