@@ -28,7 +28,7 @@ use core::{
     Side, SourceId, TOGGLABLE_SOURCES, TrackId,
 };
 
-use cellwidth::compat::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::command::{self, Pane};
 use crate::keybindings::{self, Action};
@@ -3318,11 +3318,9 @@ fn draw_pane(pane: Pane, printer: &Printer, lines: &[String], scroll: usize, foc
     }
 }
 
-/// Greedy word-wrap: breaks `s` into `<= width`-column segments (by terminal
-/// display width, not char count) on whitespace, hard-breaking a single word
-/// longer than `width` at grapheme-cluster boundaries so a multi-codepoint
-/// emoji sequence is never split apart. An empty `s` yields one empty segment
-/// (so blank separator lines survive); `width == 0` yields none.
+/// Greedy word-wrap: breaks `s` into `<= width`-column segments on whitespace,
+/// hard-breaking a single word longer than `width`. An empty `s` yields one
+/// empty segment (so blank separator lines survive); `width == 0` yields none.
 fn wrap(s: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return Vec::new();
@@ -3330,38 +3328,26 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
     for word in s.split_whitespace() {
-        let mut graphemes: Vec<&str> = cellwidth::graphemes(word).collect();
+        let mut chars: Vec<char> = word.chars().collect();
         loop {
             let sep = usize::from(!cur.is_empty());
-            let word_w: usize = graphemes.iter().map(|g| cellwidth::width(g)).sum();
-            if cur.width() + sep + word_w <= width {
+            if cur.chars().count() + sep + chars.len() <= width {
                 if sep == 1 {
                     cur.push(' ');
                 }
-                cur.extend(graphemes.iter().copied());
+                cur.extend(chars.iter());
                 break;
             }
             if !cur.is_empty() {
                 lines.push(std::mem::take(&mut cur));
                 continue; // retry the same word against a fresh line
             }
-            // the word alone is longer than `width` — hard-break it, always
-            // taking at least one grapheme so a single cluster wider than
-            // `width` still makes progress instead of looping forever.
-            let mut take = 0;
-            let mut w = 0;
-            for g in &graphemes {
-                let gw = cellwidth::width(g);
-                if take > 0 && w + gw > width {
-                    break;
-                }
-                w += gw;
-                take += 1;
-            }
-            let rest = graphemes.split_off(take);
-            lines.push(graphemes.into_iter().collect());
-            graphemes = rest;
-            if graphemes.is_empty() {
+            // the word alone is longer than `width` — hard-break it.
+            let take = width.min(chars.len());
+            let rest = chars.split_off(take);
+            lines.push(chars.into_iter().collect());
+            chars = rest;
+            if chars.is_empty() {
                 break;
             }
         }
@@ -4462,11 +4448,20 @@ fn truncate_ellipsis(s: &str, width: usize) -> String {
 }
 
 /// Truncates `s` to at most `width` terminal display columns (not chars) —
-/// a grapheme cluster (e.g. a ZWJ/skin-tone emoji sequence, or a wide
-/// codepoint) that wouldn't fully fit is dropped whole rather than being
-/// split or emitting half of it.
+/// a wide (2-column) codepoint that wouldn't fully fit is dropped entirely
+/// rather than emitting half of it.
 fn truncate(s: &str, width: usize) -> String {
-    cellwidth::truncate(s, width).to_string()
+    let mut out = String::new();
+    let mut w = 0;
+    for c in s.chars() {
+        let cw = c.width().unwrap_or(0);
+        if w + cw > width {
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
+    out
 }
 
 /// `clamp_scroll_for`'s cursor-follow arithmetic, extracted as a free

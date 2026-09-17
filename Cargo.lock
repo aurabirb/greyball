@@ -257,12 +257,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cellwidth"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9558fdc2b8ecb72016a9bad533061a23422217705d36f8841705b23b3c608e39"
-
-[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4037,11 +4031,11 @@ dependencies = [
 name = "ui"
 version = "0.1.0"
 dependencies = [
- "cellwidth",
  "core",
  "cursive",
  "fuzzy-matcher",
  "log",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
