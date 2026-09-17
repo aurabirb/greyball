@@ -2095,6 +2095,16 @@ impl MedleyView {
         if local.x < rx || local.x >= rx + rect.width() || local.y < ry || local.y >= ry + rect.height() {
             return None;
         }
+        // Log is free-form terminal output the user wants to select/copy
+        // with the mouse (e.g. an error string to paste elsewhere) — a
+        // click/drag there is left unhandled (not even a focus change)
+        // instead of being consumed for pane focus, so it never looks like
+        // the app ate a selection drag. The wheel still scrolls it, same as
+        // any other pane.
+        if pane == Pane::Log && matches!(event, MouseEvent::Press(_) | MouseEvent::Hold(_) | MouseEvent::Release(_))
+        {
+            return None;
+        }
         self.focus = Focus::Pane(pane);
 
         let Some(screen) = list_screen_for_pane(pane) else {
