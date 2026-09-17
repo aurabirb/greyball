@@ -13,7 +13,10 @@
 ## TODOs:
 
 ### Bugs
-
+- [ ] When downloading a long track (tested on Soundcloud "planetary natural love gas webbin 19999"), the playback starts but it plays silence for a long time (even after the track is reported to be *cached). The log shows "invalid frame" errors.
+- [ ] After :spotify addlogin (btw remove the _ from the name) it should use the token right away, it seems to be using the old one since the likes are not working unless i restart the app. 
+- [ ] Sometimes a stray [S] shows up and i dont know what it means
+- [ ] In settings, the pane values do not update as I press P
 - [ ] Very rarely the player can play two tracks simultaneously — this should never happen. Playback commands/state should be routed through a single state machine tracking play state, so that a new play request always stops the previous track before starting the next.
 - [ ] Spotify playback occasionally dies mid-song ("session invalid (dead access-point connection)")
   and reconnects, producing an audible ~1-2s gap while a whole new `Session`/mixer/player is rebuilt
@@ -73,9 +76,19 @@
 - [ ] The `[bd]` BPM-scan status tag (`bpm_status_tag` in `ui/src/view.rs`) isn't visible on app
   startup even though the BPM plugin is disabled/paused at that point — investigate why the status
   line's tag doesn't show until some later redraw/state change and fix it to appear immediately.
+
 ### Features
-- [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
+- [ ] make shuffle mode actually shuffle which track plays next, do not shuffle the queue. only the advance in a playlist context should be shuffled.
+- [ ] Make the play/pause symbol permanent in the terminal title, only the title should rotate.
+- [ ] Make the top tab list collapse to single letters on narrow screens and use the same rotating text in the title next to the top tabs if there is not enough space.
+- [ ] Create ⏮   ▶/⏸  ⏭   controls in the top bar (between tabs and title)
+- [ ] make the playpause button in the bottom bar clickable (playpause), add ⏮  ⏭  before the scrubber and move total time after the scrubber (playpause, scrollable title just like in the terminal title, prevnext, curtime, scrubber, totaltime, bw status). make the scrubber 20% longer and clickable.
+- [ ] Make soundcloud provide explore page playlist in the playlists view
+- [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings
+- [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
+- [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings).
 - [ ] Ignore mouse events in the log panel so the user can select/copy text with the mouse instead of the panel capturing clicks/drags as input.
+- [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 
 ### Audits / cleanup tasks
 - [ ] Review how plugin/source failures are surfaced to the user and make the channel match the
