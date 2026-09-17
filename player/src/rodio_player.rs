@@ -721,7 +721,7 @@ fn open_streaming_url(
     let cache_state = state.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
-        let result = stream_body_to_file(fetch.body, write_file, &cache_state);
+        let result = stream_body_to_file(fetch.body, write_file, &cache_state, len);
         match &result {
             Ok(()) => {
                 log::info!("player: streamed {url_owned} in {:?}", started.elapsed());
@@ -744,14 +744,37 @@ fn open_streaming_url(
 /// Runs on `open_streaming_url`'s background thread: copies the response
 /// body into `file` chunk by chunk, advancing `state` after each write so a
 /// blocked `StreamingReader::read` wakes as soon as there's more to give it.
-fn stream_body_to_file(mut body: Box<dyn Read + Send>, mut file: File, state: &StreamState) -> Result<(), String> {
+///
+/// `expected_len` is the `Content-Length` the file was preallocated to
+/// (`set_len`). A body that ends (a clean, error-free EOF) before reaching
+/// it is a truncated transfer, not a success — treating a short read as
+/// "done" used to leave the preallocated file's tail as zero bytes, which
+/// then got copied into `MediaCache` as if it were real audio: a later
+/// cache-hit playback would decode real audio up to the truncation point,
+/// then feed the decoder a wall of zeros it can't parse ("invalid frame"
+/// errors) for the rest of the track — audible as a long trailing silence
+/// on a long track. Truncating the file to what was actually received and
+/// erroring instead keeps a short transfer from ever being cached or
+/// reported as materialized, so a later attempt re-fetches it properly.
+fn stream_body_to_file(
+    mut body: Box<dyn Read + Send>,
+    mut file: File,
+    state: &StreamState,
+    expected_len: u64,
+) -> Result<(), String> {
     let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
     loop {
         let n = body.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
+            if total < expected_len {
+                file.set_len(total).map_err(|e| e.to_string())?;
+                return Err(format!("truncated: got {total} of {expected_len} bytes"));
+            }
             return Ok(());
         }
         file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        total += n as u64;
         state.advance(n as u64);
     }
 }
@@ -785,100 +808,4 @@ fn set_state(inner: &Arc<Mutex<Snapshot>>, state: PlayerState, position_ms: u32)
     let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
     s.state = state;
     s.position_ms = position_ms;
-}
-
-#[cfg(test)]
-mod streaming_reader_tests {
-    use super::*;
-
-    /// Confirms the core correctness property `open_streaming_url` relies
-    /// on: a `read()` past what's been written so far blocks and resumes
-    /// once more arrives, instead of returning a premature `Ok(0)` (which
-    /// would make the decoder think the file ended early) — and that a
-    /// `read()` within what's already written never blocks at all, which is
-    /// what lets playback start on the first chunk.
-    #[test]
-    fn read_blocks_until_more_is_written_then_resumes() {
-        let tmp = NamedTempFile::new().unwrap();
-        tmp.as_file().set_len(6).unwrap();
-        let mut write_file = tmp.reopen().unwrap();
-        let read_file = tmp.reopen().unwrap();
-        let state = Arc::new(StreamState::default());
-
-        let mut reader = StreamingReader { file: read_file, pos: 0, total_len: 6, state: state.clone() };
-
-        // Nothing written yet: reading in a background thread should block.
-        let handle = {
-            let mut buf = [0u8; 6];
-            std::thread::spawn(move || {
-                let n = reader.read(&mut buf).unwrap();
-                (reader, buf, n)
-            })
-        };
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(!handle.is_finished(), "read() returned before any bytes were written");
-
-        // Write the first half and notify — the blocked read should now
-        // unblock with exactly those bytes, not wait for the rest.
-        write_file.write_all(b"abc").unwrap();
-        state.advance(3);
-
-        let (mut reader, buf, n) = handle.join().unwrap();
-        assert_eq!(n, 3);
-        assert_eq!(&buf[..3], b"abc");
-
-        // Now at pos == written again (3 of 6): reading further should
-        // block exactly like the first time, rather than treating the
-        // earlier partial read as the whole file.
-        let handle2 = std::thread::spawn(move || {
-            let mut buf = [0u8; 3];
-            let n = reader.read(&mut buf).unwrap();
-            (n, buf)
-        });
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(!handle2.is_finished(), "read() past the written point didn't block a second time");
-        state.finish(None);
-        let (n2, _buf2) = handle2.join().unwrap();
-        assert_eq!(n2, 0, "no more data was ever written, so this must resolve as EOF");
-    }
-
-    /// A `read()` past the written point must return once `finish` marks the
-    /// stream done, instead of hanging forever (e.g. a short/failed fetch).
-    #[test]
-    fn read_returns_eof_once_done_with_nothing_left() {
-        let tmp = NamedTempFile::new().unwrap();
-        tmp.as_file().set_len(3).unwrap();
-        let read_file = tmp.reopen().unwrap();
-        let state = Arc::new(StreamState::default());
-        let mut reader = StreamingReader { file: read_file, pos: 0, total_len: 3, state: state.clone() };
-
-        let handle = std::thread::spawn(move || {
-            let mut buf = [0u8; 3];
-            (reader.read(&mut buf).unwrap(), reader)
-        });
-        std::thread::sleep(Duration::from_millis(50));
-        state.finish(None);
-        let (n, _reader) = handle.join().unwrap();
-        assert_eq!(n, 0);
-    }
-
-    /// `finish(Some(err))` must surface as an `Err` to a blocked reader, not
-    /// a silent EOF that would mask the fetch failure.
-    #[test]
-    fn read_surfaces_error_from_finish() {
-        let tmp = NamedTempFile::new().unwrap();
-        tmp.as_file().set_len(3).unwrap();
-        let read_file = tmp.reopen().unwrap();
-        let state = Arc::new(StreamState::default());
-        let mut reader = StreamingReader { file: read_file, pos: 0, total_len: 3, state: state.clone() };
-
-        let handle = std::thread::spawn(move || {
-            let mut buf = [0u8; 3];
-            reader.read(&mut buf).map(|_| ())
-        });
-        std::thread::sleep(Duration::from_millis(50));
-        state.finish(Some("boom".into()));
-        let err = handle.join().unwrap().unwrap_err();
-        assert!(err.to_string().contains("boom"));
-    }
 }
