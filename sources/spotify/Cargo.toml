@@ -15,11 +15,11 @@ workspace = true
 [dependencies]
 core = { path = "../../core" }
 player = { path = "../../player" }
-librespot-core = { git = "https://github.com/librespot-org/librespot", rev = "939dc5ee9d833e1980f9495241219d9d4868a061" }
-librespot-metadata = { git = "https://github.com/librespot-org/librespot", rev = "939dc5ee9d833e1980f9495241219d9d4868a061" }
-librespot-oauth = { git = "https://github.com/librespot-org/librespot", rev = "939dc5ee9d833e1980f9495241219d9d4868a061" }
-librespot-audio = { git = "https://github.com/librespot-org/librespot", rev = "939dc5ee9d833e1980f9495241219d9d4868a061" }
-librespot-playback = { git = "https://github.com/librespot-org/librespot", rev = "939dc5ee9d833e1980f9495241219d9d4868a061", default-features = false, features = ["rodio-backend"] }
+librespot-core = "0.8.0"
+librespot-metadata = "0.8.0"
+librespot-oauth = "0.8.0"
+librespot-audio = "0.8.0"
+librespot-playback = { version = "0.8.0", default-features = false, features = ["rodio-backend"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"

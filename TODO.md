@@ -36,34 +36,12 @@
   goes bad mid-session — matches open librespot issues
   [#1151](https://github.com/librespot-org/librespot/issues/1151) (random mid-playback drops with
   connection resets, unresolved) and
-  [#1486](https://github.com/librespot-org/librespot/issues/1486) (AP stops working after ~1-2h). We're
-  pinned to `librespot-*` 0.8.0 (current stable — not behind on releases), but librespot's `dev` branch
-  changelog already has two unreleased fixes for exactly this: "try all resolved addresses for the
-  dealer connection instead of failing after the first" and "try the next CDN URL on a non-206 fetch
-  instead of only retrying transport errors".
-  1. Reduce how often it dies: pin `sources/spotify`'s `librespot-*` deps to a `dev` git rev to pick up
-     those two fixes now (moderate cost — git-rev pinning is more fragile than crates.io and needs
-     periodic re-vetting, but best effort/impact ratio available; no newer numbered release exists to
-     just bump to). Cheaper/smaller: skip re-resolving track metadata in the reconnect path when
-     duration is unchanged, to shave a network round-trip off the resume gap.
-     Done: `sources/spotify`'s `librespot-*` deps are now pinned to `dev` git rev
-     `939dc5ee9d833e1980f9495241219d9d4868a061`, which includes both fixes — confirmed present by
-     inspecting `~/.cargo/git/checkouts/librespot-*/939dc5e`'s own history at that exact rev:
-     `34f9cd2` ("fix: try all resolved socket addrs for connection") rewrites
-     `core/src/socket.rs::connect` to call `TcpStream::connect((host, port))` (tokio tries every
-     resolved address) instead of `.to_socket_addrs()?.next()` (only the first); `db1ef7a` ("audio:
-     fall back to the next CDN URL when a fetch returns a non-206 status") moves the
-     `StatusCode::PARTIAL_CONTENT` check inside `AudioFileStreaming::open()`'s per-URL loop in
-     `audio/src/fetch/mod.rs` so a non-206 response (e.g. a CDN edge returning 500) falls through to
-     the next resolved CDN URL instead of the loop breaking on the first response regardless of
-     status. Workspace builds clean against the pin (`cargo build --workspace --all-features`), and
-     live-tested normal Spotify playback in tmux against a real account: session connects/
-     authenticates, a Spotify-only search hit loads and plays, position advances, and `:vis` shows a
-     real, growing audio-level bar (not just wall-clock position ticking) — so the pin doesn't
-     regress ordinary playback. Still not confirmed whether it actually reduces the reconnect-gap
-     bug itself — that requires the AP connection to genuinely go bad mid-session (the
-     `session.is_invalid()` / "dead access-point connection" path), which is intermittent and
-     network-dependent and wasn't reproducible on demand in this session.
+  [#1486](https://github.com/librespot-org/librespot/issues/1486) (AP stops working after ~1-2h).
+  Pinning `librespot-*` to a `dev` git rev (which includes the "try all resolved addresses" and "next
+  CDN URL on non-206" fixes) did not eliminate the gaps, so that route is ruled out — deps stay on
+  crates.io 0.8.0.
+  1. Shave the resume gap: skip re-resolving track metadata in the reconnect path when duration is
+     unchanged, saving a network round-trip.
   2. Making drops actually inaudible (gapless reconnect) is a separate, much bigger feature, not a
      tweak: it needs a real ring/jitter buffer between decode and the output sink (decoupled from
      `Session` lifetime — today `TappedSink` forwards every decoded packet straight through with zero
@@ -133,7 +111,8 @@
   is happening during that stretch.
 - [ ] Turn the bottom status/hint row into its own module that can be placed either up top next to the
   tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
-  switchable via a setting.
+  leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the
+  Settings UI (wired up there, not config-file-only).
 - [ ] Hide the sources column on narrow terminal sizes.
 
 ### Audits / cleanup tasks
