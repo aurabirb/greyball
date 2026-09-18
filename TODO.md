@@ -374,11 +374,75 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] Run a code and architecture review: make sure the program uses messages and reactive patterns
-  to communicate between, and render, independent parts of the app (no part reaching into another's
-  state or recomputing/polling per frame what an event should drive), and fix what doesn't. Then write
-  a small (~4-8 KB) set of guides for further agents to follow, covering e.g. the app's architecture
-  invariants and ways of working such as checking for excessive comments or inefficient/verbose
-  implementations before pushing work.
+- [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use
+  messages and reactive patterns to communicate between, and render, independent parts of the app (no
+  part reaching into another's state or recomputing/polling per frame what an event should drive).
+  The component model is in `ui/src/view/README.md`; what breaks it today, in value order:
+  - `Session::plugin_statuses` (`core/src/app.rs`) calls every plugin's `probe()` per call — Spotify's
+    reads and JSON-parses its token store from disk — and the UI calls it on every frame
+    (`MedleyView::draw`'s `warn_count`), every layout pass (`required_size` → `clamp_focus` →
+    `focus_order` → `warn_count`), every mouse event (`on_event`'s warnings-button check) and twice
+    more per frame/event while the warnings modal is open. Cache the health list in `Session`,
+    refresh it only on `CoreEvent::PluginStatusChanged`/setup results, and have the UI read the cache.
+  - `MedleyView::draw` rebuilds full-length lists per frame: `visible_track_ids` clones the whole
+    context/queue/playlist id `Vec` to feed `scan.follow_view` on every redraw, `list_len` calls it
+    again just for `.len()` on every filterable screen, and `on_event` once more per keypress. With a
+    filter active each of `rows`, `list_len`, `list_title` and `visible_track_ids` clones the entire
+    cached `Vec<Track>` (`filtered_tracks` returns `cache.result.clone()`) — four times per frame.
+    Return lengths/slices from the sources and the filter cache without cloning (`Arc<[Track]>` or a
+    closure over the cached slice), and call `follow_view` only when the screen, list identity,
+    cursor or list length changes.
+  - `Session::playlists()` is a store read transaction plus a clone of every playlist's `items`; per
+    frame it runs in `rows` (Playlists top level), `list_title`/`context_name` (open playlist),
+    the playlist picker's `draw`, `top_rows`, and `help_lines`. Give `Session` a playlist-names cache
+    invalidated by playlist-mutating commands, or a revision counter the view keys a cache on.
+  - `hint_line` (`ui/src/view/input.rs`) takes the session lock up to twice inside `draw`, after the
+    frame's "one lock" snapshot. Move `selected_hotkey_target`/`effective_hotkey(OpenHelp)` into that
+    snapshot.
+  - The frame snapshot in `MedleyView::draw` is a positional 9-tuple; make it a named `Frame` struct
+    built by one `fn snapshot(&self, s: &Session)`, and let `on_event` reuse its cheap parts instead
+    of re-locking (`TabBar` click, `StatusLine::snapshot` on click, `warn_count`).
+  - Add a `Session` revision counter (bumped in `dispatch`/`on_event` when they report dirty) so
+    derived UI data — rows window, titles, help lines, settings entries, `LocalFilter::cache` (keyed
+    today on `source_len`, which misses same-length edits) — is rebuilt only when the revision, the
+    window or the size changes, not at `BASELINE_FPS`/`vis::FPS`. While the Vis pane is open the
+    whole frame, session lock included, is rebuilt at 30 fps, and the `Vis` worker contends for the
+    same lock at 30 Hz for `audio_levels`; move the levels behind their own lock/atomic.
+  - Feedback text lives in three places with three lifetimes: `MedleyView::queue_feedback`,
+    `HotkeyUi::feedback`, `Session::membership_feedback` (cleared by the UI through a lock on every
+    keypress). Fold into one UI-side `Feedback` slot; deliver the async membership result as a
+    `CoreEvent` payload rather than a polled `Mutex<Option<String>>`. Same for
+    `take_plugin_command_result` in `app/src/main.rs`.
+  - `run` (`input.rs`) infers feedback by matching the `Command` before dispatch and diffing
+    `queue_len` after it; have `Session::dispatch` return the outcome (`Dispatch::Queued(n)`,
+    `ShuffleSet(bool)`, `ScanMode(..)`) so the UI only formats it.
+- [ ] Finish the list component in `ui/src/view`: the main list and the docked Queue/History panes
+  bypass `ListState::on_event`. `MedleyView::on_event` hand-rolls Up/Down/j/k/J/K/PgUp/PgDn per focus
+  kind (eight near-identical arms) instead of `Nav::of` + one `focused_list() -> (screen, view_h)`;
+  `handle_mouse` and `handle_pane_mouse` (`mouse.rs`) duplicate each other's wheel/click/row math and
+  rect-contains test, differing only in title-row offset; `clamp_cursor` and `bump_pane_cursor`
+  (`lists.rs`) are the same clamp. Make a `TrackList` component (a `ListState`, its screen, one
+  `body_rect`) whose `on_event` returns `ListEvent`, used for main and docked lists alike. That also
+  removes the fixed `lists: [ListState; N_SCREENS]` slot array, the `usize` screen constants (make
+  `Screen` an enum) and the single `PlaylistNav` slot that stop two views of one list kind coexisting.
+- [ ] Modal plumbing in `ui/src/view`: the exclusive layers are five separate `MedleyView` fields
+  checked in two hand-ordered `if` chains that disagree (`draw`: warnings, hotkeys, picker, help;
+  `on_event`: warnings, picker, hotkeys, help), each with a `draw_*`/`on_*_event` wrapper repeating
+  "fetch data under lock, call component, on close set `None` + `fallback_focus()`". Replace with one
+  `modal: Option<Modal>` enum (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`,
+  `Pane(Pane)`) with a single `draw`/`on_event` match and a shared `ModalOutcome {Stay, Close,
+  Run(Command)}`; give the modals a shared title/list/footer frame helper (each of `WarningsModal`,
+  `PlaylistPicker`, `HotkeyUi::draw_menu`/`draw_capture`, `HelpModal`, `draw_screen_pane` prints its own
+  title bar and footer hint); take a `Rect` instead of assuming the full screen from column 0.
+- [ ] `commit_edit` (`ui/src/view/input.rs`) handles `command::Parsed` through a ladder of `if parsed ==`
+  checks and duplicates `handle_action` (`Parsed::History` vs `Action::Screen(HIST)`, `Parsed::Keys`
+  vs `Action::OpenHotkeyMenu`, `Parsed::Help` vs `Action::OpenHelp`). Map UI-level `Parsed` variants to
+  `Action` and keep one `match`. "Reset for a new list" (`lists[..].cursor = 0; filter.query = None;
+  clamp_scroll()`) is repeated in `activate` (twice), `open_playlist_uri`, the `Esc` arm of `on_event`,
+  `Action::Screen` and `Parsed::History`; make it one method.
+- [ ] `ui/src/lib.rs`'s crate doc describes a stateless three-screen view; rewrite it to point at
+  `ui/src/view/README.md`. Then write a small (~4-8 KB) set of guides for further agents covering the
+  app's architecture invariants and ways of working such as checking for excessive comments or
+  inefficient/verbose implementations before pushing work.
 - [ ] Run an agent to reduce code duplication and DRY violations, along with any
   violations of the user policies.

@@ -1,33 +1,29 @@
 # View component model
 
 `MedleyView` (`../view.rs`) is the only cursive `View`. It owns every component and the
-`SessionHandle` (`Arc<Mutex<Session>>`); the files here are its components plus `impl MedleyView`
-blocks grouped by concern (`lists`, `input`, `mouse`, `filter`, `playlists`, `panes`).
+`SessionHandle`; the files here are its components plus `impl MedleyView` blocks grouped by concern.
 
 ## Component API
 
-A component is a plain struct owning only its own UI state — never the session, never another
-component.
+A component is a plain struct owning only its own UI state — never the session or a sibling.
 
 - State: a `ListState {cursor, offset}` (`scroll.rs`) for anything with a row cursor, a bare scroll
   offset otherwise (`HelpModal`, `LogPane`). A modal is an `Option<T>` field that is `Some` only while
   open; opening constructs it, closing drops it. `StatusLine` and `TabBar` hold no state: they are
   built per use from a session snapshot.
 - `draw(&self, printer, data…)`: gets a `Printer` already `windowed` to the component's rect (the
-  whole screen for a modal) and its data as arguments, e.g. `&[Playlist]`, `&[SettingsEntry]`,
-  `focused`. It never locks the session.
+  whole screen for a modal) and its data as arguments (`&[Playlist]`, `focused`, …).
 - `on_event(&mut self, event, size, data…)` returns an outcome for the owner to act on: `ListEvent`
   (`Close`/`Activate`/`Clicked`/`Moved`/`Unhandled`) for list modals, `bool` "close" for `HelpModal`.
   `click(x, width)` on the one-row bars returns `Option<Command>` (`StatusLine`) or
-  `Option<TabBarHit>` (`TabBar`). Components never return `EventResult` and never dispatch.
+  `Option<TabBarHit>` (`TabBar`). Components never return `EventResult` or dispatch.
 - One layout function per component, called by both draw and hit-test: `StatusLine::layout`,
   `TabBar::layout`, `WarningsModal::list_rect`, `modal_list_rect(size, list_top)`,
-  `HelpModal::view_h`, `PaneLayout::split`. Never restate column/row math at a call site.
+  `HelpModal::view_h`, `PaneLayout::split`.
 - `relayout(resized, size, len…)`, called from `MedleyView::required_size` (the one `&mut self` hook
   that knows the screen size): re-follow the cursor on resize, else clamp the offset to the data length.
-- Shared pieces: `ListState` + `Nav` (key/wheel → `(up, step)`), `Marquee` (one scroll clock for the
-  tab bar and status line), `text.rs` (`pad`, `truncate`, `wrap`, `scroll_title`, `in_span`),
-  `draw_row_list` (`rows.rs`) for every track list, `draw_scrollbar`.
+- Shared: `ListState` + `Nav` (key/wheel → `(up, step)`), `Marquee` (one scroll clock for the tab bar
+  and status line), `text.rs`, `draw_row_list` (`rows.rs`) for every track list.
 
 ## App interaction
 
@@ -36,8 +32,8 @@ component.
   data take `s: &Session` instead. The main frame in `draw` takes one lock, pulls a tuple of rows,
   titles, `StatusLine::snapshot(s)` and counts, then renders unlocked.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
-  `with_session_mut` is for UI-owned settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin
-  work runs on a spawned thread and reports through the `Bus`.
+  `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
+  runs on a spawned thread and reports through the `Bus`.
 - Inbound: nothing is pushed into the view. `app/src/main.rs` loops `siv.step()` → `bus.drain()` →
   `Session::on_event` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
   `cb_sink`. The next `draw` re-reads the session. `set_fps(BASELINE_FPS)` is the idle redraw floor
@@ -77,4 +73,4 @@ deliberate exception). Interior mutability in `draw` is limited to clocks and ca
 4. In `MedleyView`: a `draw_*`/`on_*_event` pair that fetches the data with one `with_session` and
    acts on the outcome; slot it into the precedence chains of `draw` and `on_event`; call `relayout`
    from `required_size`; open it from `handle_action` or `commit_edit`.
-5. Reuse `ListState`, `Nav`, `modal_list_rect` and `text.rs` before writing scroll or width math.
+5. Reuse `ListState`, `Nav`, `modal_list_rect`, `text.rs` before writing scroll or width math.
