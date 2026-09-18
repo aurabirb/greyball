@@ -23,7 +23,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
 use core::{
-    Axis, BrowseNode, Command, CoreEvent, Dispatch, HotkeyMembership, HotkeyTarget, LogBuf, PaneLayoutConfig,
+    Axis, BindError, BrowseNode, Command, CoreEvent, Dispatch, HotkeyMembership, HotkeyTarget, LogBuf, PaneLayoutConfig,
     PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session, SetupKind,
     Side, SourceId, TOGGLABLE_SOURCES, TrackId,
 };
@@ -1893,9 +1893,12 @@ impl MedleyView {
                 format!("Bound '{key}' to {name} (moved from {stolen_name})")
             }
             Ok(None) => format!("Bound '{key}' to {name}"),
-            Err(blocking) => {
+            Err(BindError::BuiltinKey(blocking)) => {
                 let blocking_name = self.hotkey_row_name_for(&blocking);
                 format!("Can't bind '{key}': already used by built-in {blocking_name}")
+            }
+            Err(BindError::SyntheticPlaylist) => {
+                format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead")
             }
         });
         EventResult::consumed()

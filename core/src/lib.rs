@@ -23,7 +23,7 @@ pub mod traits;
 pub mod types;
 mod view_cache;
 
-pub use app::{BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, Session, cache_rendition};
+pub use app::{BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, Session, cache_rendition};
 pub use catalog::Catalog;
 pub use config::{
     Axis, BpmScanConfig, Config, HttpConfig, PaneLayoutConfig, PaneMode, ScanConfig, Side,

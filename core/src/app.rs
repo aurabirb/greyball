@@ -337,6 +337,15 @@ impl Default for HotkeyMemo {
 
 const HOTKEY_MEMO_LOADING_RECHECK: Duration = Duration::from_secs(1);
 
+/// Why `Session::bind_hotkey` refused.
+#[derive(Debug)]
+pub enum BindError {
+    /// `key` belongs to this built-in action, which only moves by being remapped itself.
+    BuiltinKey(HotkeyTarget),
+    /// The target is a synthetic node (e.g. Liked Songs), not a real playlist.
+    SyntheticPlaylist,
+}
+
 pub struct Session {
     pub bus: Bus,
     pub store: Arc<dyn Store>,
@@ -823,6 +832,7 @@ impl Session {
     pub fn apply_wiring(&mut self, id: &SourceId, wiring: crate::plugin::Wiring) {
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
+            self.prune_synthetic_hotkeys();
         }
         // Also pushed to the scan driver's own live wiring, so a source
         // wired up after startup isn't stuck behind a walk-thread snapshot
@@ -1307,14 +1317,19 @@ impl Session {
     }
 
     /// Binds `key` to `target`, dropping `target`'s previous key and stealing `key` from any
-    /// other playlist; returns who it was stolen from. `Err(occupant)` when `key` is a
-    /// built-in action's key — those only move by being remapped themselves.
+    /// other playlist; returns who it was stolen from. Refuses a built-in's key and a
+    /// synthetic target — see `BindError`.
     pub fn bind_hotkey(
         &mut self,
         key: char,
         target: HotkeyTarget,
-    ) -> std::result::Result<Option<HotkeyTarget>, HotkeyTarget> {
-        let stolen = bind_hotkey(&mut self.hotkeys, key, target)?;
+    ) -> std::result::Result<Option<HotkeyTarget>, BindError> {
+        if let HotkeyTarget::Remote(source, node) = &target
+            && self.is_synthetic_playlist(source, node)
+        {
+            return Err(BindError::SyntheticPlaylist);
+        }
+        let stolen = bind_hotkey(&mut self.hotkeys, key, target).map_err(BindError::BuiltinKey)?;
         self.invalidate_hotkey_memberships();
         Ok(stolen)
     }
@@ -1328,7 +1343,24 @@ impl Session {
     /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
         self.hotkeys = hotkeys;
-        self.invalidate_hotkey_memberships();
+        self.prune_synthetic_hotkeys();
+    }
+
+    /// Drops bindings to synthetic nodes; re-run as sources register, since only a wired source can tell.
+    fn prune_synthetic_hotkeys(&mut self) {
+        let sources = &self.sources;
+        let bound = self.hotkeys.len();
+        self.hotkeys.retain(|key, target| {
+            let synthetic = matches!(target, HotkeyTarget::Remote(sid, node)
+                if sources.get(sid).is_some_and(|s| s.is_synthetic(node)));
+            if synthetic {
+                log::warn!("hotkey '{key}': dropped, bound to a synthetic playlist");
+            }
+            !synthetic
+        });
+        if self.hotkeys.len() != bound {
+            self.invalidate_hotkey_memberships();
+        }
     }
 
     /// Sets a source's persisted `enabled` bit; takes effect next restart, like editing config.toml.
@@ -1981,12 +2013,20 @@ impl Session {
             return;
         };
         let name = t.display_name();
-        let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {
-            let msg = format!("Can't toggle {name:?}: track isn't on {source}");
+        let refusal = if src.is_synthetic(&node) {
+            // A toggle could silently unlike; Liked Songs only changes through Like/Unlike.
+            Some(format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use like/unlike"))
+        } else if !t.renditions.iter().any(|r| r.source == source) {
+            Some(format!("Can't toggle {name:?}: track isn't on {source}"))
+        } else {
+            None
+        };
+        if let Some(msg) = refusal {
             log::error!("toggle_playlist_membership: {msg}");
             *self.membership_feedback.lock().unwrap() = Some(msg);
             return;
-        };
+        }
+        let uri = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()).unwrap_or_default();
         let feedback = self.membership_feedback.clone();
         let started = self.view.toggle_remote_membership(t, uri, src, node, self.remote_ctx(), move |msg| {
             *feedback.lock().unwrap() = Some(msg);
