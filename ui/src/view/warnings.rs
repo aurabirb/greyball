@@ -104,8 +104,8 @@ impl WarningsModal {
 
 impl MedleyView {
     /// Opens the warnings modal, first re-probing every plugin — `probe()`
-    /// can do real I/O (a cached-token read, a slskd ping), so this is the
-    /// one place health gets re-checked instead of on every redraw.
+    /// can do real I/O (a cached-token read, a slskd ping), so this forces a
+    /// fresh read instead of waiting out `app`'s periodic health timer.
     pub(super) fn open_warnings(&mut self) {
         self.with_session_mut(|s| s.refresh_plugin_health());
         self.warnings = Some(WarningsModal::default());

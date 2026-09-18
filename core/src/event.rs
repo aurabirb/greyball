@@ -30,11 +30,11 @@ pub enum CoreEvent {
         source: SourceId,
         message: String,
     },
-    /// A plugin's health changed (e.g. `setup()` finished, on a background
-    /// thread) — the front-end's cue to redraw the warnings panel. Doesn't
-    /// carry the new status itself: `Session::plugin_statuses` reads it
-    /// fresh (`Plugin::probe` is cheap by contract), same pattern as
-    /// `PlaylistsChanged` re-`browse`ing rather than caching.
+    /// A plugin's health changed (`setup()` finished, a plugin's own
+    /// cooldown-gated background check, or `app`'s periodic health timer) —
+    /// the front-end's cue to redraw the warnings panel. Doesn't carry the
+    /// new status itself: `Session::plugin_statuses` is a cache
+    /// (`plugin_health`), and this event's handler is what refreshes it.
     PluginStatusChanged,
     /// A plugin's `setup()` (interactive login) just finished with
     /// `PluginHealth::Ok` — sent alongside `PluginStatusChanged`, never

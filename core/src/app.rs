@@ -337,6 +337,12 @@ impl Default for HotkeyMemo {
 
 const HOTKEY_MEMO_LOADING_RECHECK: Duration = Duration::from_secs(1);
 
+/// Cooldown for `app/src/main.rs`'s background plugin-health timer — matches
+/// the plugins' own probe cooldowns (Spotify's `AUTO_REFRESH_COOLDOWN`,
+/// Soulseek's `CHECK_COOLDOWN`), so the timer never probes more often than a
+/// plugin's own background check could actually produce a new result.
+pub const PLUGIN_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Why `Session::bind_hotkey` refused.
 #[derive(Debug)]
 pub enum BindError {
@@ -418,7 +424,8 @@ pub struct Session {
     /// if any — `Arc<Mutex<_>>` so the background thread that runs the
     /// actual `Source` call can report back without holding `Session`'s own
     /// lock across the network round trip. Polled (not pushed) by the UI's
-    /// hotkey-menu footer, same pull-on-redraw pattern as `plugin_statuses`.
+    /// hotkey-menu footer on every redraw — cheap, since it's just reading
+    /// whatever string (if any) already landed here.
     membership_feedback: Arc<Mutex<Option<String>>>,
 
     /// Memoized hotkeys-column lookup — see `hotkey_memberships`.
@@ -779,38 +786,50 @@ impl Session {
         self.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count()
     }
 
-    /// Re-probes every plugin and rebuilds `plugin_health`. Called once at
-    /// startup and anywhere a plugin's health can change afterward
-    /// (`CoreEvent::PluginStatusChanged`'s handler, `record_setup_result`,
-    /// plugin-command completion) — `probe()` itself can do real I/O
-    /// (Spotify's cached-token read, Soulseek's slskd ping), so this must
-    /// never run on a hot path like every redraw.
-    pub fn refresh_plugin_health(&mut self) {
-        self.plugin_health = self
-            .plugins
-            .iter()
-            .map(|p| {
-                let id = p.id();
-                let probed = p.probe();
-                // `probe()` only ever returns a few generic canned strings,
-                // so a real setup failure (`last_setup`) is more informative
-                // and wins until a fresh probe comes back `Ok` again, which
-                // always supersedes it.
-                let health = if probed.is_ok() {
-                    probed
-                } else {
-                    self.last_setup.get(&id).cloned().unwrap_or(probed)
-                };
+    /// `probe()` only ever returns a few generic canned strings, so a real
+    /// setup failure (`last_setup`) is more informative and wins until a
+    /// fresh probe comes back `Ok` again, which always supersedes it.
+    fn overlay_setup(&self, probed: Vec<(SourceId, PluginHealth)>) -> Vec<(SourceId, PluginHealth)> {
+        probed
+            .into_iter()
+            .map(|(id, h)| {
+                let health = if h.is_ok() { h } else { self.last_setup.get(&id).cloned().unwrap_or(h) };
                 (id, health)
             })
-            .collect();
+            .collect()
+    }
+
+    /// Re-probes every plugin (on the session lock — only safe here, at
+    /// startup or from an explicit user action, never on a hot path) and
+    /// unconditionally rebuilds `plugin_health`. Called once at startup, by
+    /// `open_warnings`, and by `CoreEvent::PluginStatusChanged`'s handler,
+    /// which already knows something changed.
+    pub fn refresh_plugin_health(&mut self) {
+        let probed: Vec<(SourceId, PluginHealth)> = self.plugins.iter().map(|p| (p.id(), p.probe())).collect();
+        self.plugin_health = self.overlay_setup(probed);
+    }
+
+    /// Applies health values already probed off the session lock — by
+    /// `app/src/main.rs`'s periodic background timer, since `probe()` can do
+    /// real I/O (Spotify's cached-token read, Soulseek's slskd ping) and
+    /// this runs every `PLUGIN_HEALTH_CHECK_INTERVAL`. Only replaces the
+    /// cache (and reports a change) when the overlaid result actually
+    /// differs, so an unchanged tick causes no rewire/redraw.
+    pub fn apply_probed_plugin_health(&mut self, probed: Vec<(SourceId, PluginHealth)>) -> bool {
+        let health = self.overlay_setup(probed);
+        if health == self.plugin_health {
+            return false;
+        }
+        self.plugin_health = health;
+        true
     }
 
     /// Record `id`'s last `Plugin::setup` result — called once `setup()`
-    /// returns, by `run_plugin_setup`. See `refresh_plugin_health`.
+    /// returns, by `run_plugin_setup`, which always sends
+    /// `CoreEvent::PluginStatusChanged` right after; that event's handler
+    /// does the actual re-probe, so this only needs to update `last_setup`.
     pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
         self.last_setup.insert(id, health);
-        self.refresh_plugin_health();
     }
 
     /// A cloned handle to one plugin, to call its (blocking) `setup()` off

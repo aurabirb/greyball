@@ -311,6 +311,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Background timer, independent of the UI: periodically re-probes every
+/// plugin so a token expiring or an slskd instance going down/coming back is
+/// noticed even if nobody opens the warnings modal — previously `probe()`
+/// only ran from there, or from a plugin's own cooldown-gated background
+/// check, so once the cache said "all Ok" nothing ever looked again. Plugins
+/// are cloned and probed with the session lock released (`probe()` can do
+/// disk/network I/O), then the results applied back under a short lock;
+/// `Session::apply_probed_plugin_health` only stores them (and this only
+/// sends the event) when something actually changed, so an unchanged tick
+/// causes no rewire/redraw. Runs for the life of the process, like the
+/// scan-driver thread: nothing joins it, so it simply stops the moment
+/// `main` returns.
+fn spawn_plugin_health_timer(session: Arc<Mutex<medley_core::Session>>, bus: Bus) {
+    std::thread::Builder::new()
+        .name("plugin-health".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(medley_core::PLUGIN_HEALTH_CHECK_INTERVAL);
+                let plugins = session.lock().unwrap().plugins.clone();
+                let probed: Vec<(SourceId, medley_core::PluginHealth)> =
+                    plugins.iter().map(|p| (p.id(), p.probe())).collect();
+                let changed = session.lock().unwrap().apply_probed_plugin_health(probed);
+                if changed {
+                    bus.send(medley_core::CoreEvent::PluginStatusChanged);
+                }
+            }
+        })
+        .expect("failed to spawn plugin-health thread");
+}
+
 fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg = load_config();
     // Diff base for `source_overrides` at shutdown — captured before Settings-toggled overrides apply.
@@ -462,6 +492,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     }
     session.set_hotkeys(load_hotkeys());
     let session = Arc::new(Mutex::new(session));
+    spawn_plugin_health_timer(session.clone(), bus.clone());
 
     siv.set_theme(ui::theme::load(&theme));
     siv.set_user_data(session.clone());

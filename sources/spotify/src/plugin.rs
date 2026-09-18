@@ -17,8 +17,9 @@ use crate::player::SpotifyPlayer;
 use crate::source::SpotifySource;
 
 /// Cooldown between automatic background refresh attempts kicked off from
-/// `probe` (called on every redraw) — keeps a permanently-failing refresh
-/// (e.g. a revoked grant) from hammering Spotify's token endpoint.
+/// `probe` (called by the warnings modal and by `app`'s periodic health
+/// timer) — keeps a permanently-failing refresh (e.g. a revoked grant) from
+/// hammering Spotify's token endpoint.
 const AUTO_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub struct SpotifyPlugin {
@@ -27,7 +28,8 @@ pub struct SpotifyPlugin {
     volume: f32,
     media_cache: Arc<MediaCache>,
     /// Guards against `probe` spawning overlapping automatic refresh
-    /// attempts (it's called on every redraw, ~4/s).
+    /// attempts (it can be called concurrently by the warnings modal and by
+    /// `app`'s periodic health timer).
     refreshing: Arc<AtomicBool>,
     next_auto_refresh: Arc<Mutex<Instant>>,
     /// Reused across rewires: a second `SpotifyPlayer` is a second session login on the same account.

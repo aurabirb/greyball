@@ -246,7 +246,8 @@ pub(crate) fn chmod_600(_path: &Path) {}
 /// One-time startup self-heal for `credentials.json`/`webapi_tokens.json`
 /// left world-readable by a pre-fix medley build. Cheap (two syscalls), so
 /// fine to run once at plugin construction — never from `load_cached`, which
-/// `probe` calls on every redraw.
+/// `probe` still calls repeatedly (on the app's periodic health timer, not
+/// every redraw, but still often enough that a syscall pair each time would add up).
 pub fn heal_permissions(cache_dir: &Path) {
     chmod_600(&cache_dir.join("credentials.json"));
     chmod_600(&token_store_path(cache_dir));

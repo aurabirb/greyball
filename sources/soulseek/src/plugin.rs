@@ -1,8 +1,9 @@
 //! `core::Plugin` impl for Soulseek. Connectivity (does a local `slskd`
 //! actually answer on the configured host:port?) is exactly the kind of
 //! check `core::plugin`'s module doc says `probe()` must never do inline —
-//! it's real network I/O and `probe()` is called on every redraw of the
-//! warnings panel. So it follows `sources_spotify::SpotifyPlugin`'s
+//! it's real network I/O and `probe()` is called both from the warnings
+//! panel and from `app`'s periodic health timer. So it follows
+//! `sources_spotify::SpotifyPlugin`'s
 //! `kick_off_auto_refresh` pattern instead: `probe()` kicks off a cooldown-
 //! guarded background check and reports the last result, `setup()` does one
 //! for real inline (it's the one place a blocking network call is fine).
@@ -20,8 +21,9 @@ use crate::source::SoulseekSource;
 use crate::yaml_config::{self, YamlAuth};
 
 /// Cooldown between automatic background reachability checks kicked off
-/// from `probe` (called on every redraw) — keeps a permanently-unreachable
-/// daemon from getting hammered with connection attempts.
+/// from `probe` (called by the warnings modal and by `app`'s periodic
+/// health timer) — keeps a permanently-unreachable daemon from getting
+/// hammered with connection attempts.
 const CHECK_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub struct SoulseekPlugin {
