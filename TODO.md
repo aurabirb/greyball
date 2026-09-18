@@ -70,6 +70,19 @@
   fold it into this. Show the pending state in the track row: the playlist's letter in the hotkeys
   column renders italic until the request settles. Check the local (`HotkeyTarget::Local`) path
   toggles correctly too.
+- [ ] Adding a track to a remote playlist (e.g. via hotkey from the Queue) shows it in the open
+  playlist only while the request is pending — then it vanishes instead of becoming a real row, and
+  nothing that depends on the playlist's contents updates. Cause: the pending row is a
+  `plain_row("…  (adding…)")` that `rows()`'s `open_remote` branch (`ui/src/view.rs`) appends from
+  `Session::pending_remote_adds`; when the background add in `toggle_remote_playlist_membership`
+  (`core/src/app.rs`) succeeds it just drops that pending entry and never inserts the track into
+  `ViewCache`'s `remote_playlist_tracks` (or re-fetches it). Fix with the membership state machine
+  above: on success, insert/remove the track in the cached list (and bump its total), then emit one
+  "playlist contents changed `(source, node)`" message that everything derived from it reacts to —
+  the open playlist's rows and title count, the hotkeys column on every list, the top-level
+  Playlists counts, the m3u8 export once it exists. On failure, remove the pending row and surface
+  the error. The pending row should be a normal track row (shared row widget, italic/dim while
+  pending), not a bare text placeholder.
 - [ ] Track rendering isn't consistent across lists: the same track should render identically (tags,
   hotkeys/playlist column, liked state, current marker) and update at the same moment on every tab
   and docked pane. Seen: pressing a playlist hotkey while in the Queue doesn't update the playlist
