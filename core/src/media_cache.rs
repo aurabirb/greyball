@@ -10,10 +10,11 @@
 //! bytes as-is whenever they're already a plain, unencrypted, playable file
 //! (HTTP/SoundCloud's fetched MP3/AAC, Spotify's already-decrypted,
 //! header-stripped Ogg Vorbis), only transcoding when nothing playable-as-is
-//! is available. Format doesn't need tracking here — every reader (symphonia
-//! for decode/analysis, `rodio::Decoder::try_from` for playback) sniffs the
-//! container from content, not a filename extension — so a cached file's
-//! name never carries one either.
+//! is available. Every reader (symphonia for decode/analysis,
+//! `rodio::Decoder::try_from` for playback) sniffs the container from
+//! content, not a filename extension, so lookups here never depend on one —
+//! but a first-time write does cheaply sniff the magic bytes (`sniff_ext`)
+//! to append `.mp3`/`.ogg` to the filename purely for `ls`-ability.
 //!
 //! Keyed by `(SourceId, Rendition::uri)` — the stable, source-attributed id
 //! a source actually gives us. Never `TrackId`: that's a medley-only
@@ -94,20 +95,54 @@ fn sanitize_display(s: &str) -> String {
     cleaned.trim().chars().take(120).collect()
 }
 
-/// First unused `dir/base`, `dir/base (2)`, `dir/base (3)`, ... — two
+/// Recognizes the magic bytes of the two containers actually observed in
+/// this cache (raw or ID3-tagged MPEG audio, and Ogg Vorbis) — cheap sniff
+/// only, never a format probe. Anything else (or too few bytes) is `None`,
+/// which leaves the filename extension-less, matching prior behavior.
+fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 4 && &bytes[..4] == b"OggS" {
+        return Some("ogg");
+    }
+    if bytes.len() >= 3 && &bytes[..3] == b"ID3" {
+        return Some("mp3");
+    }
+    if bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
+        return Some("mp3");
+    }
+    None
+}
+
+/// Same sniff as `sniff_ext`, but for a caller that only has a path
+/// (`put_file`/`link_local`) — reads a handful of bytes, not the whole file.
+fn sniff_ext_path(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
+    sniff_ext(&buf[..n])
+}
+
+/// `dir/base(.ext)`, `dir/base (2)(.ext)`, `dir/base (3)(.ext)`, ... — two
 /// different `(source, uri)` can share a display name, so the pretty name
 /// alone isn't a unique filename; this just needs to not collide on disk,
 /// not be race-proof against a concurrent first-time write for a
 /// *different* key with the same name landing on the same candidate (rare,
 /// and no worse than any other best-effort naming scheme here — a same-key
 /// rewrite never calls this, it always reuses its already-indexed filename).
-fn unique_filename(dir: &Path, base: &str) -> String {
-    if !dir.join(base).exists() {
-        return base.to_string();
+/// The disambiguator goes before `ext`, not after, so collisions read as
+/// `Title (2).mp3` rather than `Title.mp3 (2)`.
+fn unique_filename(dir: &Path, base: &str, ext: Option<&str>) -> String {
+    let name = |suffix: Option<u32>| match (suffix, ext) {
+        (None, None) => base.to_string(),
+        (None, Some(e)) => format!("{base}.{e}"),
+        (Some(n), None) => format!("{base} ({n})"),
+        (Some(n), Some(e)) => format!("{base} ({n}).{e}"),
+    };
+    if !dir.join(name(None)).exists() {
+        return name(None);
     }
     let mut n = 2;
     loop {
-        let candidate = format!("{base} ({n})");
+        let candidate = name(Some(n));
         if !dir.join(&candidate).exists() {
             return candidate;
         }
@@ -173,15 +208,17 @@ impl MediaCache {
     /// cached. Later calls for the same key always return the same
     /// filename, even if the track's title later changes — the redb index,
     /// not the `Store`'s current state, is the source of truth for an
-    /// already-cached entry's on-disk name.
-    fn dest(&self, source: &SourceId, uri: &str) -> io::Result<PathBuf> {
+    /// already-cached entry's on-disk name. `ext` (from `sniff_ext`) is only
+    /// used on that first-write branch; an already-indexed entry keeps its
+    /// existing filename regardless of what this call's `ext` is.
+    fn dest(&self, source: &SourceId, uri: &str, ext: Option<&str>) -> io::Result<PathBuf> {
         let source_dir = self.dir.join(sanitize(source.as_str()));
         let filename = match self.filename(source, uri) {
             Some(f) => f,
             None => {
                 let base = sanitize_display(&self.display_name(source, uri));
                 let base = if base.is_empty() { sanitize(uri) } else { base };
-                let filename = unique_filename(&source_dir, &base);
+                let filename = unique_filename(&source_dir, &base, ext);
                 let w = self.index.begin_write().map_err(to_io_err)?;
                 {
                     let mut t = w.open_table(INDEX).map_err(to_io_err)?;
@@ -208,7 +245,8 @@ impl MediaCache {
     /// the same rendition (a scan plugin racing `play_from_cache`'s
     /// decode-on-demand) don't clobber each other.
     pub fn put(&self, source: &SourceId, uri: &str, bytes: &[u8]) -> io::Result<PathBuf> {
-        self.store_bytes(source, uri, |f| io::Write::write_all(f, bytes))
+        let ext = sniff_ext(bytes);
+        self.store_bytes(source, uri, ext, |f| io::Write::write_all(f, bytes))
     }
 
     /// Like `put`, but copies from an existing local file instead of
@@ -216,7 +254,8 @@ impl MediaCache {
     /// downloaded, or already has, a local copy) that already has the bytes
     /// on disk.
     pub fn put_file(&self, source: &SourceId, uri: &str, src: &std::path::Path) -> io::Result<PathBuf> {
-        self.store_bytes(source, uri, |f| {
+        let ext = sniff_ext_path(src);
+        self.store_bytes(source, uri, ext, |f| {
             io::copy(&mut std::fs::File::open(src)?, f).map(|_| ())
         })
     }
@@ -230,7 +269,8 @@ impl MediaCache {
     pub fn link_local(&self, source: &SourceId, uri: &str, src: &std::path::Path) -> io::Result<PathBuf> {
         let lock = self.lock(source, uri);
         let _guard = lock.lock().unwrap();
-        let dest = self.dest(source, uri)?;
+        let ext = sniff_ext_path(src);
+        let dest = self.dest(source, uri, ext)?;
         std::fs::create_dir_all(dest.parent().expect("dest always has a parent"))?;
         let _ = std::fs::remove_file(&dest);
         #[cfg(unix)]
@@ -249,12 +289,13 @@ impl MediaCache {
         &self,
         source: &SourceId,
         uri: &str,
+        ext: Option<&str>,
         write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
     ) -> io::Result<PathBuf> {
         let lock = self.lock(source, uri);
         let _guard = lock.lock().unwrap();
 
-        let dest = self.dest(source, uri)?;
+        let dest = self.dest(source, uri, ext)?;
         let dir = dest.parent().expect("dest always has a parent");
         std::fs::create_dir_all(dir)?;
         let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
