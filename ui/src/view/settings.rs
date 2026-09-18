@@ -79,16 +79,16 @@ impl SettingsPane {
 impl MedleyView {
     /// Settings pane's row cursor.
     pub(super) fn jump_settings(&mut self, up: bool, step: usize) {
-        let pane_cfg = self.pane_cfg;
+        let pane_cfg = self.panes.cfg;
         let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
-        let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
+        let h = self.panes.content_dims(Pane::Settings, self.last_screen_size).map_or(0, |(_, h)| h);
         self.settings.list.jump(up, step, n, h);
     }
 
     /// Enter/Space on the Settings pane's selected row.
     pub(super) fn toggle_selected_setting(&mut self) {
         let cursor = self.settings.list.cursor;
-        let pane_cfg = self.pane_cfg;
+        let pane_cfg = self.panes.cfg;
         let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
             return;
         };

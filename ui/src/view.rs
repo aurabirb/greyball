@@ -1,6 +1,5 @@
 //! `MedleyView` — the whole TUI in one snapshot-rendered cursive view.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,7 +11,7 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode, Session, Side};
+use core::{Command, HotkeyTarget, LogBuf, Session, Side};
 
 use crate::{SessionHandle, keybindings};
 use crate::command::Pane;
@@ -23,7 +22,7 @@ use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
 use log::LogPane;
-use panes::{list_screen_for_pane, split};
+use panes::{PaneLayout, list_screen_for_pane};
 use playlist_picker::PlaylistPicker;
 use playlists::PlaylistNav;
 use rows::{Row, draw_row_list};
@@ -93,8 +92,6 @@ pub struct MedleyView {
     screen: usize,
     /// Each screen's cursor and scroll window; a wheel scroll moves only the window, `clamp_scroll` re-follows.
     lists: [ListState; N_SCREENS],
-    /// The main list's rect as of the last layout pass (matches `draw`'s `main_rect`).
-    last_main_rect: Rect,
     /// Whole-terminal size as of the last layout pass.
     last_screen_size: Vec2,
     editing: Editing,
@@ -103,14 +100,7 @@ pub struct MedleyView {
     /// Last queue/wedge result.
     queue_feedback: Option<String>,
     playlists: PlaylistNav,
-
-    open_panes: Vec<Pane>,
-    /// Shared default placement — screen vs. embedded, which side, which stacking axis.
-    pane_cfg: PaneLayoutConfig,
-    /// Per-pane override of `pane_cfg.mode` — `:panes <pane> <screen| embedded>`.
-    pane_mode_overrides: HashMap<Pane, PaneMode>,
-    /// Each embedded pane's rect as of the last layout pass, mirroring `last_main_rect`.
-    last_pane_rects: Vec<(Pane, Rect)>,
+    panes: PaneLayout,
     log: LogPane,
     /// Text of the last committed `Command::Search`, so an empty result list can say "no results for X".
     last_query: Option<String>,
@@ -119,8 +109,6 @@ pub struct MedleyView {
     focus: Focus,
     /// The Vis pane's background worker + last computed frame.
     vis: Arc<crate::vis::Vis>,
-    /// `PaneMode::Screen`'s pane, shown fullscreen in place of the normal 3 screens.
-    screen_pane: Option<Pane>,
     /// The plugin-warnings modal.
     warnings: Option<WarningsModal>,
     /// (when, screen, row index) of the last left-click on a list row, for double-click detection.
@@ -140,23 +128,18 @@ impl MedleyView {
             session,
             screen,
             lists: [ListState::default(); N_SCREENS],
-            last_main_rect: Rect::from_size((0, 0), (0, 0)),
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
             filter: LocalFilter::default(),
             queue_feedback: None,
             playlists: PlaylistNav::default(),
-            open_panes: Vec::new(),
-            pane_cfg,
-            pane_mode_overrides: HashMap::new(),
-            last_pane_rects: Vec::new(),
+            panes: PaneLayout::new(pane_cfg),
             log: LogPane::new(log),
             last_query: None,
             settings: SettingsPane::default(),
             focus: Focus::Main,
             vis,
-            screen_pane: None,
             warnings: None,
             last_click: None,
             hotkeys: HotkeyUi::default(),
@@ -169,11 +152,11 @@ impl MedleyView {
     /// `Main`, then each open pane (in stack order), then the warnings button.
     fn focus_order(&self) -> Vec<Focus> {
         // `open_panes` only ever holds panes currently placed `Embedded` (see `toggle_pane`).
-        let mut order = if self.open_panes.is_empty() {
+        let mut order = if self.panes.open.is_empty() {
             vec![Focus::Main]
         } else {
             std::iter::once(Focus::Main)
-                .chain(self.open_panes.iter().map(|&p| Focus::Pane(p)))
+                .chain(self.panes.open.iter().map(|&p| Focus::Pane(p)))
                 .collect()
         };
         if self.warn_count() > 0 {
@@ -211,7 +194,7 @@ impl MedleyView {
 }
 impl View for MedleyView {
     fn draw(&self, printer: &Printer) {
-        if let Some(pane) = self.screen_pane {
+        if let Some(pane) = self.panes.fullscreen {
             self.draw_screen_pane(pane, printer);
             return;
         }
@@ -231,7 +214,7 @@ impl View for MedleyView {
             return;
         }
 
-        let (main_rect, panes) = split(printer.size, &self.open_panes, self.pane_cfg);
+        let (main_rect, panes) = self.panes.split(printer.size);
 
         // Resolved before the list so `rows` is only ever asked for the visible window.
         let list_h = self.list_h();
@@ -274,7 +257,7 @@ impl View for MedleyView {
                                 && s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid))
                         }
                     };
-                let settings = if want_settings { settings_entries(s, self.pane_cfg) } else { Vec::new() };
+                let settings = if want_settings { settings_entries(s, self.panes.cfg) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk the visible list every redraw so it's prioritized over store order.
                 if let Some(scan) = &s.scan {
@@ -333,9 +316,9 @@ impl View for MedleyView {
         }
         if !panes.is_empty() {
             // One-cell separator between main content and the pane block.
-            match self.pane_cfg.side {
+            match self.panes.cfg.side {
                 Side::Left | Side::Right => {
-                    let x = if self.pane_cfg.side == Side::Left {
+                    let x = if self.panes.cfg.side == Side::Left {
                         main_rect.top_left().x - 1
                     } else {
                         main_rect.top_left().x + main_rect.width()
@@ -346,7 +329,7 @@ impl View for MedleyView {
                     }
                 }
                 Side::Top | Side::Bottom => {
-                    let y = if self.pane_cfg.side == Side::Top {
+                    let y = if self.panes.cfg.side == Side::Top {
                         main_rect.top_left().y - 1
                     } else {
                         main_rect.top_left().y + main_rect.height()
@@ -444,22 +427,11 @@ impl View for MedleyView {
                 picker.relayout(screen_size_changed, constraint, n);
             }
         }
-        let (main_rect, panes) = split(constraint, &self.open_panes, self.pane_cfg);
-        let old_pane_heights: Vec<(Pane, usize)> = self
-            .last_pane_rects
-            .iter()
-            .map(|&(p, r)| (p, r.height().saturating_sub(1)))
-            .collect();
-        let main_h_changed = main_rect.height() != self.last_main_rect.height();
-        self.last_main_rect = main_rect;
-        self.last_pane_rects = panes;
+        let (main_h_changed, pane_bodies) = self.panes.relayout(constraint);
         let list_h = self.list_h();
         self.relayout_list(self.screen, main_h_changed, list_h);
-        for i in 0..self.last_pane_rects.len() {
-            let (pane, rect) = self.last_pane_rects[i];
+        for (pane, h, changed) in pane_bodies {
             if let Some(screen) = list_screen_for_pane(pane) {
-                let h = rect.height().saturating_sub(1);
-                let changed = old_pane_heights.iter().find(|(p, _)| *p == pane).map(|&(_, oh)| oh) != Some(h);
                 self.relayout_list(screen, changed, h);
             }
         }
@@ -528,10 +500,10 @@ impl View for MedleyView {
         }
 
         // Fullscreen Screen-mode pane: Esc closes it, nav keys scroll it, everything else is swallowed.
-        if let Some(pane) = self.screen_pane {
+        if let Some(pane) = self.panes.fullscreen {
             return match event {
                 Event::Key(Key::Esc) => {
-                    self.screen_pane = None;
+                    self.panes.fullscreen = None;
                     if pane == Pane::Vis {
                         self.vis.set_enabled(false);
                         return EventResult::with_cb(|siv| siv.set_fps(crate::BASELINE_FPS));
@@ -618,7 +590,7 @@ impl View for MedleyView {
             if let Some(result) = self.handle_mouse(offset, position, mev) {
                 return result;
             }
-            for (pane, rect) in self.last_pane_rects.clone() {
+            for (pane, rect) in self.panes.rects.clone() {
                 if let Some(result) = self.handle_pane_mouse(pane, rect, offset, position, mev) {
                     return result;
                 }

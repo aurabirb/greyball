@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cursive::{Printer, Rect, Vec2};
 use cursive::event::EventResult;
 use cursive::theme::ColorStyle;
@@ -31,8 +33,76 @@ pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
     (Side::Top, Axis::Horizontal),
 ];
 
+/// Which optional panes are up and where: docked around the main content, or one of them fullscreen.
+pub(super) struct PaneLayout {
+    /// Docked panes in stack order, first = nearest the main content.
+    pub(super) open: Vec<Pane>,
+    /// Shared default placement; `:panes` changes it live, `side`/`stack` apply to every docked pane.
+    pub(super) cfg: PaneLayoutConfig,
+    /// Per-pane override of `cfg.mode`, applied the next time that pane is toggled.
+    pub(super) mode_overrides: HashMap<Pane, PaneMode>,
+    /// The pane shown fullscreen in place of the screens; Esc is the only way out.
+    pub(super) fullscreen: Option<Pane>,
+    /// The main list's rect as of the last layout pass.
+    pub(super) main_rect: Rect,
+    /// Each docked pane's rect as of the last layout pass.
+    pub(super) rects: Vec<(Pane, Rect)>,
+}
+
+impl PaneLayout {
+    pub(super) fn new(cfg: PaneLayoutConfig) -> Self {
+        Self {
+            open: Vec::new(),
+            cfg,
+            mode_overrides: HashMap::new(),
+            fullscreen: None,
+            main_rect: Rect::from_size((0, 0), (0, 0)),
+            rects: Vec::new(),
+        }
+    }
+
+    fn mode(&self, pane: Pane) -> PaneMode {
+        self.mode_overrides.get(&pane).copied().unwrap_or(self.cfg.mode)
+    }
+
+    /// The main content rect and each docked pane's rect on a `size` screen.
+    pub(super) fn split(&self, size: Vec2) -> (Rect, Vec<(Pane, Rect)>) {
+        split(size, &self.open, self.cfg)
+    }
+
+    /// Recomputes the rects: `(main height changed, per docked pane (pane, body height, it changed))`.
+    pub(super) fn relayout(&mut self, size: Vec2) -> (bool, Vec<(Pane, usize, bool)>) {
+        let (main_rect, rects) = self.split(size);
+        let main_h_changed = main_rect.height() != self.main_rect.height();
+        let bodies = rects
+            .iter()
+            .map(|&(pane, rect)| {
+                let h = rect.height().saturating_sub(1);
+                (pane, h, self.body_h(pane) != Some(h))
+            })
+            .collect();
+        self.main_rect = main_rect;
+        self.rects = rects;
+        (main_h_changed, bodies)
+    }
+
+    /// Rows a docked `pane` has under its title row, as of the last layout pass.
+    pub(super) fn body_h(&self, pane: Pane) -> Option<usize> {
+        self.rects.iter().find(|&&(p, _)| p == pane).map(|&(_, rect)| rect.height().saturating_sub(1))
+    }
+
+    /// The `(width, rows)` `pane`'s content is rendered into right now, fullscreen or docked.
+    pub(super) fn content_dims(&self, pane: Pane, screen: Vec2) -> Option<(usize, usize)> {
+        if self.fullscreen == Some(pane) {
+            Some((screen.x, screen.y.saturating_sub(2)))
+        } else {
+            self.rects.iter().find(|&&(p, _)| p == pane).map(|&(_, rect)| (rect.width(), rect.height().saturating_sub(1)))
+        }
+    }
+}
+
 /// Partitions the full screen into the main content rect and one rect per currently-open **embedded** pane.
-pub(super) fn split(total: Vec2, open_panes: &[Pane], cfg: PaneLayoutConfig) -> (Rect, Vec<(Pane, Rect)>) {
+fn split(total: Vec2, open_panes: &[Pane], cfg: PaneLayoutConfig) -> (Rect, Vec<(Pane, Rect)>) {
     let band = Vec2::new(total.x, total.y.saturating_sub(TAB_BAR_ROWS + BOTTOM_BAR_ROWS));
     if open_panes.is_empty() {
         return (Rect::from_size((0, TAB_BAR_ROWS), band), Vec::new());
@@ -139,7 +209,7 @@ impl MedleyView {
             Pane::Vis => self.vis.draw(&content, true),
             Pane::Log => self.log.draw(&content, true),
             Pane::Settings => {
-                let pane_cfg = self.pane_cfg;
+                let pane_cfg = self.panes.cfg;
                 let entries = self.with_session(|s| settings_entries(s, pane_cfg));
                 self.settings.draw(&content, &entries, true);
             }
@@ -156,24 +226,19 @@ impl MedleyView {
         });
     }
 
-    /// `pane`'s own placement: its `pane_mode_overrides` entry, else the shared default.
-    fn pane_mode(&self, pane: Pane) -> PaneMode {
-        self.pane_mode_overrides.get(&pane).copied().unwrap_or(self.pane_cfg.mode)
-    }
-
-    /// Open/close `pane`, per its own `pane_mode` — `:log`, `:settings`, bare `:vis`, `:queue`, `:history`.
+    /// Open/close `pane`, per its own placement mode — `:log`, `:settings`, bare `:vis`, `:queue`, `:history`.
     pub(super) fn toggle_pane(&mut self, pane: Pane) {
-        if self.pane_mode(pane) == PaneMode::Screen {
+        if self.panes.mode(pane) == PaneMode::Screen {
             if let Some(screen) = list_screen_for_pane(pane) {
                 self.screen = screen;
                 self.playlists.leave();
             } else {
-                self.screen_pane = if self.screen_pane == Some(pane) { None } else { Some(pane) };
+                self.panes.fullscreen = if self.panes.fullscreen == Some(pane) { None } else { Some(pane) };
             }
-        } else if let Some(i) = self.open_panes.iter().position(|&p| p == pane) {
-            self.open_panes.remove(i);
+        } else if let Some(i) = self.panes.open.iter().position(|&p| p == pane) {
+            self.panes.open.remove(i);
         } else {
-            self.open_panes.push(pane);
+            self.panes.open.push(pane);
         }
         self.clamp_focus();
         self.clamp_scroll(); // covers the screen-switch branch above; a no-op otherwise
@@ -181,7 +246,7 @@ impl MedleyView {
 
     /// Sync cursive's own redraw rate to whether/how fast the Vis pane needs to animate.
     pub(super) fn vis_fps_cb(&self) -> EventResult {
-        let vis_open = self.open_panes.contains(&Pane::Vis) || self.screen_pane == Some(Pane::Vis);
+        let vis_open = self.panes.open.contains(&Pane::Vis) || self.panes.fullscreen == Some(Pane::Vis);
         self.vis.set_enabled(vis_open);
         let fps = if vis_open { crate::vis::FPS } else { crate::BASELINE_FPS };
         EventResult::with_cb(move |siv| siv.set_fps(fps))
@@ -192,22 +257,10 @@ impl MedleyView {
         match pane {
             Pane::Settings => self.jump_settings(up, step),
             Pane::Log => {
-                let dims = self.pane_content_dims(pane);
+                let dims = self.panes.content_dims(pane, self.last_screen_size);
                 self.log.scroll_by(up, step, dims);
             }
             Pane::Vis | Pane::Queue | Pane::History => {}
-        }
-    }
-
-    /// The (width, content rows) `pane` is rendered into right now, under its title row.
-    pub(super) fn pane_content_dims(&self, pane: Pane) -> Option<(usize, usize)> {
-        if self.screen_pane == Some(pane) {
-            Some((self.last_screen_size.x, self.last_screen_size.y.saturating_sub(2)))
-        } else {
-            self.last_pane_rects
-                .iter()
-                .find(|&&(p, _)| p == pane)
-                .map(|&(_, rect)| (rect.width(), rect.height().saturating_sub(1)))
         }
     }
 }

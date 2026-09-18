@@ -23,7 +23,7 @@ pub(super) struct LocalFilter {
 /// The last `filtered_tracks` result, plus the key it was computed under.
 struct FilterCache {
     screen: usize,
-    /// `(open_playlist, open_remote)` identity, so two same-length playlists never share a cache entry.
+    /// `PlaylistNav::list_id`, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
     source_len: usize,

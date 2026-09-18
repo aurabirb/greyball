@@ -98,17 +98,17 @@ impl MedleyView {
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
                     // `side`/`stack` stay shared layout geometry regardless of `patch.pane`.
                     if let Some(side) = patch.side {
-                        self.pane_cfg.side = side;
+                        self.panes.cfg.side = side;
                     }
                     if let Some(stack) = patch.stack {
-                        self.pane_cfg.stack = stack;
+                        self.panes.cfg.stack = stack;
                     }
                     if let Some(mode) = patch.mode {
                         match patch.pane {
                             Some(pane) => {
-                                self.pane_mode_overrides.insert(pane, mode);
+                                self.panes.mode_overrides.insert(pane, mode);
                             }
-                            None => self.pane_cfg.mode = mode,
+                            None => self.panes.cfg.mode = mode,
                         }
                     }
                     self.clamp_focus();
@@ -276,9 +276,9 @@ impl MedleyView {
             }
             Action::ConfirmUnlike(id) => self.confirm_unlike(id),
             Action::CyclePaneLayout => {
-                let cur = (self.pane_cfg.side, self.pane_cfg.stack);
+                let cur = (self.panes.cfg.side, self.panes.cfg.stack);
                 let next = PANE_LAYOUT_CYCLE.iter().position(|&c| c == cur).map_or(0, |i| (i + 1) % PANE_LAYOUT_CYCLE.len());
-                (self.pane_cfg.side, self.pane_cfg.stack) = PANE_LAYOUT_CYCLE[next];
+                (self.panes.cfg.side, self.panes.cfg.stack) = PANE_LAYOUT_CYCLE[next];
                 EventResult::consumed()
             }
             Action::None => EventResult::Ignored,

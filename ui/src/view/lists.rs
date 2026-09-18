@@ -237,12 +237,7 @@ impl MedleyView {
         let Some(screen) = self.active_list_screen() else { return EventResult::Ignored };
         let len = self.with_session(|s| self.list_len(s, screen));
         let view_h = match self.focus {
-            Focus::Pane(pane) => self
-                .last_pane_rects
-                .iter()
-                .find(|(p, _)| *p == pane)
-                .map(|&(_, rect)| rect.height().saturating_sub(1))
-                .unwrap_or(0),
+            Focus::Pane(pane) => self.panes.body_h(pane).unwrap_or(0),
             _ => self.list_h(),
         };
         self.lists[screen].jump(up, step, len, view_h);
@@ -263,7 +258,7 @@ impl MedleyView {
 
     /// Visible list rows as of the last layout pass — `last_main_rect` minus its title row.
     pub(super) fn list_h(&self) -> usize {
-        self.last_main_rect.height().saturating_sub(LIST_TITLE_ROWS)
+        self.panes.main_rect.height().saturating_sub(LIST_TITLE_ROWS)
     }
 
     /// Keep each visible list's window around its cursor.
@@ -272,9 +267,9 @@ impl MedleyView {
         // A focused docked list-pane has its own cursor and scroll window, sized to its own rect.
         if let Focus::Pane(pane) = self.focus
             && let Some(screen) = list_screen_for_pane(pane)
-            && let Some(&(_, rect)) = self.last_pane_rects.iter().find(|(p, _)| *p == pane)
+            && let Some(h) = self.panes.body_h(pane)
         {
-            self.lists[screen].follow(rect.height().saturating_sub(1));
+            self.lists[screen].follow(h);
         }
     }
 

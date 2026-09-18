@@ -44,7 +44,7 @@ impl MedleyView {
     /// Mouse handling for the main list — kept entirely separate from the keyboard path in `on_event`.
     pub(super) fn handle_mouse(&mut self, offset: Vec2, position: Vec2, event: MouseEvent) -> Option<EventResult> {
         let local = position.checked_sub(offset)?;
-        let rect = self.last_main_rect;
+        let rect = self.panes.main_rect;
         let (rx, ry) = (rect.top_left().x, rect.top_left().y);
         if local.x < rx || local.x >= rx + rect.width() || local.y < ry || local.y >= ry + rect.height() {
             return None;
