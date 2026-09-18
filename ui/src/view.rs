@@ -14,7 +14,7 @@ use cursive::{
     Cursive, Printer, Rect, Vec2, View,
     direction::Direction,
     event::{Event, EventResult, Key, MouseButton, MouseEvent},
-    theme::{BaseColor, Color, ColorStyle},
+    theme::{BaseColor, Color, ColorStyle, Effect, Style},
     view::CannotFocus,
     views::Dialog,
 };
@@ -23,7 +23,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
 use core::{
-    Axis, BrowseNode, Command, CoreEvent, Dispatch, HotkeyTarget, LogBuf, PaneLayoutConfig,
+    Axis, BrowseNode, Command, CoreEvent, Dispatch, HotkeyMembership, HotkeyTarget, LogBuf, PaneLayoutConfig,
     PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session, SetupKind,
     Side, SourceId, TOGGLABLE_SOURCES, TrackId,
 };
@@ -323,41 +323,52 @@ fn resolve_remembered_playlist(
 }
 
 
-/// One column's rendered cell: text plus a color override, from
-/// `render_cell` — `color: None` means draw it in the row's normal color
-/// like every other cell (the common case for every column but `tags`
-/// today).
+/// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
 #[derive(Clone)]
-struct Cell {
+struct Span {
     text: String,
     color: Option<Color>,
+    italic: bool,
+}
+
+/// One column's rendered cell, from `render_cell`.
+#[derive(Clone)]
+struct Cell {
+    spans: Vec<Span>,
 }
 
 impl Cell {
     fn plain(text: impl Into<String>) -> Self {
-        Self { text: text.into(), color: None }
+        Self::colored(text, None)
+    }
+
+    fn colored(text: impl Into<String>, color: Option<Color>) -> Self {
+        Self { spans: vec![Span { text: text.into(), color, italic: false }] }
+    }
+
+    fn text(&self) -> String {
+        self.spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn styled(&self) -> bool {
+        self.spans.iter().any(|s| s.italic || s.color.is_some())
     }
 }
 
-/// A rendered row plus whether it is the now-playing track. Every column is
-/// a `Cell` (text + optional color) produced by `render_cell`, so a future
-/// per-column renderer needs no changes here — just another `Column` arm.
+/// A rendered list row; every column is a `Cell` produced by `render_cell`.
 struct Row {
     tags: Cell,
     main: Cell,
-    /// Hotkey chars of every hotkey-bound (non-synthetic) playlist this
-    /// row's track belongs to, sorted and concatenated (e.g. "Cgm") — blank
-    /// if none match, or if a relevant playlist's membership hasn't loaded
-    /// into `ViewCache` yet.
+    /// One letter per hotkey-bound playlist holding this track, italic while that membership is pending.
     hotkeys: Cell,
     source: Cell,
     duration: Cell,
     current: bool,
+    /// This row's own presence in the list on screen is still settling (a remote add/remove in flight).
+    pending: bool,
 }
 
-/// A `Row` with only its main column set — every non-track list row (a
-/// placeholder message, a playlist/folder entry on the Playlists screen's
-/// top level) shares this shape.
+/// A `Row` with only its main column set — placeholder messages and the Playlists top level.
 fn plain_row(main: impl Into<String>) -> Row {
     Row {
         tags: Cell::plain(""),
@@ -366,6 +377,7 @@ fn plain_row(main: impl Into<String>) -> Row {
         duration: Cell::plain(""),
         hotkeys: Cell::plain(""),
         current: false,
+        pending: false,
     }
 }
 
@@ -1502,12 +1514,17 @@ impl MedleyView {
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
     fn rows(&self, s: &Session, screen: usize, offset: usize, limit: usize) -> Vec<Row> {
         let screen = norm_screen(screen);
+        let pending: HashSet<TrackId> = match &self.open_remote {
+            Some((sid, _, node)) if screen == PLAYLISTS => s.remote_pending_ids(sid, node).into_iter().collect(),
+            _ => HashSet::new(),
+        };
+        let track_rows = |tracks| tracks_to_rows(s, tracks, &pending);
         if let Some(matched) = self.filtered_tracks(s, screen) {
             let query = self.active_filter().unwrap_or_default();
             if matched.is_empty() {
                 return vec![plain_row(format!("no matches for {query:?}"))];
             }
-            return tracks_to_rows(s, matched.into_iter().skip(offset).take(limit).collect());
+            return track_rows(matched.into_iter().skip(offset).take(limit).collect());
         }
         match screen {
             NOW_PLAYING => {
@@ -1516,7 +1533,7 @@ impl MedleyView {
                     // to show a tracklist of yet.
                     vec![plain_row("nothing played yet — press Enter on a track to start playing")]
                 } else {
-                    tracks_to_rows(s, s.playing_context_window(offset, limit))
+                    track_rows(s.playing_context_window(offset, limit))
                 }
             }
             SEARCH => {
@@ -1530,29 +1547,19 @@ impl MedleyView {
                         None => vec![],
                     }
                 } else {
-                    tracks_to_rows(s, s.results_window(offset, limit))
+                    track_rows(s.results_window(offset, limit))
                 }
             }
-            QUEUE => tracks_to_rows(s, s.queue_window(offset, limit)),
-            HIST => tracks_to_rows(s, s.history_window(offset, limit)),
+            QUEUE => track_rows(s.queue_window(offset, limit)),
+            HIST => track_rows(s.history_window(offset, limit)),
             PLAYLISTS => {
                 if let Some(id) = self.open_playlist {
-                    tracks_to_rows(s, s.playlist_window(id, offset, limit))
+                    track_rows(s.playlist_window(id, offset, limit))
                 } else if let Some((sid, _, node)) = &self.open_remote {
-                    let mut rows = tracks_to_rows(s, s.remote_playlist_window(sid, node, offset, limit));
-                    // Room left on this page (i.e. the real tail was
-                    // reached) — append tracks still mid-add so they don't
-                    // look like the add silently failed while the source's
-                    // playlist fetch catches up (see `pending_remote_adds`).
-                    for track_name in s.pending_remote_adds(sid, node) {
-                        if rows.len() >= limit {
-                            break;
-                        }
-                        rows.push(plain_row(format!("{track_name}  (adding…)")));
-                    }
-                    rows
+                    track_rows(s.remote_playlist_window(sid, node, offset, limit))
                 } else {
                     // Was unwindowed — mismatched draw()'s `idx = i + offset`.
+                    let playlists = s.playlists();
                     self.top_rows(s)
                         .into_iter()
                         .skip(offset)
@@ -1561,8 +1568,8 @@ impl MedleyView {
                             let key = s.playlist_hotkey(&row.target());
                             let mut r = match &row {
                                 TopRow::Local(id) => {
-                                    let p = s.playlists().into_iter().find(|p| p.id == *id);
-                                    let name = p.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+                                    let p = playlists.iter().find(|p| p.id == *id);
+                                    let name = p.map(|p| p.name.clone()).unwrap_or_default();
                                     let count = p.map(|p| p.items.len()).unwrap_or(0);
                                     plain_row(format!("{name}  ({count} tracks)"))
                                 }
@@ -2491,48 +2498,35 @@ enum Column {
     Duration,
 }
 
-/// The single per-column cell renderer: given a track and whatever context a
-/// column might need, produces that column's `Cell` (text + optional color
-/// override). `Tags` (bpm tempo-coloring) and `Hotkeys` (hotkey-playlist
-/// membership) are the two columns that actually use `visible`/`hotkeys`
-/// today; `Main`/`Source`/`Duration` just pass the track's own field through
-/// unstyled — but every column goes through this one function, so a future
-/// context-driven cell (for any column) is just another match arm here,
-/// without `draw_list_body`/`five_col`/`Row` changing again.
-fn render_cell(
-    col: Column,
-    t: &core::Track,
-    cached: bool,
-    visible: &[String],
-    hotkeys: &[(char, HashSet<TrackId>)],
-) -> Cell {
+/// The single per-column cell renderer — a pure function of the track plus the state handed in.
+fn render_cell(col: Column, t: &core::Track, cached: bool, visible: &[String], hotkeys: &[HotkeyMembership]) -> Cell {
     match col {
         Column::Tags => {
             let color = visible.iter().find_map(|attr| t.attrs.get(attr).and_then(|v| tag_color(attr, v)));
-            Cell { text: t.tags(visible), color }
+            Cell::colored(t.tags(visible), color)
         }
         Column::Main => Cell::plain(t.main()),
         Column::Source => Cell::plain(t.source(cached)),
         Column::Duration => Cell::plain(t.duration()),
-        Column::Hotkeys => {
-            let mut chars: Vec<char> = hotkeys.iter().filter(|(_, ids)| ids.contains(&t.id)).map(|(ch, _)| *ch).collect();
-            chars.sort_unstable();
-            Cell::plain(chars.into_iter().collect::<String>())
-        }
+        Column::Hotkeys => Cell {
+            spans: hotkeys
+                .iter()
+                .filter_map(|m| {
+                    let italic = m.pending.contains(&t.id);
+                    (italic || m.members.contains(&t.id))
+                        .then(|| Span { text: m.key.to_string(), color: None, italic })
+                })
+                .collect(),
+        },
     }
 }
 
-fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>) -> Vec<Row> {
-    // Resolved once per call rather than once per row: `is_current` used to
-    // take `&Session` and re-fetch the whole now-playing `Track` (a store
-    // round trip) on every row, every redraw — for a list running into the
-    // thousands (Spotify Liked Songs) that alone was enough to lock up the
-    // UI while scrolling. `hotkey_playlist_membership` is the same idea for
-    // the hotkeys column: build every hotkey-bound playlist's membership set
-    // once per call, not once per row.
+/// The one track-row builder every list and docked pane goes through. `pending`: tracks whose
+/// presence in the list being drawn is still settling.
+fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &HashSet<TrackId>) -> Vec<Row> {
     let now_playing = s.now_playing_id();
     let visible = &s.cfg.visible_track_attrs;
-    let hotkeys = hotkey_playlist_membership(s);
+    let hotkeys = s.hotkey_memberships();
     tracks
         .into_iter()
         .map(|t| {
@@ -2544,39 +2538,8 @@ fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>) -> Vec<Row> {
                 source: render_cell(Column::Source, &t, cached, visible, &hotkeys),
                 duration: render_cell(Column::Duration, &t, cached, visible, &hotkeys),
                 current: t.is_current(now_playing),
+                pending: pending.contains(&t.id),
             }
-        })
-        .collect()
-}
-
-/// `(hotkey char, member track ids)` for every currently hotkey-bound
-/// playlist, excluding synthetic ones (e.g. Spotify's "Liked Songs") — the
-/// hotkeys column's per-track lookup table, built once per `tracks_to_rows`
-/// call. A local playlist's membership is always fully known; a remote
-/// (e.g. Spotify) playlist's set only has however much of it has loaded into
-/// `ViewCache` so far — reading `Session::remote_playlist_track_ids` (its
-/// `want=0` form, the same one cursor-bounds checks use on every keypress)
-/// so a hotkey-bound remote playlist actually starts loading in the
-/// background instead of staying permanently blank until the user happens
-/// to browse to it; `ensure_remote_playlist_tracks` only kicks a fetch that
-/// isn't already in flight and never blocks the caller.
-fn hotkey_playlist_membership(s: &Session) -> Vec<(char, HashSet<TrackId>)> {
-    s.hotkeys()
-        .into_iter()
-        .filter_map(|(ch, target)| {
-            let ids = match &target {
-                HotkeyTarget::Local(id) => Some(s.playlist_track_ids(*id)),
-                HotkeyTarget::Remote(sid, node) => {
-                    if s.is_synthetic_playlist(sid, node) {
-                        None
-                    } else {
-                        Some(s.remote_playlist_track_ids(sid, node))
-                    }
-                }
-                // Not a playlist — nothing to show in the hotkeys column.
-                HotkeyTarget::Builtin(_) => None,
-            }?;
-            Some((ch, ids.into_iter().collect()))
         })
         .collect()
 }
@@ -2838,44 +2801,46 @@ fn draw_row_list(printer: &Printer, title: &str, rows: &[Row], offset: usize, se
 fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
-    for (i, row) in rows.iter().enumerate() {
-        let y = i;
-        let idx = i + offset;
+    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
+    for (y, row) in rows.iter().enumerate() {
+        let selected = y + offset == sel;
         let mark = if row.current { "> " } else { "  " };
-        let line = format!(
-            "{mark}{}",
-            five_col(
-                &row.tags.text,
-                &row.main.text,
-                &row.hotkeys.text,
-                &row.source.text,
-                &row.duration.text,
-                content_w.saturating_sub(ROW_MARK_W),
-            )
-        );
-        let line = pad(&line, content_w);
-        if idx == sel {
-            printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
+        let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
+        let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
+        let cols = five_col(&tags, &main, &hotkeys, &source, &duration, content_w.saturating_sub(ROW_MARK_W));
+        let line = pad(&format!("{mark}{cols}"), content_w);
+        let mut row_style = Style::from(if selected {
+            ColorStyle::highlight()
         } else if row.current {
-            printer.with_color(ColorStyle::secondary(), |p| p.print((0, y), &line));
+            ColorStyle::secondary()
         } else {
-            printer.print((0, y), &line);
-            // Selection/now-playing highlight above takes the whole line —
-            // a per-cell color only shows through on an otherwise-plain row.
-            let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
-            for ((start, width, right_aligned), cell) in
-                column_layout(content_w.saturating_sub(ROW_MARK_W)).into_iter().zip(cells)
-            {
-                if let Some(color) = cell.color {
-                    let text = if right_aligned {
-                        pad_right_aligned(&cell.text, width)
-                    } else {
-                        pad(&cell.text, width)
-                    };
-                    printer.with_color(ColorStyle::front(color), |p| {
-                        p.print((mark.width() + start, y), &text)
-                    });
+            ColorStyle::primary()
+        });
+        if row.pending {
+            row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
+        }
+        printer.with_style(row_style, |p| p.print((0, y), &line));
+        // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
+        let plain = !selected && !row.current;
+        for (&(start, width, right_aligned), cell) in layout.iter().zip(cells) {
+            if !cell.styled() {
+                continue;
+            }
+            let end = ROW_MARK_W + start + width;
+            let indent = if right_aligned { width.saturating_sub(cell.text().width()) } else { 0 };
+            let mut x = ROW_MARK_W + start + indent;
+            for span in &cell.spans {
+                let text = truncate(&span.text, end.saturating_sub(x));
+                let mut style = row_style;
+                if plain && let Some(color) = span.color {
+                    style = style.combine(ColorStyle::front(color));
                 }
+                // Combining an effect twice toggles it back off.
+                if span.italic && !row.pending {
+                    style = style.combine(Effect::Italic);
+                }
+                printer.with_style(style, |p| p.print((x, y), &text));
+                x += text.width();
             }
         }
     }

@@ -1,8 +1,9 @@
 //! `Session`: the headless engine. All application state lives here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use rand::prelude::*;
@@ -313,8 +314,28 @@ struct PlaybackContext {
     shuffle_bag: Vec<usize>,
 }
 
-/// `Session::pending_remote_adds`' entry shape — see its field doc.
-type PendingRemoteAdd = (SourceId, BrowseNode, TrackId, String);
+/// One playlist-bound hotkey's row of the hotkeys column: `members` show its letter, `pending` italicize it.
+pub struct HotkeyMembership {
+    pub key: char,
+    pub members: HashSet<TrackId>,
+    pub pending: HashSet<TrackId>,
+}
+
+struct HotkeyMemo {
+    table: Arc<Vec<HotkeyMembership>>,
+    dirty: bool,
+    /// A bound remote playlist hadn't finished loading as of `built`.
+    loading: bool,
+    built: Instant,
+}
+
+impl Default for HotkeyMemo {
+    fn default() -> Self {
+        Self { table: Arc::default(), dirty: true, loading: false, built: Instant::now() }
+    }
+}
+
+const HOTKEY_MEMO_LOADING_RECHECK: Duration = Duration::from_secs(1);
 
 pub struct Session {
     pub bus: Bus,
@@ -391,14 +412,8 @@ pub struct Session {
     /// hotkey-menu footer, same pull-on-redraw pattern as `plugin_statuses`.
     membership_feedback: Arc<Mutex<Option<String>>>,
 
-    /// Tracks whose `toggle_remote_playlist_membership` add is still running
-    /// on its background thread, keyed by the `(source, node)` they're being
-    /// added to — the UI's Playlists screen reads this to draw a "still
-    /// adding" placeholder row for a track that isn't in
-    /// `remote_playlist_track_ids` yet, instead of the add looking like it
-    /// silently failed while the real fetch catches up. Cleared once that
-    /// thread finishes (success or failure) — see `toggle_remote_playlist_membership`.
-    pending_remote_adds: Arc<Mutex<Vec<PendingRemoteAdd>>>,
+    /// Memoized hotkeys-column lookup — see `hotkey_memberships`.
+    hotkey_memberships: Mutex<HotkeyMemo>,
 
     /// Most recent `Plugin::setup` outcome per plugin, until superseded — see
     /// `plugin_statuses`. Written by the UI's `run_plugin_setup` once
@@ -500,7 +515,7 @@ impl Session {
             hotkeys: HashMap::new(),
             view: ViewCache::default(),
             membership_feedback: Arc::new(Mutex::new(None)),
-            pending_remote_adds: Arc::new(Mutex::new(Vec::new())),
+            hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
         }
@@ -614,7 +629,7 @@ impl Session {
                     notes: String::new(),
                     items: vec![],
                 };
-                self.store.upsert_playlist(&p)?;
+                self.save_playlist(&p)?;
                 Ok(Dispatch::Ok)
             }
             Command::AddToPlaylist { track, playlist } => {
@@ -623,7 +638,7 @@ impl Session {
                     .get_playlist(playlist)?
                     .ok_or(Error::NotFound)?;
                 p.items.push(track);
-                self.store.upsert_playlist(&p)?;
+                self.save_playlist(&p)?;
                 Ok(Dispatch::Ok)
             }
             Command::TogglePlaylistMembership { track, playlist } => {
@@ -692,9 +707,11 @@ impl Session {
                 self.refresh_cached_track(*id);
                 Ok(true)
             }
-            CoreEvent::QueueChanged | CoreEvent::PlaylistsChanged | CoreEvent::SearchDone { .. } => {
+            CoreEvent::PlaylistsChanged => {
+                self.invalidate_hotkey_memberships();
                 Ok(true)
             }
+            CoreEvent::QueueChanged | CoreEvent::SearchDone { .. } => Ok(true),
             CoreEvent::PlayRequested(id) => {
                 self.play_track(*id, true);
                 Ok(true)
@@ -1289,30 +1306,29 @@ impl Session {
         })
     }
 
-    /// Binds `key` to `target` — dropping `target`'s previous key (if any)
-    /// and stealing `key` from whatever other target held it. Refuses (with
-    /// `Err(occupant)`) if `key` is currently a *built-in* action's key —
-    /// either explicitly remapped there or still sitting at its unremapped
-    /// default — and `target` isn't itself that action: built-in keys can
-    /// only move by being remapped, never be silently stolen out from under
-    /// the app. Otherwise returns the target `key` was stolen from, if any.
+    /// Binds `key` to `target`, dropping `target`'s previous key and stealing `key` from any
+    /// other playlist; returns who it was stolen from. `Err(occupant)` when `key` is a
+    /// built-in action's key — those only move by being remapped themselves.
     pub fn bind_hotkey(
         &mut self,
         key: char,
         target: HotkeyTarget,
     ) -> std::result::Result<Option<HotkeyTarget>, HotkeyTarget> {
-        bind_hotkey(&mut self.hotkeys, key, target)
+        let stolen = bind_hotkey(&mut self.hotkeys, key, target)?;
+        self.invalidate_hotkey_memberships();
+        Ok(stolen)
     }
 
     /// Clears `target`'s hotkey, if it has one.
     pub fn unbind_hotkey(&mut self, target: &HotkeyTarget) {
         self.hotkeys.retain(|_, p| p != target);
+        self.invalidate_hotkey_memberships();
     }
 
-    /// Replaces the whole hotkey map wholesale — `app` calls this once at
-    /// startup with what `state.toml` had persisted.
+    /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
         self.hotkeys = hotkeys;
+        self.invalidate_hotkey_memberships();
     }
 
     /// Sets a source's persisted `enabled` bit; takes effect next restart, like editing config.toml.
@@ -1764,7 +1780,7 @@ impl Session {
                 .map(|(s, _)| if *s < 0 { 0 } else { (*s as u32).saturating_mul(1000) })
                 .unwrap_or(0);
 
-            let before: std::collections::HashSet<TrackId> =
+            let before: HashSet<TrackId> =
                 self.store.all_tracks()?.iter().map(|t| t.id).collect();
 
             let mut canonical: Option<TrackId> = None;
@@ -1836,7 +1852,7 @@ impl Session {
                 pl.name = name.clone();
                 pl.notes = doc.playlist.notes.clone();
                 pl.items = items.clone();
-                self.store.upsert_playlist(&pl)?;
+                self.save_playlist(&pl)?;
                 pid
             }
             None => {
@@ -1847,13 +1863,11 @@ impl Session {
                     items: items.clone(),
                 };
                 let pid = pl.id;
-                self.store.upsert_playlist(&pl)?;
+                self.save_playlist(&pl)?;
                 pid
             }
         };
 
-        // 7. tell the front-end.
-        self.bus.send(CoreEvent::PlaylistsChanged);
         let _ = pid;
 
         log::info!(
@@ -1924,8 +1938,7 @@ impl Session {
         match pl {
             Some(pl) => {
                 if added > 0 {
-                    self.store.upsert_playlist(&pl)?;
-                    self.bus.send(CoreEvent::PlaylistsChanged);
+                    self.save_playlist(&pl)?;
                 }
                 log::info!("add: \"{}\" — {added} added, {skipped} skipped", pl.name);
                 Ok(Dispatch::Modal(if skipped > 0 {
@@ -1945,91 +1958,94 @@ impl Session {
         }
     }
 
-    /// `Command::TogglePlaylistMembership`'s dispatch: local playlists mutate
-    /// `self.store` directly (cheap, synchronous); a remote target hands off
-    /// to `toggle_remote_playlist_membership`, which runs the actual network
-    /// call in the background and reports back through `membership_feedback`.
+    /// Local playlists flip synchronously in the store; a remote one settles on a background
+    /// thread (`ViewCache::toggle_remote_membership`). Both announce via `PlaylistsChanged`.
     fn toggle_playlist_membership(&mut self, track: TrackId, target: HotkeyTarget) -> Result<Dispatch> {
         match target {
             HotkeyTarget::Local(playlist) => {
                 let mut p = self.store.get_playlist(playlist)?.ok_or(Error::NotFound)?;
                 toggle_membership(&mut p.items, track);
-                self.store.upsert_playlist(&p)?;
-                Ok(Dispatch::Ok)
+                self.save_playlist(&p)?;
             }
-            HotkeyTarget::Remote(source, node) => {
-                self.toggle_remote_playlist_membership(track, source, node);
-                Ok(Dispatch::Ok)
-            }
-            // `keybindings::hotkey_toggle` never resolves a `Builtin` target
-            // into this command — kept here only so the match stays exhaustive.
-            HotkeyTarget::Builtin(_) => Ok(Dispatch::Ok),
+            HotkeyTarget::Remote(source, node) => self.toggle_remote_playlist_membership(track, source, node),
+            HotkeyTarget::Builtin(_) => {}
         }
+        Ok(Dispatch::Ok)
     }
 
-    /// Add/remove `track` on `source`'s playlist `node` — the non-local half
-    /// of `toggle_playlist_membership`. `Source::add_to_playlist`/
-    /// `remove_from_playlist` are blocking network calls, so — mirroring
-    /// `ViewCache::ensure_remote_playlist_tracks`'s browse-off-the-caller's-
-    /// thread pattern — the call itself runs on a spawned background thread
-    /// and this returns immediately; the hotkey keypress that triggered it
-    /// never blocks on round-trip time. The result (success or error) is
-    /// written to `membership_feedback` for the UI to pick up on its own
-    /// schedule, not pushed anywhere.
     fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode) {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
-            return;
-        };
-        let Some(rendition) = t.renditions.iter().find(|r| r.source == source).cloned() else {
-            let msg = format!("Can't toggle: track isn't on {source}");
-            log::error!("toggle_playlist_membership: {msg}");
-            *self.membership_feedback.lock().unwrap() = Some(msg);
             return;
         };
         let Some(src) = self.sources.get(&source).cloned() else {
             return;
         };
-        let is_member = self.remote_playlist_track_ids(&source, &node).contains(&track);
         let name = t.display_name();
+        let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {
+            let msg = format!("Can't toggle {name:?}: track isn't on {source}");
+            log::error!("toggle_playlist_membership: {msg}");
+            *self.membership_feedback.lock().unwrap() = Some(msg);
+            return;
+        };
         let feedback = self.membership_feedback.clone();
-        let pending = self.pending_remote_adds.clone();
-        if !is_member {
-            pending.lock().unwrap().push((source.clone(), node.clone(), track, name.clone()));
-        }
-        let (pending_source, pending_node) = (source.clone(), node.clone());
-        std::thread::spawn(move || {
-            let result = if is_member {
-                src.remove_from_playlist(&node, &rendition.uri)
-            } else {
-                src.add_to_playlist(&node, &rendition.uri)
-            };
-            let msg = match result {
-                Ok(()) if is_member => format!("Removed {name:?} from playlist"),
-                Ok(()) => format!("Added {name:?} to playlist"),
-                Err(e) => {
-                    log::error!("toggle_playlist_membership[{source}]: {e}");
-                    format!("Can't toggle {name:?}: {e}")
-                }
-            };
+        let started = self.view.toggle_remote_membership(t, uri, src, node, self.remote_ctx(), move |msg| {
             *feedback.lock().unwrap() = Some(msg);
-            pending
-                .lock()
-                .unwrap()
-                .retain(|(s, n, t, _)| !(*s == pending_source && *n == pending_node && *t == track));
         });
+        if started {
+            self.invalidate_hotkey_memberships();
+        } else {
+            *self.membership_feedback.lock().unwrap() = Some(format!("Still updating {name:?} in that playlist"));
+        }
     }
 
-    /// Tracks currently mid-add to `source`'s playlist `node` (see
-    /// `pending_remote_adds`) — display names for a placeholder row while
-    /// the real fetch hasn't caught up yet.
-    pub fn pending_remote_adds(&self, source: &SourceId, node: &BrowseNode) -> Vec<String> {
-        self.pending_remote_adds
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(s, n, ..)| s == source && n == node)
-            .map(|(.., name)| name.clone())
-            .collect()
+    /// Tracks with an add/remove still in flight on this remote playlist — its rows render as pending.
+    pub fn remote_pending_ids(&self, source: &SourceId, node: &BrowseNode) -> Vec<TrackId> {
+        self.view.remote_pending_ids(source, node)
+    }
+
+    /// The hotkeys column's lookup table, one entry per playlist-bound key. Rebuilt only after a
+    /// membership-changing event (`invalidate_hotkey_memberships`), or once per
+    /// `HOTKEY_MEMO_LOADING_RECHECK` while a bound remote playlist is still loading — each
+    /// rebuild is what nudges that playlist's background load along.
+    pub fn hotkey_memberships(&self) -> Arc<Vec<HotkeyMembership>> {
+        let mut memo = self.hotkey_memberships.lock().unwrap();
+        let stale = memo.dirty || (memo.loading && memo.built.elapsed() >= HOTKEY_MEMO_LOADING_RECHECK);
+        if stale {
+            let mut loading = false;
+            let mut table: Vec<HotkeyMembership> = self
+                .hotkeys
+                .iter()
+                .filter_map(|(&key, target)| match target {
+                    HotkeyTarget::Local(id) => Some(HotkeyMembership {
+                        key,
+                        members: self.playlist_track_ids(*id).into_iter().collect(),
+                        pending: HashSet::new(),
+                    }),
+                    HotkeyTarget::Remote(sid, node) if !self.is_synthetic_playlist(sid, node) => {
+                        let members = self.remote_playlist_track_ids(sid, node).into_iter().collect();
+                        loading |= self.remote_playlist_loading(sid, node);
+                        let pending = self.remote_pending_ids(sid, node).into_iter().collect();
+                        Some(HotkeyMembership { key, members, pending })
+                    }
+                    HotkeyTarget::Remote(..) | HotkeyTarget::Builtin(_) => None,
+                })
+                .collect();
+            table.sort_unstable_by_key(|m| m.key);
+            *memo = HotkeyMemo { table: Arc::new(table), dirty: false, loading, built: Instant::now() };
+        }
+        memo.table.clone()
+    }
+
+    /// The one write path for a user playlist, so everything derived from its contents hears about it.
+    fn save_playlist(&self, playlist: &Playlist) -> Result<()> {
+        self.store.upsert_playlist(playlist)?;
+        self.invalidate_hotkey_memberships();
+        self.bus.send(CoreEvent::PlaylistsChanged);
+        Ok(())
+    }
+
+    fn invalidate_hotkey_memberships(&self) {
+        self.hotkey_memberships.lock().unwrap().dirty = true;
     }
 
     /// Every (source, liked/favorites node, rendition uri) triple for `track`

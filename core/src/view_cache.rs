@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
 use crate::event::{Bus, CoreEvent};
@@ -75,6 +76,30 @@ impl RemotePlaylistTracks {
     }
 }
 
+/// One track's membership in one playlist, as a hotkey toggle sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Membership {
+    Member,
+    NotMember,
+    PendingAdd,
+    PendingRemove,
+}
+
+/// An in-flight remote add/remove; `add` starts as a guess off the loaded prefix.
+struct PendingChange {
+    track: Track,
+    add: bool,
+}
+
+type RemoteKey = (SourceId, BrowseNode);
+type TracksCache = Arc<Mutex<HashMap<RemoteKey, RemotePlaylistTracks>>>;
+type PendingChanges = Arc<Mutex<HashMap<RemoteKey, Vec<PendingChange>>>>;
+
+/// How often a pending toggle re-checks whether its playlist finished loading.
+const MEMBERSHIP_POLL: Duration = Duration::from_millis(250);
+/// A toggle gives up rather than wait forever on a playlist that never finishes loading.
+const MEMBERSHIP_LOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// See `RemotePlaylistTracks::consecutive_failures` — matches the retry-bound
 /// precedent set for Spotify's session-reconnect streak
 /// (`sources/spotify/src/player.rs`'s `Link::died_streak`), though this is a
@@ -134,7 +159,7 @@ struct RemotePlaylistDeps {
     catalog: Arc<Catalog>,
     store: Arc<dyn Store>,
     bus: Bus,
-    cache: Arc<Mutex<HashMap<(SourceId, BrowseNode), RemotePlaylistTracks>>>,
+    cache: TracksCache,
 }
 
 #[derive(Default)]
@@ -157,7 +182,9 @@ pub(crate) struct ViewCache {
     /// `Arc`-wrapped so that thread can hold its own handle to the map
     /// (`ensure_remote_playlist_tracks`) — until a call comes back
     /// non-partial with nothing left to ingest and the entry freezes.
-    remote_playlist_tracks: Arc<Mutex<HashMap<(SourceId, BrowseNode), RemotePlaylistTracks>>>,
+    remote_playlist_tracks: TracksCache,
+    /// In-flight hotkey toggles per remote playlist — see `toggle_remote_membership`.
+    pending: PendingChanges,
 }
 
 impl ViewCache {
@@ -319,15 +346,18 @@ impl ViewCache {
         // want=0: called on every keypress for cursor bounds, not just
         // Command::PlayContext — mustn't force full-speed loading itself.
         self.ensure_remote_playlist_tracks(source, node, 0, ctx);
-        self.remote_playlist_cached(source, node, |e| e.tracks.iter().map(|t| t.id).collect())
-            .unwrap_or_default()
+        let mut ids: Vec<TrackId> = self
+            .remote_playlist_cached(source, node, |e| e.tracks.iter().map(|t| t.id).collect())
+            .unwrap_or_default();
+        ids.extend(self.pending_adds(source, node).iter().map(|t| t.id));
+        ids
     }
 
     /// Cheap count of a remote playlist's ingested tracks so far.
     pub fn remote_playlist_len(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) -> usize {
         self.ensure_remote_playlist_tracks(source, node, 0, ctx);
-        self.remote_playlist_cached(source, node, |e| e.tracks.len())
-            .unwrap_or(0)
+        self.remote_playlist_cached(source, node, |e| e.tracks.len()).unwrap_or(0)
+            + self.pending_adds(source, node).len()
     }
 
     /// A window of a remote playlist's ingested tracks (`offset..offset+limit`)
@@ -344,10 +374,54 @@ impl ViewCache {
         // slightly before the user scrolls past the loaded edge.
         const WINDOW_MARGIN: usize = 50;
         self.ensure_remote_playlist_tracks(source, node, offset + limit + WINDOW_MARGIN, ctx);
-        self.remote_playlist_cached(source, node, |e| {
-            e.tracks.iter().skip(offset).take(limit).cloned().collect()
-        })
-        .unwrap_or_default()
+        let (mut window, settled_len): (Vec<Track>, usize) = self
+            .remote_playlist_cached(source, node, |e| {
+                (e.tracks.iter().skip(offset).take(limit).cloned().collect(), e.tracks.len())
+            })
+            .unwrap_or_default();
+        let room = limit.saturating_sub(window.len());
+        if room > 0 {
+            let skip = offset.saturating_sub(settled_len);
+            window.extend(self.pending_adds(source, node).into_iter().skip(skip).take(room));
+        }
+        window
+    }
+
+    /// Tracks mid-add to `(source, node)` that the loaded list doesn't hold yet — its pending tail rows.
+    fn pending_adds(&self, source: &SourceId, node: &BrowseNode) -> Vec<Track> {
+        let key = (source.clone(), node.clone());
+        let adds: Vec<Track> = match self.pending.lock().unwrap().get(&key) {
+            Some(changes) => changes.iter().filter(|c| c.add).map(|c| c.track.clone()).collect(),
+            None => return Vec::new(),
+        };
+        let cache = self.remote_playlist_tracks.lock().unwrap();
+        let loaded = cache.get(&key).map(|e| e.tracks.as_slice()).unwrap_or_default();
+        adds.into_iter().filter(|t| !loaded.iter().any(|l| l.id == t.id)).collect()
+    }
+
+    /// Tracks with an add or remove still in flight on `(source, node)`.
+    pub fn remote_pending_ids(&self, source: &SourceId, node: &BrowseNode) -> Vec<TrackId> {
+        let key = (source.clone(), node.clone());
+        self.pending
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|changes| changes.iter().map(|c| c.track.id).collect())
+            .unwrap_or_default()
+    }
+
+    /// Pending state wins over the loaded list, so a press mid-request never reads as settled.
+    fn remote_membership(&self, source: &SourceId, node: &BrowseNode, track: TrackId) -> Membership {
+        let key = (source.clone(), node.clone());
+        if let Some(change) =
+            self.pending.lock().unwrap().get(&key).and_then(|c| c.iter().find(|c| c.track.id == track))
+        {
+            return if change.add { Membership::PendingAdd } else { Membership::PendingRemove };
+        }
+        let member = self
+            .remote_playlist_cached(source, node, |e| e.tracks.iter().any(|t| t.id == track))
+            .unwrap_or(false);
+        if member { Membership::Member } else { Membership::NotMember }
     }
 
     /// Is `source`'s top-level playlist-folder list still loading? `true` before anything lands.
@@ -372,6 +446,123 @@ impl ViewCache {
         self.remote_playlist_tracks.lock().unwrap().get(&key).map(f)
     }
 
+    /// Flip `track`'s membership of `(source, node)` on a background thread. Add-vs-remove is
+    /// decided only once the whole list has loaded, so a partial prefix never reads as "absent".
+    /// `false` (nothing sent) when a change for this `(playlist, track)` is already in flight.
+    pub fn toggle_remote_membership(
+        &self,
+        track: Track,
+        uri: String,
+        source: Arc<dyn Source>,
+        node: BrowseNode,
+        ctx: RemoteCtx,
+        report: impl FnOnce(String) + Send + 'static,
+    ) -> bool {
+        let key = (source.id(), node.clone());
+        let guess_add = self.remote_membership(&key.0, &node, track.id) == Membership::NotMember;
+        {
+            let mut pending = self.pending.lock().unwrap();
+            let changes = pending.entry(key.clone()).or_default();
+            if changes.iter().any(|c| c.track.id == track.id) {
+                return false;
+            }
+            changes.push(PendingChange { track: track.clone(), add: guess_add });
+        }
+        let deps = RemotePlaylistDeps {
+            catalog: ctx.catalog.clone(),
+            store: ctx.store.clone(),
+            bus: ctx.bus.clone(),
+            cache: self.remote_playlist_tracks.clone(),
+        };
+        let pending = self.pending.clone();
+        deps.bus.send(CoreEvent::PlaylistsChanged);
+
+        std::thread::spawn(move || {
+            let name = track.display_name();
+            let outcome = Self::await_loaded_membership(&deps, &source, &key, track.id).and_then(|member| {
+                if let Some(changes) = pending.lock().unwrap().get_mut(&key)
+                    && let Some(change) = changes.iter_mut().find(|c| c.track.id == track.id)
+                {
+                    change.add = !member;
+                }
+                deps.bus.send(CoreEvent::PlaylistsChanged);
+                let result = if member {
+                    source.remove_from_playlist(&node, &uri)
+                } else {
+                    source.add_to_playlist(&node, &uri)
+                };
+                result.map(|()| member).map_err(|e| e.to_string())
+            });
+            let ids: Option<Vec<TrackId>> = {
+                // Both locks held so no redraw sees the track neither pending nor settled.
+                let mut pending = pending.lock().unwrap();
+                let mut cache = deps.cache.lock().unwrap();
+                if let Some(changes) = pending.get_mut(&key) {
+                    changes.retain(|c| c.track.id != track.id);
+                }
+                match (&outcome, cache.get_mut(&key)) {
+                    (Ok(was_member), Some(entry)) => {
+                        if *was_member {
+                            entry.tracks.retain(|t| t.id != track.id);
+                        } else {
+                            entry.tracks.push(track.clone());
+                        }
+                        entry.persisted_len = entry.tracks.len();
+                        Some(entry.tracks.iter().map(|t| t.id).collect())
+                    }
+                    _ => None,
+                }
+            };
+            let cache_key = remote_playlist_cache_key(&key.0, &key.1);
+            if let Some(ids) = ids
+                && let Err(e) = deps.store.set_remote_playlist_ids(&cache_key, &ids)
+            {
+                log::warn!("remote playlist cache: failed to persist {cache_key}: {e}");
+            }
+            report(match outcome {
+                Ok(true) => format!("Removed {name:?} from playlist"),
+                Ok(false) => format!("Added {name:?} to playlist"),
+                Err(e) => {
+                    log::error!("toggle_playlist_membership[{cache_key}]: {e}");
+                    format!("Can't toggle {name:?}: {e}")
+                }
+            });
+            deps.bus.send(CoreEvent::PlaylistsChanged);
+        });
+        true
+    }
+
+    /// Blocks (background threads only) until `key`'s list is fully loaded, then says whether it holds `track`.
+    fn await_loaded_membership(
+        deps: &RemotePlaylistDeps,
+        source: &Arc<dyn Source>,
+        key: &RemoteKey,
+        track: TrackId,
+    ) -> Result<bool, String> {
+        let sources = HashMap::from([(key.0.clone(), source.clone())]);
+        let ctx = RemoteCtx { sources: &sources, store: &deps.store, catalog: &deps.catalog, bus: &deps.bus };
+        let deadline = Instant::now() + MEMBERSHIP_LOAD_TIMEOUT;
+        loop {
+            Self::ensure_tracks(&deps.cache, &key.0, &key.1, usize::MAX, ctx);
+            let loaded = deps.cache.lock().unwrap().get(key).and_then(|e| {
+                (!e.partial && !e.browsing && !e.ingesting)
+                    .then(|| (e.errored, e.tracks.iter().any(|t| t.id == track)))
+            });
+            match loaded {
+                Some((false, member)) => return Ok(member),
+                Some((true, _)) => return Err("the playlist didn't load completely".to_string()),
+                None if Instant::now() >= deadline => {
+                    return Err("timed out waiting for the playlist to load".to_string());
+                }
+                None => std::thread::sleep(MEMBERSHIP_POLL),
+            }
+        }
+    }
+
+    fn ensure_remote_playlist_tracks(&self, source: &SourceId, node: &BrowseNode, want: usize, ctx: RemoteCtx) {
+        Self::ensure_tracks(&self.remote_playlist_tracks, source, node, want, ctx);
+    }
+
     /// Ensure `remote_playlist_tracks`'s cache entry for `(source, node)`
     /// reflects the latest `browse()` call. Cheap and safe to call on every
     /// redraw: the actual `Source::browse` call — which for a plain
@@ -394,8 +585,8 @@ impl ViewCache {
     /// `partial: false` *and* nothing is left to ingest, or with an error
     /// (a permanent failure, e.g. a 403 on a playlist we're not allowed to
     /// see, must not be retried on every redraw either).
-    fn ensure_remote_playlist_tracks(
-        &self,
+    fn ensure_tracks(
+        tracks_cache: &TracksCache,
         source: &SourceId,
         node: &BrowseNode,
         want: usize,
@@ -404,7 +595,7 @@ impl ViewCache {
         let key = (source.clone(), node.clone());
         let cache_key = remote_playlist_cache_key(source, node);
         let (cached_len, needs_revalidation, retrying) = {
-            let mut cache = self.remote_playlist_tracks.lock().unwrap();
+            let mut cache = tracks_cache.lock().unwrap();
             match cache.get_mut(&key) {
                 Some(entry) if entry.ingesting || entry.browsing => return,
                 // Frozen on a genuine end-of-list: nothing more to fetch.
@@ -456,7 +647,7 @@ impl ViewCache {
         };
 
         let Some(source_handle) = ctx.sources.get(source).cloned() else {
-            if let Some(entry) = self.remote_playlist_tracks.lock().unwrap().get_mut(&key) {
+            if let Some(entry) = tracks_cache.lock().unwrap().get_mut(&key) {
                 entry.browsing = false;
             }
             return;
@@ -472,7 +663,7 @@ impl ViewCache {
             catalog: ctx.catalog.clone(),
             store: ctx.store.clone(),
             bus: ctx.bus.clone(),
-            cache: self.remote_playlist_tracks.clone(),
+            cache: tracks_cache.clone(),
         };
 
         std::thread::spawn(move || {
