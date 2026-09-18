@@ -11,7 +11,7 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, LogBuf, Session, Side};
+use core::{Command, LogBuf, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::command::Pane;
@@ -151,7 +151,7 @@ impl MedleyView {
 
     /// `Main`, then each open pane (in stack order), then the warnings button.
     fn focus_order(&self) -> Vec<Focus> {
-        // `open_panes` only ever holds panes currently placed `Embedded` (see `toggle_pane`).
+        // `panes.open` only ever holds docked panes (see `toggle_pane`).
         let mut order = if self.panes.open.is_empty() {
             vec![Focus::Main]
         } else {
@@ -181,6 +181,7 @@ impl MedleyView {
     fn fallback_focus(&self) -> Focus {
         Focus::Main
     }
+
     // `session` is a non-reentrant `Mutex`: always lock via `with_session`, never twice in one statement.
     fn with_session<R>(&self, f: impl FnOnce(&Session) -> R) -> R {
         let guard = self.session.lock().unwrap();
@@ -192,6 +193,7 @@ impl MedleyView {
         f(&mut guard)
     }
 }
+
 impl View for MedleyView {
     fn draw(&self, printer: &Printer) {
         if let Some(pane) = self.panes.fullscreen {
@@ -219,7 +221,7 @@ impl View for MedleyView {
         // Resolved before the list so `rows` is only ever asked for the visible window.
         let list_h = self.list_h();
         let sel = self.lists[self.screen].cursor;
-        // Persisted, not recomputed from `sel` — see `list_offset`'s doc.
+        // Persisted, not recomputed from `sel` — see `lists`.
         let offset = self.lists[self.screen].offset;
 
         // A docked Queue/History pane needs the same triple the main content does, for its own rect/screen/cursor.
@@ -315,30 +317,7 @@ impl View for MedleyView {
             self.log.draw(&printer.windowed(rect), focused);
         }
         if !panes.is_empty() {
-            // One-cell separator between main content and the pane block.
-            match self.panes.cfg.side {
-                Side::Left | Side::Right => {
-                    let x = if self.panes.cfg.side == Side::Left {
-                        main_rect.top_left().x - 1
-                    } else {
-                        main_rect.top_left().x + main_rect.width()
-                    };
-                    let (y0, y1) = (main_rect.top_left().y, main_rect.top_left().y + main_rect.height());
-                    for y in y0..y1 {
-                        printer.print((x, y), "│");
-                    }
-                }
-                Side::Top | Side::Bottom => {
-                    let y = if self.panes.cfg.side == Side::Top {
-                        main_rect.top_left().y - 1
-                    } else {
-                        main_rect.top_left().y + main_rect.height()
-                    };
-                    for x in 0..printer.size.x {
-                        printer.print((x, y), "─");
-                    }
-                }
-            }
+            self.panes.draw_separator(printer, main_rect);
         }
 
         // Row 0 of the whole screen.
@@ -348,31 +327,7 @@ impl View for MedleyView {
 
         // command / hint line (row above the status line).
         let bottom = printer.size.y.saturating_sub(2);
-        let line = match &self.editing {
-            Editing::Search => format!("/{}", self.buffer),
-            Editing::CommandLine => format!(":{}", self.buffer),
-            Editing::PluginSetup(_) => format!("> {}", self.buffer),
-            Editing::Filter => format!("/{}", self.buffer),
-            // `queue_feedback` (this keypress only) wins over `membership_feedback`.
-            Editing::None => self
-                .queue_feedback
-                .clone()
-                .or(membership_feedback.map(|m| format!("  {m}")))
-                .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
-                .unwrap_or_else(|| {
-                    // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                    if self.screen == PLAYLISTS
-                        && self.with_session(|s| self.selected_hotkey_target(s)).is_some()
-                    {
-                        return "  [`] set hotkey".to_string();
-                    }
-                    let help_key = self
-                        .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)))
-                        .map(String::from)
-                        .unwrap_or_default();
-                    format!("  [{help_key}] help")
-                }),
-        };
+        let line = self.hint_line(membership_feedback);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.

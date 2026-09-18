@@ -5,7 +5,7 @@ use cursive::Cursive;
 use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::views::Dialog;
 
-use core::{Command, CoreEvent, Dispatch, Plugin, SourceId, TrackId};
+use core::{Command, CoreEvent, Dispatch, HotkeyTarget, Plugin, SourceId, TrackId};
 
 use crate::command::{self, Pane};
 use crate::keybindings::Action;
@@ -14,7 +14,6 @@ use super::{HIST, MedleyView, PLAYLISTS, SEARCH};
 use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
-
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
@@ -329,5 +328,34 @@ impl MedleyView {
             self.reset_filter_selection();
         }
         Some(EventResult::consumed())
+    }
+
+    /// The command/hint row: the text being typed, else transient feedback, else a key hint.
+    pub(super) fn hint_line(&self, membership_feedback: Option<String>) -> String {
+        match &self.editing {
+            Editing::Search => format!("/{}", self.buffer),
+            Editing::CommandLine => format!(":{}", self.buffer),
+            Editing::PluginSetup(_) => format!("> {}", self.buffer),
+            Editing::Filter => format!("/{}", self.buffer),
+            // `queue_feedback` (this keypress only) wins over `membership_feedback`.
+            Editing::None => self
+                .queue_feedback
+                .clone()
+                .or(membership_feedback.map(|m| format!("  {m}")))
+                .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
+                .unwrap_or_else(|| {
+                    // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
+                    if self.screen == PLAYLISTS
+                        && self.with_session(|s| self.selected_hotkey_target(s)).is_some()
+                    {
+                        return "  [`] set hotkey".to_string();
+                    }
+                    let help_key = self
+                        .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)))
+                        .map(String::from)
+                        .unwrap_or_default();
+                    format!("  [{help_key}] help")
+                }),
+        }
     }
 }

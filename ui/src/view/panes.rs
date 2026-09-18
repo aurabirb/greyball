@@ -284,3 +284,32 @@ impl MedleyView {
         EventResult::consumed()
     }
 }
+
+impl PaneLayout {
+    /// The one-cell rule between the main content and the docked pane block.
+    pub(super) fn draw_separator(&self, printer: &Printer, main_rect: Rect) {
+        match self.cfg.side {
+            Side::Left | Side::Right => {
+                let x = if self.cfg.side == Side::Left {
+                    main_rect.top_left().x - 1
+                } else {
+                    main_rect.top_left().x + main_rect.width()
+                };
+                let (y0, y1) = (main_rect.top_left().y, main_rect.top_left().y + main_rect.height());
+                for y in y0..y1 {
+                    printer.print((x, y), "│");
+                }
+            }
+            Side::Top | Side::Bottom => {
+                let y = if self.cfg.side == Side::Top {
+                    main_rect.top_left().y - 1
+                } else {
+                    main_rect.top_left().y + main_rect.height()
+                };
+                for x in 0..printer.size.x {
+                    printer.print((x, y), "─");
+                }
+            }
+        }
+    }
+}
