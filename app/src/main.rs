@@ -350,6 +350,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             cfg.soundcloud.oauth_token.clone(),
             token_cache_dir,
             bus.clone(),
+            cfg.soundcloud.hls,
         ));
         // SoundCloud never populates `Wiring::player` (its playback goes
         // through the shared `rodio` below, not yet built at this point in

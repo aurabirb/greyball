@@ -18,14 +18,21 @@ pub struct SoundcloudPlugin {
     /// The token `wiring()` builds a `SoundcloudSource` with — `None` until
     /// a config value, a cached file, or a `setup()` call provides one.
     token: Mutex<Option<String>>,
+    hls: bool,
 }
 
 impl SoundcloudPlugin {
-    pub fn new(client_id: Option<String>, configured_token: Option<String>, cache_dir: PathBuf, bus: Bus) -> Self {
+    pub fn new(
+        client_id: Option<String>,
+        configured_token: Option<String>,
+        cache_dir: PathBuf,
+        bus: Bus,
+        hls: bool,
+    ) -> Self {
         let token = configured_token
             .filter(|s| !s.trim().is_empty())
             .or_else(|| auth::load_cached(&cache_dir));
-        Self { client_id, cache_dir, bus, token: Mutex::new(token) }
+        Self { client_id, cache_dir, bus, token: Mutex::new(token), hls }
     }
 }
 
@@ -60,7 +67,7 @@ impl Plugin for SoundcloudPlugin {
         // this is already only called at startup and right after `setup()`,
         // never per-frame.
         let token = self.token.lock().unwrap().clone();
-        let sc = Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone()));
+        let sc = Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls));
         Wiring {
             source: Some(sc.clone() as Arc<dyn Source>),
             media: Some(sc as Arc<dyn MediaProvider>),

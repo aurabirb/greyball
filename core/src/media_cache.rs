@@ -95,10 +95,11 @@ fn sanitize_display(s: &str) -> String {
     cleaned.trim().chars().take(120).collect()
 }
 
-/// Recognizes the magic bytes of the two containers actually observed in
-/// this cache (raw or ID3-tagged MPEG audio, and Ogg Vorbis) — cheap sniff
-/// only, never a format probe. Anything else (or too few bytes) is `None`,
-/// which leaves the filename extension-less, matching prior behavior.
+/// Recognizes the magic bytes of the containers actually observed in this
+/// cache (raw or ID3-tagged MPEG audio, Ogg Vorbis, and stitched-HLS fMP4
+/// AAC) — cheap sniff only, never a format probe. Anything else (or too few
+/// bytes) is `None`, which leaves the filename extension-less, matching
+/// prior behavior.
 fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 4 && &bytes[..4] == b"OggS" {
         return Some("ogg");
@@ -109,6 +110,9 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
         return Some("mp3");
     }
+    if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" {
+        return Some("m4a");
+    }
     None
 }
 
@@ -116,7 +120,7 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
 /// (`put_file`/`link_local`) — reads a handful of bytes, not the whole file.
 fn sniff_ext_path(path: &Path) -> Option<&'static str> {
     use std::io::Read;
-    let mut buf = [0u8; 4];
+    let mut buf = [0u8; 8];
     let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
     sniff_ext(&buf[..n])
 }

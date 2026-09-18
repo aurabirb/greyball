@@ -13,6 +13,7 @@ fn main() {
         std::env::var("SC_CLIENT_ID").ok(),
         std::env::var("SC_OAUTH_TOKEN").ok(),
         Bus::new(),
+        true,
     );
     let q = SearchQuery { text: query.clone(), kinds: vec![], limit: 5 };
 

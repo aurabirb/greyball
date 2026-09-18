@@ -52,10 +52,13 @@ pub struct SoundcloudSource {
     /// Liked Tracks is the only paginated-in-the-background node so far —
     /// mirrors `sources_spotify::SpotifySource::liked`.
     liked: PagedList,
+    /// From `[soundcloud] hls` — prefer a higher-bitrate HLS stream over
+    /// the 128kbps progressive one when the track offers one.
+    hls: bool,
 }
 
 impl SoundcloudSource {
-    pub fn new(configured_id: Option<String>, oauth_token: Option<String>, bus: Bus) -> Self {
+    pub fn new(configured_id: Option<String>, oauth_token: Option<String>, bus: Bus, hls: bool) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent(UA)
@@ -68,6 +71,7 @@ impl SoundcloudSource {
             oauth_token: oauth_token.filter(|s| !s.trim().is_empty()),
             bus,
             liked: PagedList::new("soundcloud: liked tracks"),
+            hls,
         }
     }
 
@@ -241,6 +245,122 @@ impl SoundcloudSource {
         let total = if consumed == 0 { offset } else { offset + consumed + 1 };
         Ok(RemotePage { hits, total, consumed })
     }
+
+    /// Best-quality HLS path: resolve the AAC-160k transcoding's signed
+    /// playlist, fetch the init segment + every media segment in order, and
+    /// stitch them into one fMP4 file `symphonia` decodes like any other.
+    /// Any failure here is a soft failure — `open`'s caller falls back to
+    /// the progressive stream rather than propagating this error.
+    fn open_hls(&self, track: &ApiTrack) -> Result<Media> {
+        let hls = track
+            .media
+            .transcodings
+            .iter()
+            .find(|t| t.format.protocol == "hls" && t.format.mime_type.starts_with("audio/mp4"))
+            .ok_or_else(|| src_err("no AAC HLS transcoding"))?;
+
+        let id = self.client_id()?;
+        log::debug!("soundcloud: GET {} (resolve HLS playlist url, preset {})", hls.url, hls.preset);
+        let v: serde_json::Value = self
+            .client
+            .get(&hls.url)
+            .query(&[("client_id", id.as_str())])
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| src_err(format!("hls stream url: {e}")))?
+            .json()
+            .map_err(|e| src_err(format!("hls stream url: {e}")))?;
+        let playlist_url = v
+            .get("url")
+            .and_then(|u| u.as_str())
+            .ok_or_else(|| src_err("hls stream url: no 'url' in response"))?;
+
+        log::debug!("soundcloud: GET {playlist_url} (HLS playlist, preset {})", hls.preset);
+        let playlist_text = self
+            .client
+            .get(playlist_url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| src_err(format!("hls playlist: {e}")))?
+            .text()
+            .map_err(|e| src_err(format!("hls playlist: {e}")))?;
+
+        let base = url::Url::parse(playlist_url).map_err(|e| src_err(format!("hls playlist url: {e}")))?;
+        let playlist = parse_hls_playlist(&playlist_text, &base)?;
+        if playlist.segments.is_empty() {
+            return Err(src_err("hls playlist: no media segments"));
+        }
+
+        let mut tmp = tempfile::NamedTempFile::new().map_err(|e| src_err(format!("hls tempfile: {e}")))?;
+        if let Some(init_url) = &playlist.init {
+            self.fetch_into(init_url, &mut tmp)?;
+        }
+        for seg_url in &playlist.segments {
+            self.fetch_into(seg_url, &mut tmp)?;
+        }
+
+        let (_file, path) = tmp.keep().map_err(|e| src_err(format!("hls tempfile persist: {e}")))?;
+        log::info!("soundcloud: playing via HLS (preset {}) instead of 128kbps progressive", hls.preset);
+        Ok(Media::Path(path))
+    }
+
+    /// GETs `url` and appends the response body to `tmp` — no `client_id`
+    /// needed, HLS init/segment URLs are already presigned.
+    fn fetch_into(&self, url: &url::Url, tmp: &mut tempfile::NamedTempFile) -> Result<()> {
+        let bytes = self
+            .client
+            .get(url.clone())
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| src_err(format!("hls fetch {url}: {e}")))?
+            .bytes()
+            .map_err(|e| src_err(format!("hls fetch {url}: {e}")))?;
+        std::io::Write::write_all(tmp, &bytes).map_err(|e| src_err(format!("hls tempfile write: {e}")))
+    }
+}
+
+/// The bits `open_hls` needs out of a media-playlist `.m3u8`: an optional
+/// fMP4 init segment (`#EXT-X-MAP`) and the ordered media segment URLs
+/// (each a non-`#` line following an `#EXTINF`). Hand-rolled rather than a
+/// full HLS crate — this is the whole grammar this MVP needs.
+struct HlsPlaylist {
+    init: Option<url::Url>,
+    segments: Vec<url::Url>,
+}
+
+fn parse_hls_playlist(text: &str, base: &url::Url) -> Result<HlsPlaylist> {
+    let mut init = None;
+    let mut segments = Vec::new();
+    let mut expect_segment = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(attrs) = line.strip_prefix("#EXT-X-MAP:") {
+            if let Some(uri) = ext_x_map_uri(attrs) {
+                init = Some(resolve_hls_url(base, &uri)?);
+            }
+        } else if line.starts_with("#EXTINF") {
+            expect_segment = true;
+        } else if !line.is_empty() && !line.starts_with('#') {
+            if expect_segment {
+                segments.push(resolve_hls_url(base, line)?);
+            }
+            expect_segment = false;
+        }
+    }
+    Ok(HlsPlaylist { init, segments })
+}
+
+/// Pulls `URI="..."` out of an `#EXT-X-MAP:URI="...",...` attribute list.
+fn ext_x_map_uri(attrs: &str) -> Option<String> {
+    attrs
+        .split(',')
+        .map(str::trim)
+        .find_map(|kv| kv.strip_prefix("URI=\"")?.strip_suffix('"'))
+        .map(str::to_string)
+}
+
+fn resolve_hls_url(base: &url::Url, uri: &str) -> Result<url::Url> {
+    base.join(uri).map_err(|e| src_err(format!("hls playlist: bad url {uri:?}: {e}")))
 }
 
 impl Source for SoundcloudSource {
@@ -347,6 +467,13 @@ impl MediaProvider for SoundcloudSource {
             .ok_or_else(|| src_err(format!("not a SoundCloud track: {:?}", r.uri)))?;
         let track = self.track_ref(&track_ref)?;
 
+        if self.hls {
+            match self.open_hls(&track) {
+                Ok(media) => return Ok(media),
+                Err(e) => log::debug!("soundcloud: HLS path unavailable, falling back to progressive: {e}"),
+            }
+        }
+
         // Pick the progressive (plain-file) transcoding; the player downloads it.
         let prog = track
             .media
@@ -443,12 +570,16 @@ struct ApiMedia {
 struct ApiTranscoding {
     url: String,
     format: ApiFormat,
+    #[serde(default)]
+    preset: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct ApiFormat {
     #[serde(default)]
     protocol: String,
+    #[serde(default)]
+    mime_type: String,
 }
 
 impl ApiTrack {

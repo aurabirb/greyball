@@ -104,6 +104,10 @@ pub struct SoundcloudConfig {
     /// SoundCloud source works for search/resolve/play only, and its browse
     /// root has no folders.
     pub oauth_token: Option<String>,
+    /// Prefer a higher-bitrate HLS (AAC 160kbps) stream over the 128kbps
+    /// MP3 progressive stream when the track offers one. On by default —
+    /// this is a verified-working quality improvement, not experimental.
+    pub hls: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -272,6 +276,7 @@ impl Default for SoundcloudConfig {
             enabled: true,
             client_id: None,
             oauth_token: None,
+            hls: true,
         }
     }
 }
