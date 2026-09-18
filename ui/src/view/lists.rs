@@ -12,8 +12,7 @@ use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
 
 use super::tab_bar::screen_name;
 
-/// What `MedleyView::follow_scan` last fed `ScanDriver::follow_view` under — recomputing the id
-/// list (and re-reporting it) only costs something when one of these actually changed.
+/// What `MedleyView::follow_scan` last fed `ScanDriver::follow_view` under, to dedupe re-reports.
 #[derive(PartialEq, Eq)]
 pub(super) struct FollowSignature {
     screen: usize,
@@ -112,7 +111,7 @@ impl MedleyView {
     /// `screen`'s list title row: `<name>`, optionally followed by `  (<hint>)`.
     pub(super) fn list_title(&self, s: &Session, screen: usize) -> String {
         if let Some(query) = self.active_filter().filter(|q| !q.is_empty() && self.filterable_screen(screen)) {
-            let total = self.filtered_len(s, screen).unwrap_or(0);
+            let total = self.list_len(s, screen);
             let plural = if total == 1 { "" } else { "es" };
             return format!("filter {query:?} ({total} match{plural})");
         }
@@ -210,10 +209,9 @@ impl MedleyView {
         }
     }
 
-    /// The current screen's full list length. Never builds the id/track list just to count it —
-    /// every underlying list already exposes a cheap length accessor.
+    /// The current screen's full list length.
     pub(super) fn list_len(&self, s: &Session, screen: usize) -> usize {
-        if let Some(len) = self.filtered_len(s, screen) {
+        if let Some(len) = self.filtered_tracks(s, screen).map(|t| t.len()) {
             return len;
         }
         match screen {
@@ -299,12 +297,7 @@ impl MedleyView {
         self.lists[screen].relayout(resized, len, list_h);
     }
 
-    /// Feeds the scan walk the visible list — but only reruns `visible_track_ids` (a whole-list
-    /// clone) and re-reports it when `screen`'s identity, length, cursor or filter query actually
-    /// changed since the last call, not on every redraw. A length/identity change also covers list
-    /// contents changing with no keypress (search results landing, remote pagination, queue
-    /// advancing), just not a same-length reorder — an accepted approximation, not worth an exact
-    /// content diff every frame.
+    /// Feeds the scan walk the visible list, but only rebuilds/re-reports it when `sig` changed.
     pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: usize) {
         let highlighted = self.lists[screen].cursor;
         let sig = FollowSignature {

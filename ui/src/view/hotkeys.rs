@@ -20,10 +20,8 @@ const LIST_TOP: usize = 2;
 pub(super) struct HotkeyUi {
     /// The fullscreen Hotkeys menu's list; `Some` only while the menu is open.
     pub(super) menu: Option<ListState>,
-    /// Target awaiting its new key — a menu row, or a Playlists-screen row with the menu closed.
-    pub(super) capture: Option<HotkeyTarget>,
-    /// `capture`'s display name, resolved once when it's set rather than every draw.
-    capture_name: Option<String>,
+    /// Target and display name awaiting a new key — a menu row, or a Playlists row with the menu closed.
+    pub(super) capture: Option<(HotkeyTarget, String)>,
     /// Last bind/unbind result, shown until the next keypress.
     pub(super) feedback: Option<String>,
 }
@@ -57,8 +55,7 @@ impl HotkeyUi {
 
         let bottom = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            let line = if self.capture.is_some() {
-                let name = self.capture_name.as_deref().unwrap_or("?");
+            let line = if let Some((_, name)) = &self.capture {
                 format!("  press a key to bind to {name:?}   [Esc] cancel")
             } else if let Some(msg) = &self.feedback {
                 format!("  {msg}")
@@ -99,9 +96,8 @@ impl MedleyView {
             });
             self.hotkeys.draw_menu(list, printer, &keys);
             true
-        } else if let Some(target) = &self.hotkeys.capture {
+        } else if let Some((target, name)) = &self.hotkeys.capture {
             let current = self.with_session(|s| s.playlist_hotkey(target));
-            let name = self.hotkeys.capture_name.as_deref().unwrap_or("?");
             HotkeyUi::draw_capture(printer, name, current);
             true
         } else {
@@ -134,8 +130,7 @@ impl MedleyView {
             }
             ListEvent::Activate => {
                 let action = menu_rows().get(list.cursor).copied();
-                self.hotkeys.capture = action.map(HotkeyTarget::Builtin);
-                self.hotkeys.capture_name = action.map(|a| a.label().to_string());
+                self.hotkeys.capture = action.map(|a| (HotkeyTarget::Builtin(a), a.label().to_string()));
                 EventResult::consumed()
             }
             ListEvent::Unhandled if *event == Event::Key(Key::Backspace) => self.clear_selected_hotkey(),
@@ -155,8 +150,8 @@ impl MedleyView {
 
     /// Opens the standalone "press a key" capture modal for a Playlists-screen row.
     pub(super) fn open_hotkey_capture(&mut self, target: HotkeyTarget) {
-        self.hotkeys.capture_name = Some(self.hotkey_row_name_for(&target));
-        self.hotkeys.capture = Some(target);
+        let name = self.hotkey_row_name_for(&target);
+        self.hotkeys.capture = Some((target, name));
     }
 
     /// This row's display name, looked up fresh.
@@ -172,7 +167,7 @@ impl MedleyView {
 
     /// Binds `key` to the captured target, reports the result as feedback, closes the capture prompt.
     fn bind_captured_key(&mut self, key: char) -> EventResult {
-        let Some(target) = self.hotkeys.capture.take() else {
+        let Some((target, _)) = self.hotkeys.capture.take() else {
             return EventResult::consumed();
         };
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
@@ -205,7 +200,7 @@ impl MedleyView {
 
     /// Backspace on the standalone playlist hotkey modal.
     fn clear_captured_hotkey(&mut self) -> EventResult {
-        let Some(target) = self.hotkeys.capture.take() else {
+        let Some((target, _)) = self.hotkeys.capture.take() else {
             return EventResult::consumed();
         };
         self.clear_hotkey(target)

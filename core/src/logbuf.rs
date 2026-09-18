@@ -35,39 +35,10 @@ impl LogBuf {
         inner.pushed += 1;
     }
 
-    /// Oldest-first snapshot of everything currently buffered.
-    pub fn snapshot(&self) -> Vec<String> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).lines.iter().cloned().collect()
-    }
-
-    /// Current buffered line count (<= its cap).
-    pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).lines.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Monotonic count of lines ever pushed — lets a caller detect how many
-    /// new lines arrived since it last checked, even across eviction.
-    pub fn total_pushed(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).pushed
-    }
-
-    /// The last `n` buffered lines (fewer if the buffer holds less).
-    pub fn tail(&self, n: usize) -> Vec<String> {
+    /// Runs `f` under one lock with the lines and pushed counter for a consistent read; `f` must not log.
+    pub fn with<R>(&self, f: impl FnOnce(&VecDeque<String>, usize) -> R) -> R {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let skip = inner.lines.len().saturating_sub(n);
-        inner.lines.iter().skip(skip).cloned().collect()
-    }
-
-    /// Oldest-first buffered lines in `[lo, hi)`, clamped to what's buffered.
-    pub fn range(&self, lo: usize, hi: usize) -> Vec<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let hi = hi.min(inner.lines.len());
-        let lo = lo.min(hi);
-        inner.lines.iter().skip(lo).take(hi - lo).cloned().collect()
+        f(&inner.lines, inner.pushed)
     }
 }
 

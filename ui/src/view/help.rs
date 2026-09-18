@@ -14,8 +14,7 @@ use super::text::pad;
 /// Row the help screen's content starts on (row 0 = title).
 const LIST_TOP: usize = 1;
 
-/// The help/shortcuts screen (`?` or `:help`), a scrollable text page; exists only while open.
-/// `lines` is built once at open — nothing on this screen can change while it's exclusively focused.
+/// The help/shortcuts screen (`?` or `:help`); `lines` is built once at open.
 pub(super) struct HelpModal {
     scroll: usize,
     lines: Vec<String>,

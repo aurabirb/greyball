@@ -13,6 +13,10 @@
 ## TODOs:
 
 ### Bugs
+- [ ] Confirm Log-pane wheel scrolling is responsive under `RUST_LOG=debug` with a large log; if not,
+  check wheel events queuing up behind draws (coalesce consecutive scroll events) and whether the
+  `pane == Pane::Log` branch in `ui/src/view/mouse.rs`'s `handle_pane_mouse` swallows or mis-routes
+  wheel events.
 - [ ] Spotify: a real-world librespot AP death ("Connection to server closed.", upstream
   [#1151](https://github.com/librespot-org/librespot/issues/1151)/
   [#1486](https://github.com/librespot-org/librespot/issues/1486)) hasn't been observed against the

@@ -99,8 +99,7 @@ impl MedleyView {
         }
     }
 
-    /// `screen`'s tracks narrowed and ranked by the active local filter. `Arc` clone only — the
-    /// caller slices whatever window it actually needs instead of getting a full `Vec<Track>` copy.
+    /// `screen`'s tracks narrowed and ranked by the active local filter; `Arc` clone only.
     pub(super) fn filtered_tracks(&self, s: &Session, screen: usize) -> Option<Arc<[core::Track]>> {
         let query = self.active_filter()?;
         if query.is_empty() || !self.filterable_screen(screen) {
@@ -134,11 +133,6 @@ impl MedleyView {
             result: result.clone(),
         });
         Some(result)
-    }
-
-    /// Cheap count of `filtered_tracks`, `None` if the local filter isn't active on `screen`.
-    pub(super) fn filtered_len(&self, s: &Session, screen: usize) -> Option<usize> {
-        self.filtered_tracks(s, screen).map(|t| t.len())
     }
 
     /// Reset the current screen's cursor/scroll to the top.

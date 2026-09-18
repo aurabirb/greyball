@@ -12,14 +12,13 @@ use super::panes::pane_title;
 use super::scroll::bound_offset;
 use super::text::{pad, wrap};
 
-/// Per-line wrapped-row counts for the current width, kept in step with `LogBuf`'s own eviction
-/// instead of re-wrapping the whole log on every draw/scroll.
+/// Wrapped rows per buffered line, kept in step with `LogBuf`'s own eviction instead of re-wrapping the whole log every draw/scroll.
 struct WrapCache {
-    /// Wrapped row count per buffered line, oldest-first, aligned with `LogBuf`'s current contents.
-    counts: VecDeque<usize>,
-    /// `LogBuf::total_pushed` this cache reflects.
+    /// Wrapped sub-rows per buffered line, oldest-first, aligned with `LogBuf`'s current contents.
+    rows: VecDeque<Vec<String>>,
+    /// `LogBuf`'s pushed counter this cache reflects.
     pushed: usize,
-    /// Width the counts were computed for; `None` forces a resync.
+    /// Width the rows were wrapped for; `None` forces a resync.
     width: Option<usize>,
 }
 
@@ -35,7 +34,7 @@ pub(super) struct LogPane {
 
 impl LogPane {
     pub(super) fn new(buf: Arc<LogBuf>) -> Self {
-        Self { buf, scroll: 0, pin: None, cache: Mutex::new(WrapCache { counts: VecDeque::new(), pushed: 0, width: None }) }
+        Self { buf, scroll: 0, pin: None, cache: Mutex::new(WrapCache { rows: VecDeque::new(), pushed: 0, width: None }) }
     }
 
     /// How many of the buffer's `len` current lines are in view: all of them while
@@ -44,22 +43,21 @@ impl LogPane {
         if self.scroll == 0 { len } else { self.pin.unwrap_or(len).min(len) }
     }
 
-    /// Brings the wrapped-row cache up to date for `width` (appending counts for newly
-    /// pushed lines and dropping evicted ones, or fully rebuilding on a width change),
-    /// and returns the buffer length it synced against.
+    /// Brings the wrap cache up to date for `width` and returns the buffer length it synced against.
     fn sync(&self, width: usize) -> usize {
-        let mut cache = self.cache.lock().unwrap();
-        let pushed = self.buf.total_pushed();
-        let len = self.buf.len();
-        let delta = pushed.saturating_sub(cache.pushed);
-        if cache.width != Some(width) || delta >= len {
-            cache.counts = self.buf.snapshot().iter().map(|l| wrap(l, width).len()).collect();
-        } else if delta > 0 {
-            for line in self.buf.tail(delta) {
-                cache.counts.push_back(wrap(&line, width).len());
-            }
-            while cache.counts.len() > len {
-                cache.counts.pop_front();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let (pushed, len, new_lines, full) = self.buf.with(|lines, pushed| {
+            let delta = pushed.saturating_sub(cache.pushed);
+            let full = cache.width != Some(width) || delta >= lines.len();
+            let take = if full { lines.len() } else { delta };
+            (pushed, lines.len(), lines.iter().rev().take(take).rev().cloned().collect::<Vec<_>>(), full)
+        });
+        if full {
+            cache.rows = new_lines.iter().map(|l| wrap(l, width)).collect();
+        } else {
+            cache.rows.extend(new_lines.iter().map(|l| wrap(l, width)));
+            while cache.rows.len() > len {
+                cache.rows.pop_front();
             }
         }
         cache.pushed = pushed;
@@ -67,9 +65,9 @@ impl LogPane {
         len
     }
 
-    /// The (line index, sub-row) for wrapped row `row`, counting from the front of `counts`.
-    fn locate(counts: impl Iterator<Item = usize>, mut row: usize) -> (usize, usize) {
-        for (i, c) in counts.enumerate() {
+    /// The (line index, sub-row) for wrapped row `row`, counting from the front of `rows`.
+    fn locate(rows: impl Iterator<Item = usize>, mut row: usize) -> (usize, usize) {
+        for (i, c) in rows.enumerate() {
             if row < c {
                 return (i, row);
             }
@@ -78,16 +76,23 @@ impl LogPane {
         (0, 0)
     }
 
+    /// Total wrapped rows over the first `visible_len` cached lines.
+    fn wrapped_len(cache: &WrapCache, visible_len: usize) -> usize {
+        cache.rows.iter().take(visible_len).map(Vec::len).sum()
+    }
+
     /// Scrolls `step` wrapped rows; `dims` is the content area's `(width, rows)`, `None` while not laid out.
     pub(super) fn scroll_by(&mut self, up: bool, step: usize, dims: Option<(usize, usize)>) {
         self.scroll = if up { self.scroll + step } else { self.scroll.saturating_sub(step) };
-        let len = self.buf.len();
+        let raw_len = self.buf.with(|lines, _| lines.len());
         if self.scroll > 0 && self.pin.is_none() {
-            self.pin = Some(len);
+            self.pin = Some(raw_len);
         }
         if let Some((width, h)) = dims {
             let len = self.sync(width);
-            let wrapped_len: usize = self.cache.lock().unwrap().counts.iter().take(self.visible_len(len)).sum();
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            let wrapped_len = Self::wrapped_len(&cache, self.visible_len(len));
+            drop(cache);
             self.scroll = bound_offset(self.scroll, wrapped_len, h);
         }
         if self.scroll == 0 {
@@ -112,7 +117,8 @@ impl LogPane {
         let visible_len = self.visible_len(self.sync(width));
         let h = printer.size.y.saturating_sub(1);
 
-        let total: usize = self.cache.lock().unwrap().counts.iter().take(visible_len).sum();
+        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let total = Self::wrapped_len(&cache, visible_len);
         // Clamp to the top-most full window, so scrolling past the oldest line freezes there.
         let end = total.saturating_sub(self.scroll.min(total.saturating_sub(h)));
         let start = end.saturating_sub(h);
@@ -120,17 +126,16 @@ impl LogPane {
             return;
         }
 
-        let (line_lo, sub_lo) = Self::locate(self.cache.lock().unwrap().counts.iter().take(visible_len).copied(), start);
-        let mut skip = sub_lo;
+        let (line_lo, mut skip) = Self::locate(cache.rows.iter().take(visible_len).map(Vec::len), start);
         let mut row_y = 1;
         let mut emitted = 0;
-        // Wrap only the lines the visible window actually needs, not the whole buffer.
-        for line in self.buf.range(line_lo, visible_len) {
-            for w in wrap(&line, width).into_iter().skip(skip) {
+        // Render only the already-wrapped rows the visible window needs, from the same locked cache used above.
+        'outer: for wrapped in cache.rows.iter().skip(line_lo).take(visible_len - line_lo) {
+            for w in wrapped.iter().skip(skip) {
                 if emitted == end - start {
-                    return;
+                    break 'outer;
                 }
-                printer.print((0, row_y), &w);
+                printer.print((0, row_y), w);
                 row_y += 1;
                 emitted += 1;
             }
