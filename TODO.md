@@ -16,18 +16,12 @@
 - [ ] The play/pause symbol shows the *current* state instead of the *action pressing it would take* —
   it's a button, so while a track is playing it should show the pause symbol (what you'd get by
   pressing it), and while paused it should show the play symbol. Swap them.
-- [ ] Spotify playback has an audible ~1-2s gap mid-song when the librespot AP connection dies
-  ("Connection to server closed." → `spotify: session invalid (dead access-point connection),
-  reconnecting`; upstream librespot
+- [ ] Spotify: a real-world librespot AP death ("Connection to server closed.", upstream
   [#1151](https://github.com/librespot-org/librespot/issues/1151)/
-  [#1486](https://github.com/librespot-org/librespot/issues/1486), unfixed — a librespot `dev` pin
-  didn't help, deps stay on crates.io 0.8.0). An already-loaded track doesn't need the AP — audio
-  streams over plain HTTPS CDN range requests, the AP is only used for the audio key at load time —
-  so the gap comes from our own `player.stop(); session.shutdown()` + rebuild on `is_invalid()`
-  (`sources/spotify/src/player.rs`). Fix: reconnect in the background while the current track keeps
-  playing, hand the new session to the player for the next Load/Preload, and fall back to the
-  cold-resume path only if the playing track itself fails. Verify with a temporary hook calling
-  `session.shutdown()` mid-track (not yet live-tested that the track survives).
+  [#1486](https://github.com/librespot-org/librespot/issues/1486)) hasn't been observed against the
+  background reconnect (`Link` in `sources/spotify/src/player.rs`), only deaths induced by cutting the
+  AP socket through a local proxy. When one shows up in `medley.log`, confirm playback carried on
+  ("reconnecting in the background" → "session connected", no `Stopped` in between), then delete this.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] UI stutter when first opening the Playlists screen on a large library — reported still happening
   after commit `58c6960` (which fixed a real but apparently-not-the-only per-row `MediaCache` redb-

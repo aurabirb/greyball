@@ -77,7 +77,7 @@ impl RemotePlaylistTracks {
 
 /// See `RemotePlaylistTracks::consecutive_failures` — matches the retry-bound
 /// precedent set for Spotify's session-reconnect streak
-/// (`sources/spotify/src/player.rs`'s `session_died_streak`), though this is a
+/// (`sources/spotify/src/player.rs`'s `Link::died_streak`), though this is a
 /// hard stop rather than a backoff: a `403` isn't going to change without
 /// different credentials, so there's nothing to wait out.
 const MAX_CONSECUTIVE_PAGE_FAILURES: u32 = 4;

@@ -118,18 +118,14 @@ async fn open_audio_stream(
         .map_err(|e| format!("{track_id:?}: AudioFile::open (fetch) failed: {e}"))?;
     let from_cache = matches!(encrypted, AudioFile::Cached(_));
 
-    // Some files aren't encrypted; if the key request fails, continue
-    // undecrypted and let the decoder bail if it turns out the data really
-    // was scrambled (same policy as librespot).
-    let key = match session.audio_key().request(track_id, file_id).await {
-        Ok(k) => Some(k),
-        Err(e) => {
-            log::debug!("bpm: spotify {track_id:?} — audio key request failed, trying undecrypted: {e}");
-            None
-        }
-    };
+    // Unlike playback, never continue undecrypted: these bytes end up persisted in `MediaCache`.
+    let key = session
+        .audio_key()
+        .request(track_id, file_id)
+        .await
+        .map_err(|e| format!("{track_id:?}: audio key request failed: {e}"))?;
 
-    Ok((AudioDecrypt::new(key, encrypted), from_cache))
+    Ok((AudioDecrypt::new(Some(key), encrypted), from_cache))
 }
 
 /// A track is playable as-is if it has files and is available; otherwise

@@ -21,7 +21,6 @@ use core::{
     Bus, CoreEvent, Error, MediaCache, Player, PlayerEvent, PlayerState, PlayerStatus, ReadSeek,
     Rendition, SourceId,
 };
-use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
@@ -44,7 +43,7 @@ use crate::auth::{Auth, MUSIC_CLIENT_ID};
 const TICK: Duration = Duration::from_millis(500);
 
 /// A session that stays up at least this long counts as a successful
-/// reconnect (not part of a crash loop), resetting `session_died_streak`.
+/// reconnect (not part of a crash loop), resetting `Link::died_streak`.
 const SESSION_HEALTHY_AFTER: Duration = Duration::from_secs(30);
 
 /// Wraps the real backend `Sink`, forwarding every packet unchanged while
@@ -100,14 +99,17 @@ fn vol_to_ls(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * f64::from(u16::MAX) as f32) as u16
 }
 
+#[derive(Clone)]
+struct LoadReq {
+    uri: String,
+    duration_ms: u32,
+    start_paused: bool,
+    position_ms: u32,
+    cache: bool,
+}
+
 enum Cmd {
-    Load {
-        uri: String,
-        duration_ms: u32,
-        start_paused: bool,
-        position_ms: u32,
-        cache: bool,
-    },
+    Load(LoadReq),
     Preload(String),
     Toggle,
     Seek(u32),
@@ -117,17 +119,6 @@ enum Cmd {
     /// a different player before this one has been told to go silent (see
     /// that call site's doc for the race this closes).
     Stop { ack: oneshot::Sender<()> },
-}
-
-/// What to re-`load` once a `SessionDied` reconnect succeeds — captured from
-/// `cur`/`duration_ms`/`playback_start`/`snap` right before tearing the dead
-/// session down. `paused` carries the pre-death play state across the
-/// reconnect so it isn't lost — see `capture_resume`.
-struct PendingResume {
-    uri: String,
-    duration_ms: u32,
-    position_ms: u32,
-    paused: bool,
 }
 
 #[derive(Clone)]
@@ -153,12 +144,11 @@ pub struct SpotifyPlayer {
     tx: mpsc::UnboundedSender<Cmd>,
     snap: Arc<Mutex<Snap>>,
     tap: Arc<AudioTap>,
-    /// Runtime handle + connected librespot session, for `open_for_scan`.
-    /// `None` until the worker's session comes up (or forever, if it never
-    /// does) — independent of playback state, since a scan must never touch
-    /// or race the playback command channel.
-    scan: Arc<Mutex<Option<(tokio::runtime::Handle, Session)>>>,
+    scan: ScanHandle,
 }
+
+/// Runtime handle + live librespot session for `open_for_scan`; `None` while the link is down.
+type ScanHandle = Arc<Mutex<Option<(tokio::runtime::Handle, Session)>>>;
 
 impl SpotifyPlayer {
     /// Spawn the worker. Blocks only long enough to hand the credentials to the
@@ -202,13 +192,13 @@ impl Player for SpotifyPlayer {
     }
 
     fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool) {
-        let _ = self.tx.send(Cmd::Load {
+        let _ = self.tx.send(Cmd::Load(LoadReq {
             uri: r.uri.clone(),
             duration_ms: r.duration_ms,
             start_paused,
             position_ms,
             cache,
-        });
+        }));
     }
 
     fn preload(&self, r: &Rendition) {
@@ -242,6 +232,7 @@ impl Player for SpotifyPlayer {
 
     fn scan_fetch_paused(&self) -> bool {
         self.snap.lock().unwrap_or_else(|e| e.into_inner()).state == PlayerState::Playing
+            || self.scan.lock().unwrap_or_else(|e| e.into_inner()).is_none()
     }
 
     fn levels(&self) -> [f32; 5] {
@@ -271,10 +262,10 @@ fn session_config() -> SessionConfig {
     }
 }
 
-async fn connect(auth: &Auth, credentials: Credentials) -> Result<Session, String> {
+async fn connect(auth: &Auth) -> Result<Session, String> {
     let cache: Cache = Auth::cache(&auth.cache_dir)?;
     let session = Session::new(session_config(), Some(cache));
-    session.connect(credentials, true).await.map_err(|e| e.to_string())?;
+    session.connect(auth.credentials.clone(), true).await.map_err(|e| e.to_string())?;
     // `connect(_, true)` re-saves credentials.json via librespot's own Cache
     // on every (re)connect — pin its mode down each time, since librespot
     // only applies its `0o600` open mode on first create.
@@ -283,10 +274,7 @@ async fn connect(auth: &Auth, credentials: Credentials) -> Result<Session, Strin
 }
 
 /// Bounded exponential backoff between reconnect attempts: 1s, 2s, 4s, ...,
-/// capped at 60s. `attempt` is 0-indexed (0 = first retry after the initial
-/// failed `connect()`). Capping avoids hammering Spotify's access point
-/// while an outage is ongoing; retrying forever (rather than giving up) is
-/// the whole point of this fix.
+/// capped at 60s, so an ongoing outage doesn't hammer Spotify's access point.
 fn reconnect_backoff(attempt: u32) -> Duration {
     const BASE_SECS: u64 = 1;
     const CAP_SECS: u64 = 60;
@@ -296,188 +284,223 @@ fn reconnect_backoff(attempt: u32) -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Sleeps out `backoff`, draining (and discarding) any commands sent in the
-/// meantime — there's no live session/player to act on them. Returns `false`
-/// as soon as the command channel closes, so quitting mid-backoff doesn't
-/// hang shutdown.
-async fn wait_for_reconnect(rx: &mut mpsc::UnboundedReceiver<Cmd>, backoff: Duration) -> bool {
-    let sleep = tokio::time::sleep(backoff);
-    tokio::pin!(sleep);
-    loop {
-        tokio::select! {
-            () = &mut sleep => return true,
-            cmd = rx.recv() => match cmd {
-                None => return false,
-                Some(_) => continue,
-            },
+/// The AP link: a dead `Session` is replaced in the background while the loaded track keeps streaming off the CDN.
+struct Link {
+    auth: Arc<Auth>,
+    session: Session,
+    up: bool,
+    /// Bumped per adopted session, so a load can tell whether the link changed under it.
+    generation: u32,
+    connecting: Option<oneshot::Receiver<Session>>,
+    established_at: Instant,
+    /// Consecutive sessions that died before `SESSION_HEALTHY_AFTER`; backs off the next connect.
+    died_streak: u32,
+    scan: ScanHandle,
+}
+
+impl Link {
+    fn new(auth: Auth, scan: ScanHandle) -> Self {
+        let mut link = Self {
+            auth: Arc::new(auth),
+            // Never connected: lets the player exist before the first connect lands.
+            session: Session::new(session_config(), None),
+            up: false,
+            generation: 0,
+            connecting: None,
+            established_at: Instant::now(),
+            died_streak: 0,
+            scan,
+        };
+        link.spawn_connect();
+        link
+    }
+
+    fn spawn_connect(&mut self) {
+        let (tx, rx) = oneshot::channel();
+        let auth = self.auth.clone();
+        let streak = self.died_streak;
+        tokio::spawn(async move {
+            if streak > 0 {
+                let backoff = reconnect_backoff(streak - 1);
+                log::warn!("spotify: session died {streak} times in a row, backing off {backoff:?} before reconnecting");
+                tokio::time::sleep(backoff).await;
+            }
+            let mut attempt: u32 = 0;
+            loop {
+                match connect(&auth).await {
+                    Ok(session) => {
+                        let _ = tx.send(session);
+                        return;
+                    }
+                    Err(e) => {
+                        let backoff = reconnect_backoff(attempt);
+                        attempt = attempt.saturating_add(1);
+                        log::error!("spotify: session connect failed: {e}; attempt {attempt} retries in {backoff:?}");
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+            }
+        });
+        self.connecting = Some(rx);
+    }
+
+    /// The session while it's usable; noticing it died starts the background reconnect.
+    fn live(&mut self) -> Option<&Session> {
+        if self.up && self.session.is_invalid() {
+            log::warn!("spotify: session invalid (dead access-point connection), reconnecting in the background");
+            self.up = false;
+            *self.scan.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            self.died_streak = if self.established_at.elapsed() >= SESSION_HEALTHY_AFTER {
+                0
+            } else {
+                self.died_streak.saturating_add(1)
+            };
+            self.spawn_connect();
+        }
+        self.up.then_some(&self.session)
+    }
+
+    fn live_generation(&mut self) -> Option<u32> {
+        self.live().is_some().then_some(self.generation)
+    }
+
+    /// Resolves with the replacement session once a background connect lands.
+    async fn reconnected(&mut self) -> Session {
+        loop {
+            let Some(connecting) = self.connecting.as_mut() else {
+                return std::future::pending().await;
+            };
+            match connecting.await {
+                Ok(session) => {
+                    self.connecting = None;
+                    self.session = session.clone();
+                    self.up = true;
+                    self.generation = self.generation.wrapping_add(1);
+                    self.established_at = Instant::now();
+                    *self.scan.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some((tokio::runtime::Handle::current(), session.clone()));
+                    return session;
+                }
+                Err(_) => self.spawn_connect(),
+            }
         }
     }
 }
 
 /// Why the inner playback loop ended.
 enum LoopExit {
-    /// Command channel closed — `SpotifyPlayer` (the whole app) is shutting
-    /// down. Exit `run` for real.
+    /// Command channel closed — the whole app is shutting down.
     Shutdown,
-    /// The session died (dead TCP/Shannon link, `is_invalid()`) or
-    /// librespot's own event channel closed — both mean the `Session` is
-    /// unusable and everything built on it must be torn down and rebuilt.
-    /// The outer loop reconnects and, if something was playing, resumes it —
-    /// see `PendingResume`.
-    SessionDied,
+    /// librespot's event channel closed: its player is gone and must be rebuilt.
+    PlayerDied,
 }
 
-/// Captures what to resume from the current playback state, right before
-/// tearing a dead session down. `None` if nothing was actually
-/// playing/loaded (nothing to resume). `paused` comes from `snap` (the
-/// state the last librespot `Paused`/`Playing` event set) rather than
-/// `playback_start` alone, so a session that dies while paused reconnects
-/// back into the paused state instead of silently resuming playback —
-/// `playback_start` is already `None` whenever paused, which previously also
-/// made the resumed position collapse to 0 instead of the actual paused
-/// position.
-fn capture_resume(
-    cur: &Option<(SourceId, String)>,
+/// Worker-side state of the track the player has loaded.
+struct Loaded {
+    id: (SourceId, String),
+    req: LoadReq,
     duration_ms: u32,
     playback_start: Option<Instant>,
-    snap: &Snap,
-) -> Option<PendingResume> {
-    let (_, uri) = cur.as_ref()?;
-    let position_ms = playback_start
-        .map(|start| start.elapsed().as_millis() as u32)
-        .unwrap_or(snap.position_ms);
-    Some(PendingResume {
-        uri: uri.clone(),
-        duration_ms,
-        position_ms,
-        paused: snap.state == PlayerState::Paused,
-    })
+    /// `Link::generation` the load went out on; `None` for one issued while the link was down.
+    generation: Option<u32>,
+    /// `TrackChanged`'s item, held until a `Playing`/`Paused` for this track proves it isn't a superseded load's.
+    pending_item: Option<Box<AudioItem>>,
+    item: Option<Box<AudioItem>>,
+    materialized_sent: bool,
 }
 
-/// The bits of worker state a load needs to touch — bundled so `do_load`
-/// stays under clippy's argument-count limit.
-struct LoadCtx<'a> {
-    player: &'a LsPlayer,
-    bus: &'a Bus,
-    snap: &'a Arc<Mutex<Snap>>,
-}
-
-/// Body of a `Cmd::Load`: validate the URI, update `snap`, kick off the
-/// actual `player.load`, and compute the resulting `playback_start`. Shared
-/// by the `Cmd::Load` command arm and the post-reconnect auto-resume path so
-/// there's exactly one place that knows how to start a track playing.
-/// `duration_ms` is the rendition's; `LsEvent::TrackChanged` corrects it.
-fn do_load(
-    ctx: LoadCtx<'_>,
-    uri: String,
-    duration_ms: u32,
-    start_paused: bool,
-    position_ms: u32,
-) -> Option<((SourceId, String), Option<Instant>)> {
-    let Ok(sp_uri) = SpotifyUri::from_uri(&uri) else {
-        log::warn!("spotify: bad uri {uri}");
-        ctx.bus.send(CoreEvent::Player(PlayerEvent::Finished {
-            source: crate::source_id(),
-            uri,
-        }));
-        return None;
-    };
-    if !sp_uri.is_playable() {
-        ctx.bus.send(CoreEvent::Player(PlayerEvent::Finished {
-            source: crate::source_id(),
-            uri,
-        }));
-        return None;
+impl Loaded {
+    fn confirm(&mut self, track_id: &SpotifyUri) {
+        if self.pending_item.is_some() && track_id.to_uri().is_ok_and(|uri| uri == self.id.1) {
+            self.item = self.pending_item.take();
+        }
     }
-    let cur = (crate::source_id(), uri.clone());
+
+    /// The request that picks this track back up where it is now.
+    fn resume(&self, snap: &Snap) -> LoadReq {
+        LoadReq {
+            duration_ms: self.duration_ms,
+            start_paused: snap.state == PlayerState::Paused,
+            position_ms: self
+                .playback_start
+                .map_or(snap.position_ms, |start| start.elapsed().as_millis() as u32),
+            ..self.req.clone()
+        }
+    }
+}
+
+/// Validates `req`, updates `snap`, announces `Loading` and hands the track to librespot.
+fn do_load(
+    player: &LsPlayer,
+    bus: &Bus,
+    snap: &Mutex<Snap>,
+    req: LoadReq,
+    generation: Option<u32>,
+) -> Option<Loaded> {
+    let sp_uri = match SpotifyUri::from_uri(&req.uri) {
+        Ok(sp_uri) if sp_uri.is_playable() => sp_uri,
+        _ => {
+            log::warn!("spotify: cannot play {}", req.uri);
+            bus.send(CoreEvent::Player(PlayerEvent::Finished {
+                source: crate::source_id(),
+                uri: req.uri,
+            }));
+            return None;
+        }
+    };
     {
-        let mut s = ctx.snap.lock().unwrap_or_else(|e| e.into_inner());
-        s.state = if start_paused {
+        let mut s = snap.lock().unwrap_or_else(|e| e.into_inner());
+        s.state = if req.start_paused {
             PlayerState::Paused
         } else {
             PlayerState::Playing
         };
-        s.position_ms = position_ms;
-        s.duration_ms = duration_ms;
+        s.position_ms = req.position_ms;
+        s.duration_ms = req.duration_ms;
     }
-    ctx.bus.send(CoreEvent::Player(PlayerEvent::Loading {
+    bus.send(CoreEvent::Player(PlayerEvent::Loading {
         source: crate::source_id(),
-        uri: uri.clone(),
+        uri: req.uri.clone(),
     }));
-    ctx.player.load(sp_uri, !start_paused, position_ms);
-    let playback_start = if start_paused {
-        None
-    } else {
-        Some(Instant::now() - Duration::from_millis(position_ms as u64))
-    };
-    Some((cur, playback_start))
+    player.load(sp_uri, !req.start_paused, req.position_ms);
+    Some(Loaded {
+        id: (crate::source_id(), req.uri.clone()),
+        duration_ms: req.duration_ms,
+        playback_start: (!req.start_paused)
+            .then(|| Instant::now() - Duration::from_millis(u64::from(req.position_ms))),
+        generation,
+        pending_item: None,
+        item: None,
+        materialized_sent: false,
+        req,
+    })
 }
 
-/// Worker entry point. Owns the librespot `Player`, mixer and session, and
-/// reconnects from scratch (new `Session`, new `Player`/mixer) whenever the
-/// session dies underneath it — see module docs / the bug this fixes:
-/// librespot never recovers a dead `Session` on its own.
+fn do_preload(player: &LsPlayer, uri: &str) {
+    match SpotifyUri::from_uri(uri) {
+        Ok(sp_uri) if sp_uri.is_playable() => {
+            log::debug!("spotify: preloading {uri}");
+            player.preload(sp_uri);
+        }
+        _ => log::warn!("spotify: cannot preload {uri}"),
+    }
+}
+
+/// Worker entry point. Owns the librespot `Player`, mixer and `Link`.
 async fn run(
     auth: Auth,
     bus: Bus,
     mut rx: mpsc::UnboundedReceiver<Cmd>,
     snap: Arc<Mutex<Snap>>,
     tap: Arc<AudioTap>,
-    scan: Arc<Mutex<Option<(tokio::runtime::Handle, Session)>>>,
+    scan: ScanHandle,
     media_cache: Arc<MediaCache>,
 ) {
-    // Set only from the `SessionDied` exit path (never from a clean
-    // `Shutdown`, an explicit `Cmd::Stop`, or a legitimate `EndOfTrack`/
-    // `Unavailable`) — carries what was playing across a reconnect so it can
-    // be resumed once the new session/player are up.
-    let mut resume: Option<PendingResume> = None;
-
-    // How many *consecutive* short-lived sessions have died in a row (reset
-    // once a session survives `SESSION_HEALTHY_AFTER`). Without this, a
-    // session that connects successfully but dies again immediately (e.g.
-    // the AP accepts the connection but is otherwise unreachable) would
-    // reconnect in a tight loop with no backoff at all — `attempt` below only
-    // covers the initial `connect()` *failing*, not a session dying right
-    // after it succeeds.
-    let mut session_died_streak: u32 = 0;
+    let mut link = Link::new(auth, scan);
+    // A load waiting for a live session; a newer one replaces it.
+    let mut held: Option<LoadReq> = None;
 
     loop {
-        // No live session while (re)connecting; open_for_scan already treats
-        // `None` as "not connected yet".
-        *scan.lock().unwrap_or_else(|e| e.into_inner()) = None;
-
-        if session_died_streak > 0 {
-            let backoff = reconnect_backoff(session_died_streak - 1);
-            log::warn!(
-                "spotify: session died {session_died_streak} times in a row, backing off {backoff:?} before reconnecting"
-            );
-            if !wait_for_reconnect(&mut rx, backoff).await {
-                log::info!("spotify: worker stopped (shutdown during reconnect backoff)");
-                return;
-            }
-        }
-
-        let mut attempt: u32 = 0;
-        let session = loop {
-            match connect(&auth, auth.credentials.clone()).await {
-                Ok(s) => break s,
-                Err(e) => {
-                    log::error!("spotify: session connect failed: {e}");
-                    let backoff = reconnect_backoff(attempt);
-                    attempt = attempt.saturating_add(1);
-                    log::warn!("spotify: reconnect attempt {attempt} in {backoff:?}");
-                    if !wait_for_reconnect(&mut rx, backoff).await {
-                        log::info!("spotify: worker stopped (shutdown during reconnect)");
-                        return;
-                    }
-                }
-            }
-        };
-        log::info!("spotify: session connected");
-        let session_established_at = Instant::now();
-        *scan.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((tokio::runtime::Handle::current(), session.clone()));
-
         let mixer_fn =
             librespot_playback::mixer::find(Some(SoftMixer::NAME)).expect("softvol mixer present");
         let mixer = match mixer_fn(MixerConfig::default()) {
@@ -498,7 +521,7 @@ async fn run(
             // Max quality; librespot falls back to 160/96 per-track/account
             // if a 320kbps rendition isn't available, so this never errors.
             PlayerConfig { bitrate: Bitrate::Bitrate320, ..PlayerConfig::default() },
-            session.clone(),
+            link.session.clone(),
             mixer.get_soft_volume(),
             {
                 let tap = tap.clone();
@@ -510,68 +533,48 @@ async fn run(
         );
         let mut events = player.get_player_event_channel();
 
-        let mut cur: Option<(SourceId, String)> = None;
-        let mut cur_cache = true;
-        let mut duration_ms: u32 = 0;
-        let mut playback_start: Option<Instant> = None;
-        // Whether `PlayerEvent::Materialized` has already been sent for
-        // `cur` — reset on every new load so the tick branch below polls
-        // (and eventually announces) each track exactly once.
-        let mut materialized_sent = false;
-        // `TrackChanged`'s item, held until a `Playing`/`Paused` for `cur` proves it isn't a superseded load's.
-        let mut pending_item: Option<Box<AudioItem>> = None;
-        let mut cur_item: Option<Box<AudioItem>> = None;
+        let mut cur: Option<Loaded> = None;
+        // The requested preload, and whether librespot got it on a live session.
+        let mut preload: Option<(String, bool)> = None;
         let mut tick = tokio::time::interval(TICK);
 
-        if let Some(pending) = resume.take() {
-            log::info!(
-                "spotify: reconnected, resuming {} (paused={})",
-                pending.uri,
-                pending.paused
-            );
-            let ctx = LoadCtx { player: &player, bus: &bus, snap: &snap };
-            if let Some((c, p)) =
-                do_load(ctx, pending.uri, pending.duration_ms, pending.paused, pending.position_ms)
-            {
-                cur = Some(c);
-                cur_cache = true;
-                duration_ms = pending.duration_ms;
-                playback_start = p;
-                materialized_sent = false;
-            }
-        }
-
         let exit = 'inner: loop {
+            let generation = link.live_generation();
+            // A track librespot already preloaded needs no session to start.
+            let preloaded = |req: &mut LoadReq| {
+                preload.as_ref().is_some_and(|(uri, issued)| *issued && *uri == req.uri)
+            };
+            if let Some(req) = held.take_if(|req| generation.is_some() || preloaded(req)) {
+                preload = None;
+                if let Some(loaded) = do_load(&player, &bus, &snap, req, generation) {
+                    cur = Some(loaded);
+                }
+            }
+            if generation.is_some()
+                && let Some((uri, issued @ false)) = preload.as_mut()
+            {
+                do_preload(&player, uri);
+                *issued = true;
+            }
+
             tokio::select! {
-                    cmd = rx.recv() => match cmd {
-                        None => break 'inner LoopExit::Shutdown,
-                        Some(Cmd::Load { uri, duration_ms: hint, start_paused, position_ms, cache }) => {
-                        let ctx = LoadCtx { player: &player, bus: &bus, snap: &snap };
-                        if let Some((c, p)) = do_load(ctx, uri, hint, start_paused, position_ms) {
-                            cur = Some(c);
-                            cur_cache = cache;
-                            duration_ms = hint;
-                            playback_start = p;
-                            materialized_sent = false;
-                            pending_item = None;
-                            cur_item = None;
-                        }
-                    }
-                    Some(Cmd::Preload(uri)) => match SpotifyUri::from_uri(&uri) {
-                        Ok(sp_uri) if sp_uri.is_playable() => {
-                            log::debug!("spotify: preloading {uri}");
-                            player.preload(sp_uri);
-                        }
-                        _ => log::warn!("spotify: cannot preload {uri}"),
-                    },
+                cmd = rx.recv() => match cmd {
+                    None => break 'inner LoopExit::Shutdown,
+                    Some(Cmd::Load(req)) => held = Some(req),
+                    Some(Cmd::Preload(uri)) => preload = Some((uri, false)),
                     Some(Cmd::Toggle) => {
-                        let playing = snap.lock().unwrap_or_else(|e| e.into_inner()).state == PlayerState::Playing;
-                        if playing { player.pause() } else { player.play() }
+                        if let Some(req) = held.as_mut() {
+                            req.start_paused = !req.start_paused;
+                        }
+                        if cur.is_some() {
+                            let playing = snap.lock().unwrap_or_else(|e| e.into_inner()).state == PlayerState::Playing;
+                            if playing { player.pause() } else { player.play() }
+                        }
                     }
                     Some(Cmd::Seek(ms)) => {
                         player.seek(ms);
-                        if playback_start.is_some() {
-                            playback_start = Some(Instant::now() - Duration::from_millis(u64::from(ms)));
+                        if let Some(start) = cur.as_mut().and_then(|c| c.playback_start.as_mut()) {
+                            *start = Instant::now() - Duration::from_millis(u64::from(ms));
                         }
                         snap.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms;
                     }
@@ -582,90 +585,98 @@ async fn run(
                     Some(Cmd::Stop { ack }) => {
                         player.stop();
                         cur = None;
-                        playback_start = None;
+                        held = None;
+                        preload = None;
                         set_state(&snap, PlayerState::Stopped, 0);
                         bus.send(CoreEvent::Player(PlayerEvent::Stopped));
                         let _ = ack.send(());
                     }
                 },
+                session = link.reconnected() => {
+                    log::info!("spotify: session connected");
+                    player.set_session(session);
+                }
                 ev = events.recv() => match ev {
                     None => {
-                        log::warn!("spotify: librespot event channel closed, reconnecting");
-                        resume = capture_resume(&cur, duration_ms, playback_start, &snap.lock().unwrap_or_else(|e| e.into_inner()));
-                        break 'inner LoopExit::SessionDied;
+                        log::warn!("spotify: librespot player died, rebuilding it");
+                        let snap = snap.lock().unwrap_or_else(|e| e.into_inner());
+                        held = held.or(cur.map(|c| c.resume(&snap)));
+                        break 'inner LoopExit::PlayerDied;
                     }
                     Some(LsEvent::Playing { position_ms, track_id, .. }) => {
-                        if is_cur(&cur, &track_id) && pending_item.is_some() {
-                            cur_item = pending_item.take();
-                        }
-                        playback_start = Some(Instant::now() - Duration::from_millis(position_ms as u64));
                         set_state(&snap, PlayerState::Playing, position_ms);
-                        if let Some((source, uri)) = cur.clone() {
+                        if let Some(c) = cur.as_mut() {
+                            c.confirm(&track_id);
+                            c.playback_start = Some(Instant::now() - Duration::from_millis(u64::from(position_ms)));
+                            let (source, uri) = c.id.clone();
                             bus.send(CoreEvent::Player(PlayerEvent::Playing { source, uri }));
                         }
                     }
                     Some(LsEvent::Paused { position_ms, track_id, .. }) => {
-                        if is_cur(&cur, &track_id) && pending_item.is_some() {
-                            cur_item = pending_item.take();
-                        }
-                        playback_start = None;
                         set_state(&snap, PlayerState::Paused, position_ms);
+                        if let Some(c) = cur.as_mut() {
+                            c.confirm(&track_id);
+                            c.playback_start = None;
+                        }
                         bus.send(CoreEvent::Player(PlayerEvent::Paused));
                     }
                     Some(LsEvent::Stopped { .. }) => {
-                        playback_start = None;
+                        if let Some(c) = cur.as_mut() {
+                            c.playback_start = None;
+                        }
                         set_state(&snap, PlayerState::Stopped, 0);
                         bus.send(CoreEvent::Player(PlayerEvent::Stopped));
                     }
                     Some(LsEvent::TrackChanged { audio_item }) => {
-                        if audio_item.duration_ms > 0 {
-                            duration_ms = audio_item.duration_ms;
-                            snap.lock().unwrap_or_else(|e| e.into_inner()).duration_ms = duration_ms;
+                        if let Some(c) = cur.as_mut() {
+                            if audio_item.duration_ms > 0 {
+                                c.duration_ms = audio_item.duration_ms;
+                                snap.lock().unwrap_or_else(|e| e.into_inner()).duration_ms = c.duration_ms;
+                            }
+                            c.pending_item = Some(audio_item);
                         }
-                        pending_item = Some(audio_item);
                     }
                     Some(LsEvent::TimeToPreloadNextTrack { .. }) => {
-                        if let Some((source, uri)) = cur.clone() {
+                        if let Some((source, uri)) = cur.as_ref().map(|c| c.id.clone()) {
                             bus.send(CoreEvent::Player(PlayerEvent::PreloadHint { source, uri }));
                         }
                     }
-                    // A load that failed only because the AP died must resume, not skip.
-                    Some(LsEvent::Unavailable { .. }) if session.is_invalid() => {
-                        log::warn!("spotify: track unavailable on a dead session, reconnecting");
-                        resume = capture_resume(&cur, duration_ms, playback_start, &snap.lock().unwrap_or_else(|e| e.into_inner()));
-                        break 'inner LoopExit::SessionDied;
+                    // A load that failed only because the link died under it is retried, not skipped.
+                    Some(LsEvent::Unavailable { .. })
+                        if cur.as_ref().is_some_and(|c| c.generation != link.live_generation()) =>
+                    {
+                        log::warn!("spotify: track unavailable over a dead session, retrying once reconnected");
+                        held = held.or(cur.take().map(|c| c.req));
                     }
                     Some(LsEvent::EndOfTrack { .. }) | Some(LsEvent::Unavailable { .. }) => {
-                        playback_start = None;
                         set_state(&snap, PlayerState::Stopped, 0);
-                        if let Some((source, uri)) = cur.take() {
+                        if let Some(c) = cur.take() {
+                            let (source, uri) = c.id;
                             bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri }));
                         }
                     }
                     Some(_) => {}
                 },
                 _ = tick.tick() => {
-                    if session.is_invalid() {
-                        log::warn!("spotify: session invalid (dead access-point connection), reconnecting");
-                        resume = capture_resume(&cur, duration_ms, playback_start, &snap.lock().unwrap_or_else(|e| e.into_inner()));
-                        break 'inner LoopExit::SessionDied;
-                    }
-                    if let (Some(start), Some(_)) = (playback_start, cur.as_ref()) {
+                    let Some(c) = cur.as_mut() else { continue };
+                    if let Some(start) = c.playback_start {
                         let pos = start.elapsed().as_millis() as u32;
                         snap.lock().unwrap_or_else(|e| e.into_inner()).position_ms = pos;
                         bus.send(CoreEvent::Player(PlayerEvent::Progress {
                             position_ms: pos,
-                            duration_ms,
+                            duration_ms: c.duration_ms,
                         }));
                     }
-                    if !materialized_sent
-                        && let (Some((source, uri)), Some(item)) = (cur.clone(), cur_item.as_ref())
-                        && crate::scan_audio::is_materialized(&session, item)
+                    if !c.materialized_sent
+                        && let Some(item) = c.item.as_ref()
+                        && let Some(session) = link.live()
+                        && crate::scan_audio::is_materialized(session, item)
                     {
-                        materialized_sent = true;
+                        c.materialized_sent = true;
+                        let (source, uri) = c.id.clone();
                         log::debug!("spotify: materialized {uri}");
                         bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
-                        if cur_cache {
+                        if c.req.cache {
                             spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri, item.clone());
                         }
                     }
@@ -674,34 +685,17 @@ async fn run(
         };
 
         player.stop();
-        session.shutdown();
-
         match exit {
             LoopExit::Shutdown => {
+                link.session.shutdown();
                 log::info!("spotify: worker stopped");
                 return;
             }
-            LoopExit::SessionDied => {
-                // Plain `Stopped`, not `Finished` for `cur` — `Finished`
-                // would advance the queue into another track that would
-                // just fail the same way before reconnection completes.
-                // `resume` (captured above, from `cur`/`playback_start`)
-                // carries the interrupted track+position across the
-                // reconnect; once the outer loop gets a fresh session/player
-                // up, it re-`load`s the same track at the same position
-                // instead of leaving playback stopped for good.
+            LoopExit::PlayerDied => {
                 bus.send(CoreEvent::Player(PlayerEvent::Stopped));
                 set_state(&snap, PlayerState::Stopped, 0);
-
-                // A session that stayed up a while wasn't a crash loop —
-                // treat it as recovered so a later, unrelated death starts
-                // its backoff from scratch instead of picking up a stale
-                // streak.
-                if session_established_at.elapsed() >= SESSION_HEALTHY_AFTER {
-                    session_died_streak = 0;
-                } else {
-                    session_died_streak = session_died_streak.saturating_add(1);
-                }
+                // Keeps a player that dies on startup from spinning.
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
@@ -734,10 +728,6 @@ fn spawn_materialize_to_cache(
             Err(e) => log::warn!("spotify: materialize-to-cache task failed: {e}"),
         }
     });
-}
-
-fn is_cur(cur: &Option<(SourceId, String)>, track_id: &SpotifyUri) -> bool {
-    cur.as_ref().is_some_and(|(_, uri)| track_id.to_uri().is_ok_and(|t| &t == uri))
 }
 
 fn set_state(snap: &Arc<Mutex<Snap>>, state: PlayerState, position_ms: u32) {
