@@ -1,4 +1,5 @@
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -142,4 +143,23 @@ pub(super) fn in_span(x: usize, (start, width): (usize, usize)) -> bool {
 pub(super) fn ms(ms: u32) -> String {
     let total = ms / 1000;
     format!("{}:{:02}", total / 60, total % 60)
+}
+
+/// Scroll clock for the now-playing marquee shared by the tab bar and the status line.
+pub(super) struct Marquee(Mutex<(String, Instant)>);
+
+impl Marquee {
+    pub(super) fn new() -> Self {
+        Self(Mutex::new((String::new(), Instant::now())))
+    }
+
+    /// Whole seconds `text` has been showing; restarts whenever the text changes.
+    pub(super) fn offset(&self, text: &str) -> usize {
+        // A `Mutex` only because `draw` takes `&self`.
+        let mut m = self.0.lock().unwrap();
+        if m.0 != text {
+            *m = (text.to_string(), Instant::now());
+        }
+        m.1.elapsed().as_secs() as usize
+    }
 }

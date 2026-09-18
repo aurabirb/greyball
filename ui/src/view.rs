@@ -34,10 +34,9 @@ use playlists::RememberedPlaylist;
 use rows::{Row, draw_row_list};
 use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
 use settings::{draw_settings_pane, settings_entries};
-use status_line::{STATUS_BAR_WIDTH, StatusLineWidths, bpm_status_tag, progress_bar, status_line_layout};
-use tab_bar::{draw_tab_bar, tab_at_x, transport_at_x};
-use text::{in_span, ms};
-use transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
+use status_line::StatusLine;
+use tab_bar::{TabBar, TabBarHit};
+use text::Marquee;
 use warnings::{WarningsModal, defocuses_warnings, warnings_label};
 
 mod filter;
@@ -72,7 +71,7 @@ pub(crate) const PLAYLISTS: usize = 2;
 pub(crate) const HIST: usize = 3;
 /// `/` or the `3` key.
 pub(crate) const SEARCH: usize = 4;
-/// Number of screens — sizes `cursor` below.
+/// Number of screens — sizes `MedleyView::lists`.
 const N_SCREENS: usize = 5;
 
 fn startup_screen(initial_screen: &str) -> usize {
@@ -85,7 +84,6 @@ fn startup_screen(initial_screen: &str) -> usize {
     }
 }
 
-
 /// Which pane navigation keys (arrows/j-k/PgUp/PgDn) go to.
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
@@ -94,7 +92,6 @@ enum Focus {
     /// The bottom-row warnings button — `Enter` opens the warnings modal.
     Warnings,
 }
-
 
 pub struct MedleyView {
     session: SessionHandle,
@@ -152,8 +149,7 @@ pub struct MedleyView {
     hotkeys: HotkeyUi,
     help: Option<HelpModal>,
     playlist_picker: Option<PlaylistPicker>,
-    /// (last now-playing text seen, when its marquee scroll started); a `Mutex` only because `draw` takes `&self`.
-    tab_marquee: std::sync::Mutex<(String, Instant)>,
+    marquee: Marquee,
 }
 
 impl MedleyView {
@@ -193,7 +189,7 @@ impl MedleyView {
             hotkeys: HotkeyUi::default(),
             help: None,
             playlist_picker: None,
-            tab_marquee: std::sync::Mutex::new((String::new(), Instant::now())),
+            marquee: Marquee::new(),
         }
     }
 
@@ -285,10 +281,7 @@ impl View for MedleyView {
         let (
             rows,
             total,
-            st,
-            np,
-            bpm_tag,
-            shuffle,
+            status,
             settings,
             warn_count,
             pane_rows,
@@ -308,13 +301,6 @@ impl View for MedleyView {
                                 && s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid))
                         }
                     };
-                let now_playing = s.now_playing();
-                let np = now_playing
-                    .as_ref()
-                    .map(|t| format!("{} - {}", t.display_artist(), t.title))
-                    .unwrap_or_else(|| "nothing playing".to_string());
-                let bpm_tag = bpm_status_tag(s, now_playing.as_ref());
-                let shuffle = s.shuffle();
                 let settings = if want_settings { settings_entries(s, self.pane_cfg) } else { Vec::new() };
                 let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
                 // Feed the scan walk the visible list every redraw so it's prioritized over store order.
@@ -335,10 +321,7 @@ impl View for MedleyView {
                 (
                     rows,
                     total,
-                    s.player_status(),
-                    np,
-                    bpm_tag,
-                    shuffle,
+                    StatusLine::snapshot(s),
                     settings,
                     warn_count,
                     pane_rows,
@@ -407,15 +390,8 @@ impl View for MedleyView {
         }
 
         // Row 0 of the whole screen.
-        let marquee_offset = {
-            let mut m = self.tab_marquee.lock().unwrap();
-            if m.0 != np {
-                m.0 = np.clone();
-                m.1 = Instant::now();
-            }
-            m.1.elapsed().as_secs() as usize
-        };
-        draw_tab_bar(printer, self.screen, &np, marquee_offset, &st.state);
+        let marquee_offset = self.marquee.offset(&status.now_playing);
+        TabBar { active: self.screen, state: &status.state }.draw(printer, &status.now_playing, marquee_offset);
         draw_row_list(&printer.windowed(main_rect), &main_title, &rows, offset, sel, total);
 
         // command / hint line (row above the status line).
@@ -463,33 +439,8 @@ impl View for MedleyView {
             }
         }
 
-        // status line, pinned to the very last row.
-        let icon = player_action_glyph(&st.state);
-        let curtime = ms(st.position_ms);
-        let totaltime = ms(st.duration_ms);
-        let bar = progress_bar(st.position_ms, st.duration_ms, STATUS_BAR_WIDTH);
-        let shuffle_tag = if shuffle { "[S]" } else { "[s]" };
-        let (name_w, _) = status_line_layout(
-            printer.size.x,
-            &StatusLineWidths {
-                prev: PREV_ICON.width(),
-                playpause: icon.width(),
-                next: NEXT_ICON.width(),
-                curtime: curtime.width(),
-                bar: STATUS_BAR_WIDTH,
-                totaltime: totaltime.width(),
-                bpm: bpm_tag.width(),
-                shuffle: shuffle_tag.width(),
-            },
-        );
-        let title_field = pad(&scroll_title(&np, name_w, marquee_offset), name_w);
-        let status = format!(
-            "{PREV_ICON} {icon} {NEXT_ICON}  {title_field}  {curtime} {bar} {totaltime}  {bpm_tag} {shuffle_tag}"
-        );
         let y = printer.size.y.saturating_sub(1);
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            p.print((0, y), &pad(&status, p.size.x));
-        });
+        status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
         // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
         if warn_count > 0 {
@@ -657,15 +608,15 @@ impl View for MedleyView {
             && local.y == 0
             && local.x < self.last_screen_size.x
         {
-            let width = self.last_screen_size.x.saturating_sub(1);
-            let player_state = self.with_session(|s| s.player_status().state);
-            if let Some(button) = transport_at_x(local.x, width, &player_state) {
+            let state = self.with_session(|s| s.player_status().state);
+            let hit = TabBar { active: self.screen, state: &state }.click(local.x, self.last_screen_size.x);
+            if let Some(TabBarHit::Transport(button)) = hit {
                 return self.run(button.command());
             }
             self.focus = Focus::Main;
-            return match tab_at_x(local.x, width, &player_state) {
-                Some(target) => self.handle_action(Action::Screen(target)),
-                None => EventResult::consumed(),
+            return match hit {
+                Some(TabBarHit::Tab(target)) => self.handle_action(Action::Screen(target)),
+                _ => EventResult::consumed(),
             };
         }
 
@@ -686,56 +637,11 @@ impl View for MedleyView {
             && local.x < self.last_screen_size.x
             && local.y == self.last_screen_size.y.saturating_sub(1)
         {
-            let (icon, curtime_w, totaltime_w, bpm_w, shuffle_w, duration_ms, position_ms) =
-                self.with_session(|s| {
-                    let np = s.now_playing();
-                    let st = s.player_status();
-                    let bpm_tag = bpm_status_tag(s, np.as_ref());
-                    let shuffle_tag = if s.shuffle() { "[S]" } else { "[s]" };
-                    (
-                        player_action_glyph(&st.state),
-                        ms(st.position_ms).width(),
-                        ms(st.duration_ms).width(),
-                        bpm_tag.width(),
-                        shuffle_tag.width(),
-                        st.duration_ms,
-                        st.position_ms,
-                    )
-                });
-            let (_, layout) = status_line_layout(
-                self.last_screen_size.x,
-                &StatusLineWidths {
-                    prev: PREV_ICON.width(),
-                    playpause: icon.width(),
-                    next: NEXT_ICON.width(),
-                    curtime: curtime_w,
-                    bar: STATUS_BAR_WIDTH,
-                    totaltime: totaltime_w,
-                    bpm: bpm_w,
-                    shuffle: shuffle_w,
-                },
-            );
-            if in_span(local.x, layout.playpause) {
-                return self.run(Command::PlayPause);
-            }
-            if in_span(local.x, layout.prev) {
-                return self.run(Command::Previous);
-            }
-            if in_span(local.x, layout.next) {
-                return self.run(Command::Next);
-            }
-            if in_span(local.x, layout.scrubber) && duration_ms > 0 {
-                let frac = (local.x - layout.scrubber.0) as f64 / layout.scrubber.1 as f64;
-                let target_ms = (frac * duration_ms as f64).round() as u32;
-                return self.run(Command::Seek(target_ms as i64 - position_ms as i64));
-            }
-            if in_span(local.x, layout.bpm) {
-                return self.run(Command::ToggleScan);
-            }
-            if in_span(local.x, layout.shuffle) {
-                return self.run(Command::ToggleShuffle);
-            }
-            return EventResult::consumed();
+            let status = self.with_session(StatusLine::snapshot);
+            return match status.click(local.x, self.last_screen_size.x) {
+                Some(cmd) => self.run(cmd),
+                None => EventResult::consumed(),
+            };
         }
 
         // Mouse: routed separately from the keyboard path below entirely, and returned early.

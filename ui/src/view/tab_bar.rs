@@ -27,20 +27,13 @@ pub(super) fn screen_name(screen: usize) -> &'static str {
 }
 
 /// A tab's rendered button text.
-pub(super) fn tab_label(index: usize, name: &str, collapsed: bool) -> String {
+fn tab_label(index: usize, name: &str, collapsed: bool) -> String {
     if collapsed {
         let letter = name.chars().next().unwrap_or('?');
         format!(" {letter} ")
     } else {
         format!(" [{}] {name} ", index + 1)
     }
-}
-
-/// Total width of every tab label plus the gaps between them, for the given `collapsed` mode.
-fn tabs_width(collapsed: bool) -> usize {
-    let gap = 1;
-    TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label, collapsed).chars().count()).sum::<usize>()
-        + gap * TABS.len().saturating_sub(1)
 }
 
 /// Each tab's screen, start column and width, from column 0 with a 1-column gap between tabs.
@@ -64,83 +57,88 @@ fn tab_layout(collapsed: bool) -> Vec<(usize, usize, usize)> {
         .collect()
 }
 
-/// Which tab (if any) occupies column `x` of a tab bar `width` columns wide.
-pub(super) fn tab_at_x(x: usize, width: usize, state: &PlayerState) -> Option<usize> {
-    let collapsed = tab_bar_collapsed(width, state);
-    tab_layout(collapsed)
-        .into_iter()
-        .find(|&(_, start, w)| x >= start && x < start + w && start < width)
-        .map(|(screen, ..)| screen)
+/// What a click on the tab bar landed on.
+pub(super) enum TabBarHit {
+    Tab(usize),
+    Transport(Transport),
 }
 
-/// Whether the tab labels must collapse to single letters to leave room for the transport strip.
-fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
-    let gap = TRANSPORT_GAP;
-    let transport_w = transport_layout(0, state).last().map_or(0, |&(_, s, w)| s + w);
-    tabs_width(false) + gap + transport_w > content_w
+/// Row 0 of the screen: the screen tabs, the transport buttons, then the now-playing marquee.
+pub(super) struct TabBar<'a> {
+    pub(super) active: usize,
+    pub(super) state: &'a PlayerState,
 }
 
-/// Which transport button occupies column `x` of a tab bar `width` columns wide.
-pub(super) fn transport_at_x(x: usize, width: usize, state: &PlayerState) -> Option<Transport> {
-    let collapsed = tab_bar_collapsed(width, state);
-    let tabs_end = tab_layout(collapsed).last().map_or(0, |&(_, start, w)| start + w);
-    let start = tabs_end + TRANSPORT_GAP;
-    let layout = transport_layout(start, state);
-    let end = layout.last().map_or(start, |&(_, s, w)| s + w);
-    if end > width {
-        return None;
-    }
-    layout.into_iter().find(|&(_, s, w)| x >= s && x < s + w).map(|(b, ..)| b)
+/// Where everything sits in a bar of a given width, for both drawing and hit-testing.
+struct Layout {
+    collapsed: bool,
+    /// Each visible tab's `TABS` index, start column and (clipped) width.
+    tabs: Vec<(usize, usize, usize)>,
+    /// Empty when the buttons don't fit.
+    transport: Vec<(Transport, usize, usize)>,
+    /// `(start, width)` left for the marquee.
+    detail: (usize, usize),
 }
 
-/// Row 0 of the whole screen.
-pub(super) fn draw_tab_bar(
-    printer: &Printer,
-    active: usize,
-    marquee: &str,
-    marquee_offset: usize,
-    player_state: &PlayerState,
-) {
-    let content_w = printer.size.x.saturating_sub(1);
-    let collapsed = tab_bar_collapsed(content_w, player_state);
-    let layout = tab_layout(collapsed);
+impl TabBar<'_> {
+    fn layout(&self, total_w: usize) -> Layout {
+        // The last column stays clear, matching the list's scrollbar gutter below.
+        let content_w = total_w.saturating_sub(1);
+        let buttons_w = transport_layout(0, self.state).last().map_or(0, |&(_, s, w)| s + w);
+        let full_w = tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
+        let collapsed = full_w + TRANSPORT_GAP + buttons_w > content_w;
 
-    for (i, &(screen, start, w)) in layout.iter().enumerate() {
-        if start >= content_w {
-            continue;
-        }
-        let label = TABS[i].1;
-        let text: String = tab_label(i, label, collapsed).chars().take(w.min(content_w - start)).collect();
-        if screen == active {
-            let style = ColorStyle::new(Color::Dark(BaseColor::White), ACTIVE_TAB_BG);
-            printer.with_color(style, |p| p.print((start, 0), &text));
+        let all_tabs = tab_layout(collapsed);
+        let tabs_end = all_tabs.last().map_or(0, |&(_, start, w)| start + w);
+        let tabs = all_tabs
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, (_, start, _))| start < content_w)
+            .map(|(i, (_, start, w))| (i, start, w.min(content_w - start)))
+            .collect();
+
+        let transport_start = tabs_end + TRANSPORT_GAP;
+        let transport = transport_layout(transport_start, self.state);
+        let transport_end = transport.last().map_or(transport_start, |&(_, s, w)| s + w);
+        let (transport, detail_start) = if transport_end <= content_w {
+            (transport, transport_end + TRANSPORT_GAP)
         } else {
-            printer.print((start, 0), &text);
-        }
+            (Vec::new(), transport_start)
+        };
+        Layout { collapsed, tabs, transport, detail: (detail_start, content_w.saturating_sub(detail_start)) }
     }
 
-    let tabs_end = layout.last().map_or(0, |&(_, start, w)| start + w);
-    let gap = TRANSPORT_GAP;
-    let transport_start = tabs_end + gap;
-    let transport_labels = transport_labels(player_state);
-    let transport = transport_layout(transport_start, player_state);
-    let transport_end = transport.last().map_or(transport_start, |&(_, s, w)| s + w);
-    let detail_start = if transport_end <= content_w {
-        for ((_, label), &(_, start, _)) in transport_labels.iter().zip(transport.iter()) {
+    /// Draws the bar across row 0 of `printer`, `marquee` right-aligned in whatever room is left.
+    pub(super) fn draw(&self, printer: &Printer, marquee: &str, marquee_offset: usize) {
+        let layout = self.layout(printer.size.x);
+        for &(i, start, w) in &layout.tabs {
+            let (screen, name) = TABS[i];
+            let text: String = tab_label(i, name, layout.collapsed).chars().take(w).collect();
+            if screen == self.active {
+                let style = ColorStyle::new(Color::Dark(BaseColor::White), ACTIVE_TAB_BG);
+                printer.with_color(style, |p| p.print((start, 0), &text));
+            } else {
+                printer.print((start, 0), &text);
+            }
+        }
+        for ((_, label), &(_, start, _)) in transport_labels(self.state).iter().zip(&layout.transport) {
             printer.print((start, 0), label);
         }
-        transport_end + gap
-    } else {
-        transport_start
-    };
-    if detail_start >= content_w {
-        return;
+        let (detail_start, detail_w) = layout.detail;
+        let text = scroll_title(marquee, detail_w, marquee_offset);
+        if !text.is_empty() {
+            let start = detail_start + detail_w - text.width();
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
+        }
     }
-    let avail = content_w - detail_start;
-    let text = scroll_title(marquee, avail, marquee_offset);
-    if text.is_empty() {
-        return;
+
+    /// What a left click at column `x` of a `total_w`-wide bar landed on.
+    pub(super) fn click(&self, x: usize, total_w: usize) -> Option<TabBarHit> {
+        let layout = self.layout(total_w);
+        let in_span = |start: usize, w: usize| x >= start && x < start + w;
+        if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(s, w)) {
+            return Some(TabBarHit::Transport(button));
+        }
+        layout.tabs.iter().find(|&&(_, s, w)| in_span(s, w)).map(|&(i, ..)| TabBarHit::Tab(TABS[i].0))
     }
-    let start = content_w - text.width();
-    printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
 }
