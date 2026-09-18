@@ -65,6 +65,14 @@
 - [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
   it plays — only the one occurrence actually being played (by position in the context, not by track
   identity) should be marked.
+  Suspected fix: `tracks_to_rows` (`ui/src/view.rs`) sets `Row::current` from
+  `t.is_current(s.now_playing_id())` — pure track identity. Expose the playing position from core (a
+  `Session::playing_context_index()` reading `PlaybackContext::index`, plus which list it refers to —
+  `remote`/playlist id — so it only applies when the list on screen IS the playing context) and have
+  `rows()` pass each row's absolute index (`offset + i`) down; mark `current` only when identity
+  matches AND, for the playing context's own list, the index matches. Lists that aren't the playing
+  context (Search, History, another playlist) keep identity matching, but mark only the first
+  occurrence. A track played from the manual queue has no context index — fall back to identity.
 - [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
   (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
   Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the
@@ -87,9 +95,24 @@
   queuing up behind slow draws (coalesce consecutive scroll events before redrawing), and the
   Log-pane mouse handling at `handle_mouse`'s `pane == Pane::Log` Press/Hold/Release branch swallowing
   or mis-routing wheel events.
+- [ ] A playlist hotkey persisted in `state.toml` can shadow a built-in key (seen: `s` no longer
+  toggles shuffle). `bind_hotkey` (`core/src/app.rs`) refuses to bind over a built-in, but
+  `Session::set_hotkeys` loads the persisted map unchecked, and `effective_target_at` lets an explicit
+  binding win over a built-in's default — so a binding made before a built-in claimed that key (or a
+  hand-edited file) silently steals it. Suspected fix: validate in `set_hotkeys` — drop any
+  non-built-in binding whose key is a built-in's effective key (its default unless that built-in is
+  remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
+  cleaned map.
 ### Features
 - [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
   playing track.
+  Suspected fix: all four end in `self.run(Command::Seek(±5000))` (`ui/src/view.rs` ~line 4159 for
+  Left/Right; `,`/`.` via `keybindings.rs`'s `BuiltinAction::SeekForward/SeekBack`) — in `run`, after a
+  successful `Command::Seek`, find the playing track's index in the current screen's list (the
+  position-aware lookup from the duplicate-marker bug above; `visible_track_ids` for identity
+  otherwise) and move the cursor there through the same setter the search-jump path uses
+  (`self.cursor[screen] = idx` ~line 1409, which already handles scroll-into-view) — no-op when the
+  playing track isn't in the list on screen. Don't do it for mouse scrubber seeks.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
