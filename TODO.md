@@ -158,8 +158,12 @@
   `BpmPlugin` (`sources/bpm/src/lib.rs`) decodes via `core::audio_decode::decode_stereo_prefix`
   (first minute only — the waveform needs the whole track, so pass no frame cap / stream the decode
   in blocks rather than holding all PCM in memory) and stores its result as generic scan metadata;
-  add the waveform as a sibling plugin on that seam, prioritizing the now-playing track so it
-  appears soon after playback starts. SoundCloud tracks carry a ready-made `waveform_url` in the
+  add the waveform as a sibling plugin on that seam. For a track that's still downloading, build it
+  progressively instead of waiting for the file: the playing track's bytes already land in a growing
+  file (`StreamingReader`/`open_streaming_url`, `player/src/rodio_player.rs`), so decode what has
+  arrived, publish the buckets filled so far, and let the widget draw left to right as the download
+  advances (undownloaded columns stay blank); each bucket's share of the track comes from the known
+  duration. Persist only once complete. The now-playing track takes priority over background scans. SoundCloud tracks carry a ready-made `waveform_url` in the
   API response — use it there instead of decoding if it's cheap to wire. No envelope yet (not
   scanned, uncached stream, scan paused) → draw nothing. Render: resample the stored buckets to the
   widget's column count (max per column), map to 0–8. Draw the played part (columns left of
@@ -168,7 +172,7 @@
   (the title keeps priority and its current width; the widget just fills what's left and vanishes
   when fewer than a few columns remain, and on the collapsed-tabs layout if there's no room) — it
   must not shift the tabs, transport buttons, or title, nor their click targets. Redraw: it only
-  changes on track change, envelope arrival, resize, and the played/unplayed boundary creeping
+  changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
