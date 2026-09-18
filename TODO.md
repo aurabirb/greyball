@@ -136,23 +136,34 @@
   the `format!` of the row) and `on_event`'s scrubber hit-test/seek math (`frac = (x - start) /
   width`) read the same numbers — both call sites currently pass `bar: STATUS_BAR_WIDTH` and
   `totaltime.width()` in; guard the seek math against a 0-width bar.
-- [ ] Draw a live waveform widget in the top bar (row 0, `draw_tab_bar` in `ui/src/view.rs`), in the
-  empty stretch between the tabs/transport cluster on the left and the right-aligned now-playing
-  title, one glyph per column from `▁▂▃▄▅▆▇█` (8 levels). Data: the real audio tap that already feeds
-  the Vis pane — `player::AudioTap::snapshot()` (`player/src/tap.rs`, a 1024-sample mono window fed
-  by both `RodioPlayer`'s `Tapped` and Spotify's `TappedSink`); see how `ui/src/vis.rs` gets hold of
-  it and reuse that route rather than plumbing a second one. Render: split the window into as many
-  equal chunks as there are columns, take each chunk's peak (or RMS) amplitude, map it to one of the
-  8 glyphs; paused/stopped/empty tap → flat `▁` (or nothing — pick whichever looks right in a
-  screenshot). Layout: the widget spans `transport_end + gap .. title_start - gap`, computed after
-  the title (the title keeps priority and its current width; the widget just fills what's left and
-  vanishes when fewer than a few columns remain, and on the collapsed-tabs layout if there's no
-  room) — it must not shift the tabs, transport buttons, or title, nor their click targets. Redraw
-  rate: `BASELINE_FPS` is 4, too slow for a waveform, and `vis_fps_cb` only raises it to
-  `vis::FPS` while the Vis pane is open — extend that one decision point so the rate is also raised
-  while something is playing and the widget is visible, and drops back when paused/stopped, instead
-  of adding a second fps switch. Do the chunk→glyph computation off the snapshot at draw time only
-  if it stays trivially cheap; don't take the session lock for it.
+- [ ] Draw a live, two-row mirrored ("thick") waveform widget in the top bar (`draw_tab_bar` in
+  `ui/src/view.rs`), in the empty stretch between the tabs/transport cluster on the left and the
+  right-aligned now-playing title, built from `▁▂▃▄▅▆▇█`. Thickness comes from inverting the palette
+  on the second row: the upper row prints level `a` (1–8) normally, so the bar rises from that row's
+  bottom edge; the lower row prints the complementary glyph `8 - a` with `Effect::Reverse`, whose
+  inverted cell shows `a` eighths hanging down from that row's top edge — the two halves meet at the
+  row boundary into one symmetric shape. E.g. upper `▅▄▃▃▃▂▂▂▆▅▄▃▃▂▂▂▇▆▄▃` over lower (reversed)
+  `▃▄▅▅▅▆▆▆▂▃▄▅▅▆▆▆▁▂▄▅`. Edge levels: `a = 8` is `█` over a reversed space; `a = 0` is a plain
+  space in both rows (don't print a reversed `█`). Reverse must swap the same fg/bg pair the upper
+  row draws with, so both halves come out the same color — check it in a real-terminal screenshot
+  (AGENTS.md), since `capture-pane` text can't show it. Rows: the top bar is one row today
+  (`TAB_BAR_ROWS = 1`), so this needs a second one — grow the top bar to 2 rows (`TAB_BAR_ROWS`
+  feeds the pane-band math in `split`/`shift` and the mouse row offsets; grep every use) with tabs,
+  transport and title staying on row 0 and only the widget using row 1. Data: the real audio tap
+  that already feeds the Vis pane — `player::AudioTap::snapshot()` (`player/src/tap.rs`, a
+  1024-sample mono window fed by both `RodioPlayer`'s `Tapped` and Spotify's `TappedSink`); see how
+  `ui/src/vis.rs` gets hold of it and reuse that route rather than plumbing a second one. Levels:
+  split the window into as many equal chunks as there are columns, take each chunk's peak (or RMS)
+  amplitude, map it to 0–8; paused/stopped/empty tap → level 0 or a flat 1 (pick whichever looks
+  right in a screenshot). Layout: the widget spans `transport_end + gap .. title_start - gap`,
+  computed after the title (the title keeps priority and its current width; the widget just fills
+  what's left and vanishes when fewer than a few columns remain, and on the collapsed-tabs layout if
+  there's no room) — it must not shift the tabs, transport buttons, or title, nor their click
+  targets. Redraw rate: `BASELINE_FPS` is 4, too slow for a waveform, and `vis_fps_cb` only raises
+  it to `vis::FPS` while the Vis pane is open — extend that one decision point so the rate is also
+  raised while something is playing and the widget is visible, and drops back when paused/stopped,
+  instead of adding a second fps switch. Do the chunk→level computation off the snapshot at draw
+  time only if it stays trivially cheap; don't take the session lock for it.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
