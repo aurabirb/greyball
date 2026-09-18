@@ -108,20 +108,22 @@
   remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
   cleaned map.
 ### Features
-- [ ] Make the status line's "artist - title" field the scrubber and drop the separate `━╍` bar.
-  Draw: pad the title to the field's full width (`name_w` from `status_line_layout`,
-  `ui/src/view.rs`) and underline (`Effect::Underline`, applied once — combining an effect twice
-  toggles it off) the first `width * position / duration` cells, splitting by display width on
+- [ ] Make the status line's "artist - title" text the scrubber and drop the separate `━╍` bar.
+  Draw: leave the title exactly as wide as it renders today (its own text width, truncated to
+  `name_w` from `status_line_layout`, `ui/src/view.rs`, when long) — no padding it out to fill the
+  field — and underline (`Effect::Underline`, applied once — combining an effect twice toggles it
+  off) the first `title_width * position / duration` cells of it, splitting by display width on
   grapheme boundaries so a wide glyph is either fully underlined or not; give the played part a
-  slightly brighter/bold style too if underline alone is faint. Click: add the title's span to
-  `StatusLineLayout`, replace `scrubber` with it, and reuse the existing click math
-  (`frac = (x - span.0) / span.1` → `Command::Seek(target - position)`); treat Hold/drag along it as
-  continuous seeking. Keep `curtime`/`totaltime` as text and give the freed ~25 columns to the
-  title. Draw and hit-test must share one `status_line_layout` result. Unknown duration → no
-  underline, clicks no-op (the zero-duration item above supplies the metadata fallback — do that
-  first or together). Check whether a click on the title already does something and keep it
-  reachable. Write the "underline a proportion of this text" helper so a track row can reuse it
-  later (progress on the now-playing row in lists), but don't wire that up here.
+  slightly brighter/bold style too if underline alone is faint. Click: add the rendered title's
+  span `(start, title_width)` to `StatusLineLayout` in place of `scrubber` and reuse the existing
+  click math (`frac = (x - span.0) / span.1` → `Command::Seek(target - position)`); a click in the
+  field's empty space past the title's end does nothing; treat Hold/drag along the title as
+  continuous seeking. Keep `curtime`/`totaltime` as text. Draw and hit-test must share one
+  `status_line_layout` result. Unknown duration → no underline, clicks no-op (the zero-duration item
+  above supplies the metadata fallback — do that first or together). Check whether a click on the
+  title already does something and keep it reachable. Write the "underline a proportion of this
+  text" helper so a track row can reuse it later (progress on the now-playing row in lists), but
+  don't wire that up here.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
