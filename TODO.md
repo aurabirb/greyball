@@ -70,6 +70,50 @@
      allow an idle second authenticated session per account). Scope this as its own project if pursued,
      not a quick fix bundled with option 1.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
+- [ ] UI stutter when first opening the Playlists screen on a large library — reported still happening
+  after commit `58c6960` (which fixed a real but apparently-not-the-only per-row `MediaCache` redb-
+  transaction cost) and reproduces specifically when `:log` isn't already open. `git log --stat` over
+  the last ~10 commits touching this area found nothing else suspicious besides `media_cache.rs`
+  itself — the more likely remaining culprit lives in older (2026-09-16) code, unrelated to any of
+  today's commits: `ui::view::tracks_to_rows` calls `hotkey_playlist_membership` (`ui/src/view.rs`)
+  fresh on every `draw()` call (i.e. every frame at whatever fps is set, not once per screen-open),
+  and for every hotkey-bound *remote* playlist target that isn't fully paginated yet, that calls
+  `Session::remote_playlist_track_ids` → `ViewCache::ensure_remote_playlist_tracks` (`core/src/
+  view_cache.rs`), which spawns a background thread to fetch the next page whenever the target's
+  cache entry isn't already `browsing`. Net effect: for N hotkey-bound remote playlists that are all
+  still loading, this can fire N near-simultaneous background fetches, and — since nothing memoizes
+  `hotkey_playlist_membership` or event-gates it — the very next `draw()` after each page lands kicks
+  the next one immediately, unthrottled. This matches the separately-reported "~10 Spotify API
+  requests almost at the same second" behavior below, and plausibly explains "only when :log isn't
+  open" as pure timing (by the time you've looked at :log first, those background pagination fetches
+  have often already finished and gone quiet) rather than any real causal link to the Log pane itself
+  — unconfirmed, needs verifying against the reporter's actual large-library machine, which this
+  session doesn't have access to. Fix direction: memoize `hotkey_playlist_membership` (or the whole
+  row-building path) instead of recomputing from scratch every frame, invalidating only on an actual
+  membership-changing event — this would also benefit the playlist-hotkey-toggle staleness bug below,
+  since both read the same `ViewCache` state.
+- [ ] Playlist hotkey toggle (add/remove a track via a playlist-bound hotkey) doesn't refresh the
+  playlist view or the track list's hotkeys column afterward. Root cause: `Session::
+  toggle_remote_playlist_membership` (`core/src/app.rs`, ~line 1931) calls `Source::add_to_playlist`/
+  `remove_from_playlist` on a background thread and, on success, only sets `membership_feedback` (the
+  status-bar message) — it never invalidates or updates `ViewCache`'s cached `remote_playlist_tracks`
+  entry for that `(source, node)`, which is the same cache both the open playlist's own row list and
+  the hotkeys column (`hotkey_playlist_membership`) read from, so neither reflects the change until an
+  unrelated full re-fetch happens to occur. Toggling should already flip add↔remove based on current
+  membership (it does — see `is_member` in that function) so that part just needs its result to
+  actually reach the view; the ask is confirming/fixing that specifically. Also: hotkey binding today
+  doesn't exclude a source's synthetic "Liked Songs" node (`Source::is_synthetic`/`is_synthetic_playlist`)
+  from being assigned a hotkey at all, so a hotkey *can* currently be bound to Liked Songs and toggling
+  it would call `remove_from_playlist` against it like any other playlist — add an explicit guard so a
+  playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
+- [ ] Check whether a global, cross-source API request rate limiter exists anywhere, and add one if
+  not: opening the Playlists screen was observed hitting the Spotify API with ~10 requests almost in
+  the same second (see the stutter bug above — likely the same `ensure_remote_playlist_tracks`
+  per-hotkey-bound-playlist fan-out). It shouldn't matter which endpoint or which source subsystem
+  originates a request — there should be a shared minimum spacing of roughly 200ms + jitter between
+  any two outgoing source API requests, application-wide, not per-call-site throttling.
+- [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
+  which change, if any, broke it, or whether it's an account/API-side change).
 ### Features
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
