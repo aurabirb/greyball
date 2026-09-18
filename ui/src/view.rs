@@ -19,8 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use core::{
     BindError, BrowseNode, Command, CoreEvent, Dispatch, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode,
-    Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session, SetupKind, Side, SourceId,
-    TOGGLABLE_SOURCES, TrackId,
+    Playlist, PlaylistId, Plugin, PluginHealth, Session, SetupKind, Side, SourceId, TrackId,
 };
 
 use crate::{SessionHandle, command, keybindings};
@@ -28,20 +27,24 @@ use crate::command::Pane;
 use crate::keybindings::Action;
 use crate::row::RowItem;
 
-use panes::{PANE_LAYOUT_CYCLE, list_screen_for_pane, pane_title, split};
+use log::draw_pane;
+use panes::{PANE_LAYOUT_CYCLE, list_screen_for_pane, split};
 use rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use scroll::{
     CursorWindow, LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, follow_cursor_offset,
     modal_list_h, stepped_cursor,
 };
+use settings::{draw_settings_pane, settings_entries};
 use status_line::{STATUS_BAR_WIDTH, StatusLineWidths, bpm_status_tag, progress_bar, status_line_layout};
 use tab_bar::{draw_tab_bar, screen_name, tab_at_x, transport_at_x};
-use text::{in_span, ms, truncate_ellipsis, wrap};
+use text::{in_span, ms, truncate_ellipsis};
 use transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
 
+mod log;
 mod panes;
 mod rows;
 mod scroll;
+mod settings;
 mod status_line;
 mod tab_bar;
 mod text;
@@ -605,43 +608,6 @@ impl MedleyView {
         self.open_playlist = open;
         self.open_remote = remote;
         self.remembered_playlist = remembered;
-    }
-
-    /// Settings pane's row cursor.
-    fn jump_settings(&mut self, up: bool, step: usize) {
-        let pane_cfg = self.pane_cfg;
-        let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
-        let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
-        CursorWindow { cursor: &mut self.settings_cursor, offset: &mut self.settings_offset }.jump(up, step, n, h);
-    }
-
-    /// Enter/Space on the Settings pane's selected row.
-    fn toggle_selected_setting(&mut self) {
-        let cursor = self.settings_cursor;
-        let pane_cfg = self.pane_cfg;
-        let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
-            return;
-        };
-        match entry {
-            SettingsEntry::Source { name, enabled } => {
-                self.with_session_mut(|s| s.set_source_enabled(name, !enabled));
-                self.queue_feedback = Some(format!(
-                    "  {name}: {} (restart to apply)",
-                    if enabled { "disabled" } else { "enabled" }
-                ));
-            }
-            SettingsEntry::Scan { enabled, available: true } => {
-                self.with_session_mut(|s| s.set_scan_enabled(!enabled));
-            }
-            SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
-        }
-    }
-
-    /// The Log pane's content/scroll for this frame.
-    fn log_render_lines(&self) -> (Vec<String>, usize) {
-        let snapshot = self.log.snapshot();
-        let len = log_visible_len(self.log_scroll, self.log_pin, snapshot.len());
-        (snapshot[..len].to_vec(), self.log_scroll)
     }
 
     // `session` is a non-reentrant `Mutex`: always lock via `with_session`, never twice in one statement.
@@ -1780,116 +1746,6 @@ fn popup(msg: impl Into<String>) -> EventResult {
     EventResult::with_cb(move |c: &mut Cursive| {
         c.add_layer(Dialog::info(msg.clone()));
     })
-}
-
-/// One row of the Settings pane: plain info text, or a togglable bool.
-#[derive(Clone)]
-enum SettingsEntry {
-    Info(String),
-    /// One of `TOGGLABLE_SOURCES` — config-only, takes effect next restart.
-    Source { name: &'static str, enabled: bool },
-    /// Background scan on/off — live via `ScanDriver::set_mode`, unlike `Source`.
-    Scan { enabled: bool, available: bool },
-}
-
-fn settings_entry_line(e: &SettingsEntry) -> String {
-    match e {
-        SettingsEntry::Info(s) => s.clone(),
-        SettingsEntry::Source { name, enabled } => format!("[{}] {name}", if *enabled { "x" } else { " " }),
-        SettingsEntry::Scan { enabled, available: true } => {
-            format!("[{}] bpm scan", if *enabled { "x" } else { " " })
-        }
-        SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
-    }
-}
-
-/// Effective config as togglable/info rows, for both the embedded pane and the screen-mode modal.
-fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntry> {
-    let cfg = &s.cfg;
-    let mut v = vec![
-        SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
-        SettingsEntry::Info(format!("initial_screen:   {}", cfg.initial_screen)),
-        SettingsEntry::Info(format!("volume:           {:.0}%", s.player_status().volume * 100.0)),
-        SettingsEntry::Info(format!("http.roots:       {}", cfg.http.roots.len())),
-        SettingsEntry::Info(format!("http.recurse:     {}", cfg.http.recurse_depth)),
-    ];
-    for name in TOGGLABLE_SOURCES {
-        v.push(SettingsEntry::Source { name, enabled: cfg.source_enabled(name).unwrap_or(false) });
-    }
-    v.push(SettingsEntry::Scan {
-        enabled: s.scan.as_ref().is_some_and(|d| d.mode() != ScanMode::Disabled),
-        available: s.scan.is_some(),
-    });
-    v.push(SettingsEntry::Info(String::new()));
-    v.push(SettingsEntry::Info(format!("panes.mode:       {:?}", pane_cfg.mode)));
-    v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
-    v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
-    v
-}
-
-/// Settings pane's title + rows, with a highlight on `cursor`.
-fn draw_settings_pane(printer: &Printer, entries: &[SettingsEntry], offset: usize, cursor: usize, focused: bool) {
-    let mut title = pane_title(Pane::Settings).to_string();
-    if focused {
-        title = format!("[{title}]");
-    }
-    printer.with_color(ColorStyle::title_secondary(), |p| {
-        p.print((0, 0), &pad(&title, p.size.x));
-    });
-    let width = printer.size.x;
-    let h = printer.size.y.saturating_sub(1);
-    for (i, entry) in entries.iter().enumerate().skip(offset).take(h) {
-        let y = 1 + (i - offset);
-        let line = pad(&settings_entry_line(entry), width);
-        if i == cursor {
-            printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
-        } else {
-            printer.print((0, y), &line);
-        }
-    }
-}
-
-/// Updates the Log pane's pin point (`log_pin`) after `scroll` changes.
-fn log_pin_after_scroll(scroll: usize, pin: Option<usize>, live_len: usize) -> Option<usize> {
-    if scroll == 0 { None } else { Some(pin.unwrap_or(live_len)) }
-}
-
-/// Length of the Log snapshot to actually render this frame.
-fn log_visible_len(scroll: usize, pin: Option<usize>, live_len: usize) -> usize {
-    if scroll == 0 { live_len } else { pin.unwrap_or(live_len).min(live_len) }
-}
-
-/// Draw a pane's title + content into its own (already-windowed) printer.
-fn draw_pane(pane: Pane, printer: &Printer, lines: &[String], scroll: usize, focused: bool) {
-    let mut title = match (pane, scroll > 0) {
-        (Pane::Log, true) => format!("{} (scrolled, PgDn to catch up)", pane_title(pane)),
-        (Pane::Settings, true) => format!("{} (scrolled)", pane_title(pane)),
-        _ => pane_title(pane).to_string(),
-    };
-    if focused {
-        title = format!("[{title}]");
-    }
-    printer.with_color(ColorStyle::title_secondary(), |p| {
-        p.print((0, 0), &pad(&title, p.size.x));
-    });
-    let width = printer.size.x;
-    let wrapped: Vec<String> = lines.iter().flat_map(|l| wrap(l, width)).collect();
-    let h = printer.size.y.saturating_sub(1);
-    // Each *wrapped* line counts as a row, so a long line takes the space it needs.
-    let visible: Vec<&String> = if pane == Pane::Log {
-        let total = wrapped.len();
-        // Clamp to the top-most full window, so scrolling past the oldest line freezes there.
-        let max_scroll = total.saturating_sub(h);
-        let end = total.saturating_sub(scroll.min(max_scroll));
-        let start = end.saturating_sub(h);
-        wrapped[start..end].iter().collect()
-    } else {
-        let max_scroll = wrapped.len().saturating_sub(h);
-        wrapped.iter().skip(scroll.min(max_scroll)).take(h).collect()
-    };
-    for (i, line) in visible.into_iter().enumerate() {
-        printer.print((0, i + 1), line);
-    }
 }
 
 fn key_name(event: &Event) -> Option<String> {

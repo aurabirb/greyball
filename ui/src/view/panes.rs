@@ -6,7 +6,8 @@ use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 
 use crate::command::Pane;
 
-use super::{HIST, MedleyView, QUEUE, draw_pane, draw_settings_pane, log_pin_after_scroll, settings_entries};
+use super::{HIST, MedleyView, QUEUE, draw_pane, draw_settings_pane, settings_entries};
+use super::log::log_pin_after_scroll;
 use super::scroll::bound_offset;
 use super::text::{pad, wrap};
 
