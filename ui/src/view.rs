@@ -26,15 +26,16 @@ use log::LogPane;
 use panes::{PaneLayout, list_screen_for_pane};
 use playlist_picker::PlaylistPicker;
 use playlists::PlaylistNav;
-use rows::{Row, draw_row_list};
+use rows::draw_row_list;
 use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
-use settings::{SettingsPane, settings_entries};
+use settings::SettingsPane;
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
 use warnings::{WarningsModal, defocuses_warnings, warnings_label};
 
 mod filter;
+mod frame;
 mod help;
 mod hotkeys;
 mod input;
@@ -240,55 +241,7 @@ impl View for MedleyView {
 
         // One lock for the whole frame: pull every session-derived value out here, then render without the guard.
         let want_settings = panes.iter().any(|(p, _)| *p == Pane::Settings);
-        let (
-            rows,
-            total,
-            status,
-            settings,
-            warn_count,
-            pane_rows,
-            membership_feedback,
-            main_title,
-            list_loading,
-        ) = self.with_session(|s| {
-                let rows = self.rows(s, self.screen, offset, list_h);
-                let total = self.list_len(s, self.screen);
-                let main_title = self.list_title(s, self.screen);
-                // A paginated remote list only knows what it has loaded so far.
-                let list_loading = self.screen == PLAYLISTS
-                    && match &self.playlists.remote {
-                        Some((sid, _, node)) => s.remote_playlist_loading(sid, node),
-                        None => {
-                            self.playlists.open.is_none()
-                                && s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid))
-                        }
-                    };
-                let settings = if want_settings { settings_entries(s, self.panes.cfg) } else { Vec::new() };
-                let warn_count = s.plugin_warning_count();
-                // Feed the scan walk the visible list so it's prioritized over store order.
-                if let Some(scan) = &s.scan {
-                    self.follow_scan(s, scan, self.active_screen());
-                }
-                let pane_rows: Vec<(Pane, String, Vec<Row>, usize)> = list_panes
-                    .iter()
-                    .map(|&(pane, _, screen, offset, pane_h)| {
-                        let rows = self.rows(s, screen, offset, pane_h);
-                        let total = self.list_len(s, screen);
-                        (pane, self.list_title(s, screen), rows, total)
-                    })
-                    .collect();
-                (
-                    rows,
-                    total,
-                    StatusLine::snapshot(s),
-                    settings,
-                    warn_count,
-                    pane_rows,
-                    s.membership_feedback(),
-                    main_title,
-                    list_loading,
-                )
-            });
+        let frame = self.frame(list_h, offset, &list_panes, want_settings);
 
         for &(pane, rect) in &panes {
             let focused = self.focus == Focus::Pane(pane);
@@ -297,22 +250,21 @@ impl View for MedleyView {
                 continue;
             }
             if let Some(screen) = list_screen_for_pane(pane) {
-                let (_, title, rows, total) =
-                    pane_rows.iter().find(|(p, ..)| *p == pane).expect("resolved above");
+                let Some(pf) = frame.pane_rows.get(&pane) else { continue };
                 // `[...]` is the focus marker every pane title uses.
-                let title = if focused { format!("[{title}]") } else { title.clone() };
+                let title = if focused { format!("[{}]", pf.title) } else { pf.title.clone() };
                 draw_row_list(
                     &printer.windowed(rect),
                     &title,
-                    rows,
+                    &pf.rows,
                     self.lists[screen].offset,
                     self.lists[screen].cursor,
-                    *total,
+                    pf.total,
                 );
                 continue;
             }
             if pane == Pane::Settings {
-                self.settings.draw(&printer.windowed(rect), &settings, focused);
+                self.settings.draw(&printer.windowed(rect), &frame.settings, focused);
                 continue;
             }
             self.log.draw(&printer.windowed(rect), focused);
@@ -322,25 +274,26 @@ impl View for MedleyView {
         }
 
         // Row 0 of the whole screen.
-        let marquee_offset = self.marquee.offset(&status.now_playing);
-        TabBar { active: self.screen, state: &status.state }.draw(printer, &status.now_playing, marquee_offset);
-        draw_row_list(&printer.windowed(main_rect), &main_title, &rows, offset, sel, total);
+        let marquee_offset = self.marquee.offset(&frame.status.now_playing);
+        TabBar { active: self.screen, state: &frame.status.state }
+            .draw(printer, &frame.status.now_playing, marquee_offset);
+        draw_row_list(&printer.windowed(main_rect), &frame.main_title, &frame.rows, offset, sel, frame.total);
 
         // command / hint line (row above the status line).
         let bottom = printer.size.y.saturating_sub(2);
-        let line = self.hint_line(membership_feedback);
+        let line = self.hint_line(frame.membership_feedback, frame.total, frame.help_key);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let warn_w = if warn_count > 0 {
-            warnings_label(warn_count).chars().count().min(printer.size.x)
+        let warn_w = if frame.warn_count > 0 {
+            warnings_label(frame.warn_count).chars().count().min(printer.size.x)
         } else {
             0
         };
-        if total > 0 {
-            let more = if list_loading { "+" } else { "" };
-            let unit = self.row_unit(self.screen, total);
-            let readout = format!("{}/{total}{more} {unit}", sel.min(total - 1) + 1);
+        if frame.total > 0 {
+            let more = if frame.list_loading { "+" } else { "" };
+            let unit = self.row_unit(self.screen, frame.total);
+            let readout = format!("{}/{}{more} {unit}", sel.min(frame.total - 1) + 1, frame.total);
             let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
             if x >= line.width() + 2 {
                 printer.print((x, bottom), &readout);
@@ -348,11 +301,11 @@ impl View for MedleyView {
         }
 
         let y = printer.size.y.saturating_sub(1);
-        status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
+        frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
         // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
-        if warn_count > 0 {
-            let label = warnings_label(warn_count);
+        if frame.warn_count > 0 {
+            let label = warnings_label(frame.warn_count);
             let label_w = label.chars().count().min(printer.size.x);
             let bx = printer.size.x - label_w;
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));

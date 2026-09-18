@@ -370,12 +370,8 @@
     frame it runs in `rows` (Playlists top level), `list_title`/`context_name` (open playlist),
     the playlist picker's `draw`, `top_rows`, and `help_lines`. Give `Session` a playlist-names cache
     invalidated by playlist-mutating commands, or a revision counter the view keys a cache on.
-  - `hint_line` (`ui/src/view/input.rs`) takes the session lock up to twice inside `draw`, after the
-    frame's "one lock" snapshot. Move `selected_hotkey_target`/`effective_hotkey(OpenHelp)` into that
-    snapshot.
-  - The frame snapshot in `MedleyView::draw` is a positional 9-tuple; make it a named `Frame` struct
-    built by one `fn snapshot(&self, s: &Session)`, and let `on_event` reuse its cheap parts instead
-    of re-locking (`TabBar` click, `StatusLine::snapshot` on click, `warn_count`).
+  - Let `on_event` reuse the frame snapshot's (`ui/src/view/frame.rs`) cheap parts instead of
+    re-locking (`TabBar` click, `StatusLine::snapshot` on click, `warn_count`).
   - Add a `Session` revision counter (bumped in `dispatch`/`on_event` when they report dirty) so
     derived UI data — rows window, titles, help lines, settings entries, `LocalFilter::cache` (keyed
     today on `source_len`, which misses same-length edits) — is rebuilt only when the revision, the

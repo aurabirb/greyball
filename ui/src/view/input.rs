@@ -5,7 +5,7 @@ use cursive::Cursive;
 use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::views::Dialog;
 
-use core::{Command, CoreEvent, Dispatch, HotkeyTarget, Plugin, SourceId, TrackId};
+use core::{Command, CoreEvent, Dispatch, Plugin, SourceId, TrackId};
 
 use crate::command::{self, Pane};
 use crate::keybindings::Action;
@@ -332,7 +332,8 @@ impl MedleyView {
     }
 
     /// The command/hint row: the text being typed, else transient feedback, else a key hint.
-    pub(super) fn hint_line(&self, membership_feedback: Option<String>) -> String {
+    /// `total` and `help_key` come from the frame snapshot so this never locks the session itself.
+    pub(super) fn hint_line(&self, membership_feedback: Option<String>, total: usize, help_key: Option<char>) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
@@ -346,15 +347,10 @@ impl MedleyView {
                 .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                    if self.screen == PLAYLISTS
-                        && self.with_session(|s| self.selected_hotkey_target(s)).is_some()
-                    {
+                    if self.screen == PLAYLISTS && self.has_hotkey_target_selected(total) {
                         return "  [`] set hotkey".to_string();
                     }
-                    let help_key = self
-                        .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)))
-                        .map(String::from)
-                        .unwrap_or_default();
+                    let help_key = help_key.map(String::from).unwrap_or_default();
                     format!("  [{help_key}] help")
                 }),
         }
