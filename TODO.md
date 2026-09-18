@@ -122,6 +122,20 @@
   `draw_tab_bar` and the hit-test (like `transport_layout`/`transport_at_x`) so they can't drift.
   Unknown duration → no underline, clicks no-op. Check whether a click on that title already does
   something and keep it reachable. No helpers beyond what this feature itself calls.
+- [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
+  `STATUS_BAR_WIDTH` (24, `ui/src/view.rs`). Today `status_line_layout` reserves the fixed bar and
+  hands every spare column to the title field (`name_field_width`), which `pad`s a short title with
+  blanks — those blank columns are the "available space on the left". New split: the title field
+  gets only what the title needs (its display width, capped by what's left), and the scrubber takes
+  the rest, up to a max of 80 columns; the right-hand block (`{totaltime}  {bpm} {shuffle}`) stays
+  pinned where it is, so the bar's right edge doesn't move. No minimum width: the bar shrinks all the
+  way to 0 as the terminal narrows (drop the constant rather than keeping it as a floor). When the
+  width is too small to fit everything, the total time (and its separating space) disappears first,
+  before the bar or title are squeezed further. Decide the bar width and whether the total time is
+  shown inside `status_line_layout` and return them from it, so `draw` (`progress_bar(.., bar_w)`,
+  the `format!` of the row) and `on_event`'s scrubber hit-test/seek math (`frac = (x - start) /
+  width`) read the same numbers — both call sites currently pass `bar: STATUS_BAR_WIDTH` and
+  `totaltime.width()` in; guard the seek math against a 0-width bar.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
