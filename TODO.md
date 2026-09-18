@@ -31,12 +31,7 @@
      Load/Preload to it, then drop the old; fall back to the current cold-resume path only if the
      draining player reports Unavailable/Stopped. Verify with a temporary hook calling
      `session.shutdown()` mid-track (not yet live-tested that the track survives).
-  2. `SpotifyPlugin::wiring()` builds a brand-new `SpotifyPlayer`/`Session` on every
-     `rewire_all_plugins` (any `PluginStatusChanged`: soulseek reachability at startup, the ~hourly
-     Spotify web-token refresh, plugin setup/commands), logging a second session in on the same
-     credentials while the first is playing. Cache the wiring and rebuild only when librespot
-     credentials change. Verify: one "Connecting to AP" at startup, none at token refresh.
-  3. Take load off the playing session: `is_materialized` (`scan_audio.rs`) does an uncached
+  2. Take load off the playing session: `is_materialized` (`scan_audio.rs`) does an uncached
      `Track::get` every 500ms tick inline in the player select loop — resolve file ids once per track
      and just check the cache path per tick; `spawn_materialize_to_cache` does blocking I/O inside
      `tokio::spawn` on a 2-worker runtime — use `spawn_blocking`; the background scan issues audio-key

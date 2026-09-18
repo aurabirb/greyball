@@ -75,6 +75,10 @@ impl SpotifySource {
             folders: PagedList::new("spotify: playlists"),
         }
     }
+
+    pub fn set_token(&self, access_token: String) {
+        self.api.set_token(access_token);
+    }
 }
 
 fn src_err(message: String) -> Error {

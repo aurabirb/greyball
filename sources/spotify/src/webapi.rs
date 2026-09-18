@@ -239,6 +239,10 @@ impl WebApi {
         }
     }
 
+    pub fn set_token(&self, token: String) {
+        *self.inner.token.lock().unwrap() = token;
+    }
+
     /// Paced through the shared [`RateGate`], and retried through `429`s (up
     /// to [`API_MAX_ATTEMPTS`]) — a `429` puts every caller into a cool-down
     /// for the `Retry-After` it asks for (or [`API_BACKOFF_STEP`], escalating
