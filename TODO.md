@@ -77,6 +77,16 @@
   preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
+- [ ] Scrolling the Log pane is very slow or unresponsive. Likely cause (unconfirmed — profile or
+  log event→draw latency first): `log_render_lines` (`ui/src/view.rs`) clones the entire log snapshot
+  (`Vec<String>`) on every call, and both `draw` and `clamp_pane_scroll` (run on every scroll event)
+  then `wrap()` every line of it just to get a total wrapped height — O(whole log) per frame and per
+  wheel tick, which grows unbounded over a session and is worst under `RUST_LOG=debug`. Fix direction:
+  borrow instead of cloning, cache wrapped line counts per (line, width) and only wrap newly appended
+  lines / the visible window, invalidating on resize. Also rule out an event-side cause: wheel events
+  queuing up behind slow draws (coalesce consecutive scroll events before redrawing), and the
+  Log-pane mouse handling at `handle_mouse`'s `pane == Pane::Log` Press/Hold/Release branch swallowing
+  or mis-routing wheel events.
 ### Features
 - [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
   playing track.
