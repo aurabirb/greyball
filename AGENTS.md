@@ -39,6 +39,15 @@ working-agreement rule is established, add it here directly rather than only in 
 - Don't chain `sleep N; capture-pane`/`find` to poll for something to finish — that burns tokens on
   empty checks. Use a `timeout N bash -c 'until <condition>; do sleep 2; done'` wait instead, then
   check once.
+- Screenshots (to judge colors, glyphs, alignment — things `capture-pane` text can't show): use the
+  real terminal on this KDE Wayland desktop, never an ANSI-to-HTML/headless-browser render. Start
+  Alacritty under XWayland so ImageMagick can grab the window, with tmux inside so `send-keys` still
+  drives the app:
+  `export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/xauth_* | head -1); env -u WAYLAND_DISPLAY
+  alacritty --title medley-shot -o 'window.dimensions={columns=120,lines=36}' -e tmux new-session -s
+  medley 'tmux set status off; ./target/debug/medley' &` — then find the window id (`xprop -root
+  _NET_CLIENT_LIST`, match `xprop -id <id> WM_NAME` against `medley-shot`), `import -window <id>
+  <scratch>.png`, and view the PNG with the Read tool. Write PNGs outside the repo.
 - Always clean up afterward: `tmux send-keys -t medley 'q'` then `tmux kill-session -t medley`, and
   remove any debug log file you redirected to.
 
