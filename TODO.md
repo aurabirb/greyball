@@ -95,16 +95,19 @@
   membership incl. pending, current marker) used by every list, redrawn because a message/event
   said that state changed (membership settled, like toggled, playback moved) — never by each screen
   recomputing or polling it per frame.
-- [ ] Clicking the status line's scrubber doesn't seek to the clicked timestamp. The click branch
-  exists (`on_event` in `ui/src/view.rs`, the `in_span(local.x, layout.scrubber)` →
-  `Command::Seek(target - position)` case), so find why it isn't reached or has no effect: an earlier
-  mouse branch (warnings button, hint-line readout, pane/list handling) consuming the press first;
-  the hit-test's `status_line_layout` inputs drifting from the ones `draw` uses (the play/pause
-  glyph/action, bpm/shuffle tag widths) so the span is off; the `local.y == last row` check; or
-  `Command::Seek`'s relative delta computed from a stale `position_ms`. `git log -S` over 2026-09-18's
-  `ui/src/view.rs` commits (`19958a2`, `ace6d9d`, `64a5579`) is the quickest way to find the change.
-  Fix it so draw and hit-test share one `status_line_layout` call/result instead of mirroring it, and
-  make dragging along the scrubber seek too if that's cheap.
+- [ ] A track whose duration the decoder can't report plays with a `0:00` length, a scrubber drawn as
+  `-` dashes, and scrubber clicks that do nothing; other tracks are fine. Repro: SoundCloud "OZORA
+  Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage" (multi-hour set). All three
+  symptoms are `PlayerStatus::duration_ms == 0`: `progress_bar` (`ui/src/view.rs`) falls back to
+  `"-".repeat(width)` and the scrubber click branch in `on_event` is gated on `duration_ms > 0`.
+  The zero comes from `player/src/rodio_player.rs` taking `decoder.total_duration()` and
+  `unwrap_or(0)` — the decoder has no total for this stream (likely the HLS/fMP4 or no-
+  `Content-Length` path, see the long-SoundCloud-track item above). Fix: fall back to the track's
+  metadata duration (`Track`/rendition `duration_ms`, which the list's duration column already
+  shows) whenever the decoder reports none, so length, scrubber and click-to-seek all work; confirm
+  seeking itself works on that stream (`try_seek` on a source with unknown length) and make it work
+  if not. If no duration is known from either side, still draw the scrubber with the unicode glyphs
+  (empty bar) rather than dashes.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
