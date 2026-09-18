@@ -65,6 +65,18 @@
 - [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
   it plays — only the one occurrence actually being played (by position in the context, not by track
   identity) should be marked.
+- [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
+  (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
+  Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the
+  init segment + every media segment into a tempfile and only then returns `Media::Path` — the
+  progressive path returns `Media::Url`, which `player/src/rodio_player.rs`'s `open_streaming_url`/
+  `StreamingReader` already streams (unless the response has no `Content-Length`, which falls back to
+  a fully-blocking download — check which case this track hits in the log). Fix direction: fetch HLS
+  segments on a background thread into a growing file and hand the player a reader that blocks on
+  not-yet-fetched bytes like `StreamingReader` does (the fMP4 total size isn't known up front, so the
+  preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
+  info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
+  position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
 ### Features
 - [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
   playing track.
