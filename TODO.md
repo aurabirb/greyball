@@ -20,94 +20,26 @@
   AP socket through a local proxy. When one shows up in `medley.log`, confirm playback carried on
   ("reconnecting in the background" → "session connected", no `Stopped` in between), then delete this.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
-- [ ] UI stutter when first opening the Playlists screen on a large library — reported still happening
-  after commit `58c6960` (which fixed a real but apparently-not-the-only per-row `MediaCache` redb-
-  transaction cost) and reproduces specifically when `:log` isn't already open. `git log --stat` over
-  the last ~10 commits touching this area found nothing else suspicious besides `media_cache.rs`
-  itself — the more likely remaining culprit lives in older (2026-09-16) code, unrelated to any of
-  today's commits: `ui::view::tracks_to_rows` calls `hotkey_playlist_membership` (`ui/src/view.rs`)
-  fresh on every `draw()` call (i.e. every frame at whatever fps is set, not once per screen-open),
-  and for every hotkey-bound *remote* playlist target that isn't fully paginated yet, that calls
-  `Session::remote_playlist_track_ids` → `ViewCache::ensure_remote_playlist_tracks` (`core/src/
-  view_cache.rs`), which spawns a background thread to fetch the next page whenever the target's
-  cache entry isn't already `browsing`. Net effect: for N hotkey-bound remote playlists that are all
-  still loading, this can fire N near-simultaneous background fetches, and — since nothing memoizes
-  `hotkey_playlist_membership` or event-gates it — the very next `draw()` after each page lands kicks
-  the next one immediately, unthrottled. This matches the separately-reported "~10 Spotify API
-  requests almost at the same second" behavior below, and plausibly explains "only when :log isn't
-  open" as pure timing (by the time you've looked at :log first, those background pagination fetches
-  have often already finished and gone quiet) rather than any real causal link to the Log pane itself
-  — unconfirmed, needs verifying against the reporter's actual large-library machine, which this
-  session doesn't have access to. Fix direction: memoize `hotkey_playlist_membership` (or the whole
-  row-building path) instead of recomputing from scratch every frame, invalidating only on an actual
-  membership-changing event — this would also benefit the playlist-hotkey-toggle staleness bug below,
-  since both read the same `ViewCache` state.
-- [ ] Playlist hotkey toggle (add/remove a track via a playlist-bound hotkey) doesn't refresh the
-  playlist view or the track list's hotkeys column afterward. Root cause: `Session::
-  toggle_remote_playlist_membership` (`core/src/app.rs`, ~line 1931) calls `Source::add_to_playlist`/
-  `remove_from_playlist` on a background thread and, on success, only sets `membership_feedback` (the
-  status-bar message) — it never invalidates or updates `ViewCache`'s cached `remote_playlist_tracks`
-  entry for that `(source, node)`, which is the same cache both the open playlist's own row list and
-  the hotkeys column (`hotkey_playlist_membership`) read from, so neither reflects the change until an
-  unrelated full re-fetch happens to occur. Toggling should already flip add↔remove based on current
-  membership (it does — see `is_member` in that function) so that part just needs its result to
-  actually reach the view; the ask is confirming/fixing that specifically. Also: hotkey binding today
-  doesn't exclude a source's synthetic "Liked Songs" node (`Source::is_synthetic`/`is_synthetic_playlist`)
-  from being assigned a hotkey at all, so a hotkey *can* currently be bound to Liked Songs and toggling
-  it would call `remove_from_playlist` against it like any other playlist — add an explicit guard so a
-  playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
-- [ ] A playlist hotkey pressed repeatedly on the same track adds it to the playlist again each time
-  instead of toggling add↔remove (remote playlists included). Likely cause: `Session::
-  toggle_remote_playlist_membership` (`core/src/app.rs`) decides add-vs-remove from `is_member`, read
-  out of `ViewCache`'s `remote_playlist_tracks` — which a successful add/remove never updates (the
-  bug above) and which is empty/partial while the playlist is still paginating — and it ignores
-  in-flight work, so a second press before the first request lands also reads "not a member". Fix
-  direction: keep one membership state per `(source, node, track)` — `Member`/`NotMember` plus
-  `PendingAdd`/`PendingRemove` — that the toggle reads and writes: a press flips it optimistically
-  to the pending state, the background result settles it (or rolls it back with an error) and
-  updates the cached track list, and a press while pending is ignored or queued rather than sent
-  again. `pending_remote_adds` only covers adds and only feeds the open playlist's placeholder row —
-  fold it into this. Show the pending state in the track row: the playlist's letter in the hotkeys
-  column renders italic until the request settles. Check the local (`HotkeyTarget::Local`) path
-  toggles correctly too.
-- [ ] Adding a track to a remote playlist (e.g. via hotkey from the Queue) shows it in the open
-  playlist only while the request is pending — then it vanishes instead of becoming a real row, and
-  nothing that depends on the playlist's contents updates. Cause: the pending row is a
-  `plain_row("…  (adding…)")` that `rows()`'s `open_remote` branch (`ui/src/view.rs`) appends from
-  `Session::pending_remote_adds`; when the background add in `toggle_remote_playlist_membership`
-  (`core/src/app.rs`) succeeds it just drops that pending entry and never inserts the track into
-  `ViewCache`'s `remote_playlist_tracks` (or re-fetches it). Fix with the membership state machine
-  above: on success, insert/remove the track in the cached list (and bump its total), then emit one
-  "playlist contents changed `(source, node)`" message that everything derived from it reacts to —
-  the open playlist's rows and title count, the hotkeys column on every list, the top-level
-  Playlists counts, the m3u8 export once it exists. On failure, remove the pending row and surface
-  the error. The pending row should be a normal track row (shared row widget, italic/dim while
-  pending), not a bare text placeholder.
-- [ ] Track rendering isn't consistent across lists: the same track should render identically (tags,
-  hotkeys/playlist column, liked state, current marker) and update at the same moment on every tab
-  and docked pane. Seen: pressing a playlist hotkey while in the Queue doesn't update the playlist
-  column there. Every list already goes through `tracks_to_rows` (`ui/src/view.rs`), so the likely
-  cause is the stale `ViewCache` membership data from the hotkey-toggle bug above rather than a
-  Queue-specific path — fix that first, then audit each screen's `rows()` branch (Now Playing, Search,
-  Playlists, Queue, History, filtered lists, docked panes) for any per-screen difference in what a
-  row shows or when it refreshes, and remove it. End state: one reusable track-row widget
-  (React-component style — a pure function of a track's state: identity, tags, liked, playlist
-  membership incl. pending, current marker) used by every list, redrawn because a message/event
-  said that state changed (membership settled, like toggled, playback moved) — never by each screen
-  recomputing or polling it per frame.
-- [ ] A track whose duration the decoder can't report plays with a `0:00` length, a scrubber drawn as
-  `-` dashes, and scrubber clicks that do nothing; other tracks are fine. Repro: SoundCloud "OZORA
-  Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage" (multi-hour set). All three
-  symptoms are `PlayerStatus::duration_ms == 0`: `progress_bar` (`ui/src/view.rs`) falls back to
-  `"-".repeat(width)` and the scrubber click branch in `on_event` is gated on `duration_ms > 0`.
-  The zero comes from `player/src/rodio_player.rs` taking `decoder.total_duration()` and
-  `unwrap_or(0)` — the decoder has no total for this stream (likely the HLS/fMP4 or no-
-  `Content-Length` path, see the long-SoundCloud-track item above). Fix: fall back to the track's
-  metadata duration (`Track`/rendition `duration_ms`, which the list's duration column already
-  shows) whenever the decoder reports none, so length, scrubber and click-to-seek all work; confirm
-  seeking itself works on that stream (`try_seek` on a source with unknown length) and make it work
-  if not. If no duration is known from either side, still draw the scrubber with the unicode glyphs
-  (empty bar) rather than dashes.
+- [ ] UI stutter when first opening the Playlists screen on a large library, reported specifically
+  when `:log` isn't already open. The hotkeys column's membership table (`Session::
+  hotkey_memberships`, `core/src/app.rs`) is rebuilt on `PlaylistsChanged` and at most once a second
+  while a hotkey-bound remote playlist is still loading, so it no longer drives per-frame
+  `ensure_remote_playlist_tracks` fetches — unverified on the reporter's large-library machine
+  whether the stutter is gone. If it still reproduces, profile `draw()` there before guessing further.
+- [ ] Remote playlist hotkey toggles (`ViewCache::toggle_remote_membership`, `core/src/view_cache.rs`)
+  have only been exercised against a throwaway fake source, never a real Spotify playlist. On first
+  real use, confirm in `medley.log` that one press sends exactly one add/remove, the letter goes
+  italic then settles, and the open playlist gains/loses the row — then delete this.
+- [ ] Like/unlike (`Session::set_liked`, `core/src/app.rs`) never updates the cached Liked Songs list,
+  so an open Liked Songs view keeps a just-unliked row (and lacks a just-liked one) until restart,
+  and no list shows a track's liked state at all. Route it through the same pending/settle path as
+  `ViewCache::toggle_remote_membership` (a source needs to say where an add lands — Spotify puts new
+  likes first, not last) and add a liked marker to the shared row builder (`tracks_to_rows`,
+  `ui/src/view.rs`).
+- [ ] A playlist hotkey can be bound to a key a raw handler in `MedleyView::on_event`
+  (`ui/src/view.rs`) consumes first — seen with `x` (M3U export): the binding succeeds but the key
+  never toggles. Refuse such keys in `bind_hotkey` like built-ins, or move those raw keys into
+  `BuiltinAction` so the one table covers them.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
