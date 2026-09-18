@@ -48,7 +48,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use redb::{Database, ReadableTable, TableDefinition};
 
@@ -157,8 +157,19 @@ fn unique_filename(dir: &Path, base: &str, ext: Option<&str>) -> String {
 /// MVP: no eviction — grows unboundedly with distinct renditions cached.
 pub struct MediaCache {
     dir: PathBuf,
-    /// The naming/pruning index — never audio bytes, see module doc.
+    /// The naming/pruning index, persisted — never audio bytes, see module
+    /// doc. `index_cache` below is what every lookup actually reads; this is
+    /// only touched on a write (a fresh assignment, or a prune removal).
     index: Database,
+    /// In-memory mirror of `index`, loaded once at startup: `cached_path`
+    /// (and `filename` generally) is on the hot path for every row of every
+    /// list built (`ui::view::tracks_to_rows` calls `is_track_cached` once
+    /// per track), so a redb read transaction per lookup — cheap in
+    /// isolation — added up to a visible UI stall for a library in the
+    /// thousands. A plain `RwLock<HashMap>` read has none of that
+    /// per-transaction overhead. Kept in sync with `index` on every write
+    /// (see `dest`) and removal (see `prune_orphans`).
+    index_cache: RwLock<HashMap<String, String>>,
     /// Read-only from here: resolves a display name at write time, and
     /// checks a track still exists at prune time.
     store: Arc<dyn Store>,
@@ -180,7 +191,20 @@ impl MediaCache {
             w.open_table(INDEX).expect("media cache index: open_table");
             w.commit().expect("media cache index: commit");
         }
-        Self { dir, index, store, inflight: Mutex::new(HashMap::new()) }
+        let index_cache = {
+            let r = index.begin_read().expect("media cache index: begin_read");
+            let t = r.open_table(INDEX).expect("media cache index: open_table");
+            let map = t
+                .iter()
+                .expect("media cache index: iter")
+                .filter_map(|row| {
+                    let (k, v) = row.ok()?;
+                    Some((k.value().to_string(), v.value().to_string()))
+                })
+                .collect();
+            RwLock::new(map)
+        };
+        Self { dir, index, index_cache, store, inflight: Mutex::new(HashMap::new()) }
     }
 
     fn key(source: &SourceId, uri: &str) -> String {
@@ -188,10 +212,7 @@ impl MediaCache {
     }
 
     fn filename(&self, source: &SourceId, uri: &str) -> Option<String> {
-        let r = self.index.begin_read().ok()?;
-        let t = r.open_table(INDEX).ok()?;
-        let v = t.get(index_key(source, uri).as_str()).ok()??;
-        Some(v.value().to_string())
+        self.index_cache.read().unwrap().get(&index_key(source, uri)).cloned()
     }
 
     /// "Artist - Title" for `(source, uri)` via the `Store`'s own
@@ -229,6 +250,7 @@ impl MediaCache {
                     t.insert(index_key(source, uri).as_str(), filename.as_str()).map_err(to_io_err)?;
                 }
                 w.commit().map_err(to_io_err)?;
+                self.index_cache.write().unwrap().insert(index_key(source, uri), filename.clone());
                 filename
             }
         };
@@ -341,16 +363,8 @@ impl MediaCache {
     /// stale multi-hundred-MB audio file with no index entry pointing at it
     /// is worse than the row.
     pub fn prune_orphans(&self) {
-        let stale: Vec<(String, String)> = {
-            let Ok(r) = self.index.begin_read() else { return };
-            let Ok(t) = r.open_table(INDEX) else { return };
-            let Ok(iter) = t.iter() else { return };
-            iter.filter_map(|row| {
-                let (k, v) = row.ok()?;
-                Some((k.value().to_string(), v.value().to_string()))
-            })
-            .collect()
-        };
+        let stale: Vec<(String, String)> =
+            self.index_cache.read().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         let mut removed = 0usize;
         for (key, filename) in stale {
@@ -368,6 +382,7 @@ impl MediaCache {
                 }
                 let _ = w.commit();
             }
+            self.index_cache.write().unwrap().remove(&key);
             removed += 1;
         }
         if removed > 0 {
