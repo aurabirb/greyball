@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use cursive::{Cursive, Printer, Rect, Vec2, View};
 use cursive::direction::Direction;
 use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
-use cursive::theme::{BaseColor, Color, ColorStyle, Effect, Style};
+use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 use cursive::views::Dialog;
 
@@ -18,9 +18,9 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use unicode_width::UnicodeWidthStr;
 
 use core::{
-    Axis, BindError, BrowseNode, Command, CoreEvent, Dispatch, HotkeyMembership, HotkeyTarget, LogBuf,
-    PaneLayoutConfig, PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session,
-    SetupKind, Side, SourceId, TOGGLABLE_SOURCES, TrackId,
+    Axis, BindError, BrowseNode, Command, CoreEvent, Dispatch, HotkeyTarget, LogBuf, PaneLayoutConfig,
+    PaneMode, PlayerState, Playlist, PlaylistId, Plugin, PluginHealth, ScanMode, Session, SetupKind, Side,
+    SourceId, TOGGLABLE_SOURCES, TrackId,
 };
 
 use crate::{SessionHandle, command, keybindings};
@@ -28,12 +28,14 @@ use crate::command::Pane;
 use crate::keybindings::Action;
 use crate::row::RowItem;
 
+use rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use scroll::{
-    CursorWindow, LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, draw_scrollbar,
-    follow_cursor_offset, modal_list_h, stepped_cursor,
+    CursorWindow, LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, follow_cursor_offset,
+    modal_list_h, stepped_cursor,
 };
-use text::{in_span, ms, pad_right_aligned, truncate, truncate_ellipsis, wrap};
+use text::{in_span, ms, truncate_ellipsis, wrap};
 
+mod rows;
 mod scroll;
 mod text;
 
@@ -176,64 +178,6 @@ fn resolve_remembered_playlist(
     })
 }
 
-
-/// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
-#[derive(Clone)]
-struct Span {
-    text: String,
-    color: Option<Color>,
-    italic: bool,
-}
-
-/// One column's rendered cell, from `render_cell`.
-#[derive(Clone)]
-struct Cell {
-    spans: Vec<Span>,
-}
-
-impl Cell {
-    fn plain(text: impl Into<String>) -> Self {
-        Self::colored(text, None)
-    }
-
-    fn colored(text: impl Into<String>, color: Option<Color>) -> Self {
-        Self { spans: vec![Span { text: text.into(), color, italic: false }] }
-    }
-
-    fn text(&self) -> String {
-        self.spans.iter().map(|s| s.text.as_str()).collect()
-    }
-
-    fn styled(&self) -> bool {
-        self.spans.iter().any(|s| s.italic || s.color.is_some())
-    }
-}
-
-/// A rendered list row; every column is a `Cell` produced by `render_cell`.
-struct Row {
-    tags: Cell,
-    main: Cell,
-    /// One letter per hotkey-bound playlist holding this track, italic while that membership is pending.
-    hotkeys: Cell,
-    source: Cell,
-    duration: Cell,
-    current: bool,
-    /// This row's own presence in the list on screen is still settling (a remote add/remove in flight).
-    pending: bool,
-}
-
-/// A `Row` with only its main column set — placeholder messages and the Playlists top level.
-fn plain_row(main: impl Into<String>) -> Row {
-    Row {
-        tags: Cell::plain(""),
-        main: Cell::plain(main),
-        source: Cell::plain(""),
-        duration: Cell::plain(""),
-        hotkeys: Cell::plain(""),
-        current: false,
-        pending: false,
-    }
-}
 
 /// `MedleyView::filter_cache`'s contents.
 struct FilterCache {
@@ -1944,88 +1888,6 @@ fn build_help_lines(
     lines
 }
 
-/// Which `Row` column a `render_cell` call is producing.
-enum Column {
-    Tags,
-    Main,
-    Hotkeys,
-    Source,
-    Duration,
-}
-
-/// The single per-column cell renderer — a pure function of the track plus the state handed in.
-fn render_cell(col: Column, t: &core::Track, cached: bool, visible: &[String], hotkeys: &[HotkeyMembership]) -> Cell {
-    match col {
-        Column::Tags => {
-            let color = visible.iter().find_map(|attr| t.attrs.get(attr).and_then(|v| tag_color(attr, v)));
-            Cell::colored(t.tags(visible), color)
-        }
-        Column::Main => Cell::plain(t.main()),
-        Column::Source => Cell::plain(t.source(cached)),
-        Column::Duration => Cell::plain(t.duration()),
-        Column::Hotkeys => Cell {
-            spans: hotkeys
-                .iter()
-                .filter_map(|m| {
-                    let italic = m.pending.contains(&t.id);
-                    (italic || m.members.contains(&t.id))
-                        .then(|| Span { text: m.key.to_string(), color: None, italic })
-                })
-                .collect(),
-        },
-    }
-}
-
-/// The one track-row builder every list and docked pane goes through.
-fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &HashSet<TrackId>) -> Vec<Row> {
-    let now_playing = s.now_playing_id();
-    let visible = &s.cfg.visible_track_attrs;
-    let hotkeys = s.hotkey_memberships();
-    tracks
-        .into_iter()
-        .map(|t| {
-            let cached = s.is_track_cached(&t);
-            Row {
-                tags: render_cell(Column::Tags, &t, cached, visible, &hotkeys),
-                main: render_cell(Column::Main, &t, cached, visible, &hotkeys),
-                hotkeys: render_cell(Column::Hotkeys, &t, cached, visible, &hotkeys),
-                source: render_cell(Column::Source, &t, cached, visible, &hotkeys),
-                duration: render_cell(Column::Duration, &t, cached, visible, &hotkeys),
-                current: t.is_current(now_playing),
-                pending: pending.contains(&t.id),
-            }
-        })
-        .collect()
-}
-
-/// Per-tag-attr cell renderer, keyed by attr name (a `Config::visible_track_attrs` entry).
-fn tag_color(attr: &str, value: &str) -> Option<Color> {
-    match attr {
-        "bpm" => bpm_color(value),
-        _ => None,
-    }
-}
-
-/// Colors bpm on a blue→green→red gradient clamped to 60-180 bpm.
-fn bpm_color(bpm: &str) -> Option<Color> {
-    const LOW: f64 = 60.0;
-    const MID: f64 = 120.0;
-    const HIGH: f64 = 180.0;
-    const COOL: (u8, u8, u8) = (60, 110, 220);
-    const NEUTRAL: (u8, u8, u8) = (90, 200, 90);
-    const HOT: (u8, u8, u8) = (220, 60, 60);
-
-    let bpm: f64 = bpm.parse().ok()?;
-    let bpm = bpm.clamp(LOW, HIGH);
-    let (a, b, t) = if bpm < MID {
-        (COOL, NEUTRAL, (bpm - LOW) / (MID - LOW))
-    } else {
-        (NEUTRAL, HOT, (bpm - MID) / (HIGH - MID))
-    };
-    let lerp = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * t).round() as u8;
-    Some(Color::Rgb(lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2)))
-}
-
 fn popup(msg: impl Into<String>) -> EventResult {
     let msg = msg.into();
     EventResult::with_cb(move |c: &mut Cursive| {
@@ -2197,101 +2059,6 @@ fn draw_settings_pane(printer: &Printer, entries: &[SettingsEntry], offset: usiz
             printer.print((0, y), &line);
         }
     }
-}
-
-/// Rows every list view spends on its title, in the main area and docked panes alike.
-const LIST_TITLE_ROWS: usize = 1;
-
-/// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
-fn draw_row_list(printer: &Printer, title: &str, rows: &[Row], offset: usize, sel: usize, total: usize) {
-    // Reserve the rightmost column of the list body as a scrollbar gutter.
-    let content_w = printer.size.x.saturating_sub(1);
-    let indent = main_col_start(content_w);
-    printer.with_color(ColorStyle::title_primary(), |p| {
-        p.print((0, 0), &pad(&format!("{:indent$}{title}", ""), content_w));
-    });
-    let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
-    let body = printer.windowed(Rect::from_size((0, LIST_TITLE_ROWS), (printer.size.x, body_h)));
-    draw_list_body(&body, rows, offset, sel, total);
-}
-
-/// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
-fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
-    let content_w = printer.size.x.saturating_sub(1);
-    let list_h = printer.size.y;
-    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
-    for (y, row) in rows.iter().enumerate() {
-        let selected = y + offset == sel;
-        let mark = if row.current { "> " } else { "  " };
-        let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
-        let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
-        let cols = five_col(&tags, &main, &hotkeys, &source, &duration, content_w.saturating_sub(ROW_MARK_W));
-        let line = pad(&format!("{mark}{cols}"), content_w);
-        let mut row_style = Style::from(if selected {
-            ColorStyle::highlight()
-        } else if row.current {
-            ColorStyle::secondary()
-        } else {
-            ColorStyle::primary()
-        });
-        if row.pending {
-            row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
-        }
-        printer.with_style(row_style, |p| p.print((0, y), &line));
-        // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
-        let plain = !selected && !row.current;
-        for (&(start, width, right_aligned), cell) in layout.iter().zip(cells) {
-            if !cell.styled() {
-                continue;
-            }
-            let end = ROW_MARK_W + start + width;
-            let indent = if right_aligned { width.saturating_sub(cell.text().width()) } else { 0 };
-            let mut x = ROW_MARK_W + start + indent;
-            for span in &cell.spans {
-                let text = truncate(&span.text, end.saturating_sub(x));
-                let mut style = row_style;
-                if plain && let Some(color) = span.color {
-                    style = style.combine(ColorStyle::front(color));
-                }
-                // Combining an effect twice toggles it back off.
-                if span.italic && !row.pending {
-                    style = style.combine(Effect::Italic);
-                }
-                printer.with_style(style, |p| p.print((x, y), &text));
-                x += text.width();
-            }
-        }
-    }
-    draw_scrollbar(printer, content_w, list_h, offset, total);
-}
-
-/// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order.
-fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
-    let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4;
-    if width <= fixed {
-        return Vec::new();
-    }
-    let main_w = width - fixed;
-    let main_start = TAGS_COL_W + 1;
-    let hotkeys_start = main_start + main_w + 1;
-    let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
-    let duration_start = source_start + SOURCE_COL_W + 1;
-    vec![
-        (0, TAGS_COL_W, true),
-        (main_start, main_w, false),
-        (hotkeys_start, HOTKEYS_COL_W, false),
-        (source_start, SOURCE_COL_W, false),
-        (duration_start, DURATION_COL_W, false),
-    ]
-}
-
-/// Width of a row's leading now-playing marker (`"> "`/`"  "`).
-const ROW_MARK_W: usize = 2;
-
-/// Column a row's main text starts at — what the title row is indented by to line up with it.
-fn main_col_start(content_w: usize) -> usize {
-    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
-    ROW_MARK_W + layout.get(1).map_or(0, |&(start, ..)| start)
 }
 
 /// The main content's row-0 tabs, `(screen, bare name)`, in both display and hotkey order.
@@ -3426,28 +3193,6 @@ impl View for MedleyView {
 /// Only ever called for `count > 0` — the button isn't drawn at all when there are no warnings.
 fn warnings_label(count: usize) -> String {
     format!(" ⚠ warnings ({count}) ")
-}
-
-/// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`).
-const TAGS_COL_W: usize = 3;
-const SOURCE_COL_W: usize = 6;
-const DURATION_COL_W: usize = 6;
-const HOTKEYS_COL_W: usize = 8;
-
-fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str, width: usize) -> String {
-    let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4; // 4 single-space gaps
-    if width <= fixed {
-        return truncate(main, width);
-    }
-    let main_w = width - fixed;
-    format!(
-        "{} {} {} {} {}",
-        pad_right_aligned(tags, TAGS_COL_W),
-        pad(main, main_w),
-        pad(hotkeys, HOTKEYS_COL_W),
-        pad(source, SOURCE_COL_W),
-        pad(duration, DURATION_COL_W),
-    )
 }
 
 /// Whether a click on (`screen`, `idx`) at `now`, given the previous click `last`, counts as a double-click.
