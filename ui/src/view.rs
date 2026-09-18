@@ -3049,12 +3049,11 @@ const NEXT_ICON: &str = "⏭";
 const TRANSPORT_GAP: usize = 2;
 
 /// The three transport buttons' text, space-padded like `tab_label` — the
-/// middle one is `player_state_glyph` so it always shows the current
-/// play/pause/stop state.
+/// middle one is `player_action_glyph`, the action a press would take.
 fn transport_labels(state: &PlayerState) -> [(Transport, String); 3] {
     [
         (Transport::Prev, format!(" {PREV_ICON} ")),
-        (Transport::PlayPause, format!(" {} ", player_state_glyph(state))),
+        (Transport::PlayPause, format!(" {} ", player_action_glyph(state))),
         (Transport::Next, format!(" {NEXT_ICON} ")),
     ]
 }
@@ -3518,7 +3517,7 @@ impl View for MedleyView {
         // for the column math and `on_event`'s mirror of it for click
         // targets. `bpm_tag`/`shuffle_tag` are always shown now, since both
         // are clickable toggles rather than passive indicators.
-        let icon = player_state_glyph(&st.state);
+        let icon = player_action_glyph(&st.state);
         let curtime = ms(st.position_ms);
         let totaltime = ms(st.duration_ms);
         let bar = progress_bar(st.position_ms, st.duration_ms, STATUS_BAR_WIDTH);
@@ -4038,7 +4037,7 @@ impl View for MedleyView {
                     let bpm_tag = bpm_status_tag(s, np.as_ref());
                     let shuffle_tag = if s.shuffle() { "[S]" } else { "[s]" };
                     (
-                        player_state_glyph(&st.state),
+                        player_action_glyph(&st.state),
                         ms(st.position_ms).width(),
                         ms(st.duration_ms).width(),
                         bpm_tag.width(),
@@ -4552,6 +4551,24 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
         PlayerState::Paused => "⏸",
         PlayerState::Stopped => "⏹",
     }
+}
+
+/// The play/pause *button*'s icon: the action pressing it would take, not
+/// the state it's in — `⏸` while playing, `▶` while paused. Stopped keeps
+/// `⏹`, the same indicator the rest of the UI uses for it.
+fn player_action_icon(state: &PlayerState) -> &'static str {
+    match state {
+        PlayerState::Playing => "⏸",
+        PlayerState::Paused => "▶",
+        PlayerState::Stopped => "⏹",
+    }
+}
+
+/// `player_action_icon` with `player_state_glyph`'s leading-space padding —
+/// what every clickable play/pause button (top-bar cluster, status line)
+/// draws.
+fn player_action_glyph(state: &PlayerState) -> String {
+    format!(" {}", player_action_icon(state))
 }
 
 /// `player_state_icon`, with an extra leading space — most terminal fonts

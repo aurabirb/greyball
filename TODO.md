@@ -13,9 +13,6 @@
 ## TODOs:
 
 ### Bugs
-- [ ] The play/pause symbol shows the *current* state instead of the *action pressing it would take* —
-  it's a button, so while a track is playing it should show the pause symbol (what you'd get by
-  pressing it), and while paused it should show the play symbol. Swap them.
 - [ ] Spotify: a real-world librespot AP death ("Connection to server closed.", upstream
   [#1151](https://github.com/librespot-org/librespot/issues/1151)/
   [#1486](https://github.com/librespot-org/librespot/issues/1486)) hasn't been observed against the
