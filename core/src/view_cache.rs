@@ -94,6 +94,27 @@ fn remote_playlist_cache_key(source: &SourceId, node: &BrowseNode) -> String {
     }
 }
 
+/// Cache entry behind `ViewCache::remote_playlists`.
+struct RemotePlaylistsEntry {
+    folders: Vec<(String, BrowseNode)>,
+    /// A background `Source::browse(Root, want)` for this source is in flight.
+    browsing: bool,
+    /// More may still load — see `BrowsePage::partial`. Freezes on any
+    /// landed call, clean or failed; folder lists are small enough that
+    /// there's no scroll-triggered retry like `RemotePlaylistTracks` has.
+    partial: bool,
+}
+
+impl Default for RemotePlaylistsEntry {
+    fn default() -> Self {
+        Self {
+            folders: Vec::new(),
+            browsing: false,
+            partial: true,
+        }
+    }
+}
+
 /// Borrowed handles the remote-playlist accessors need from `Session` —
 /// bundled so their signatures stay short. Cheap to pass by value: every
 /// field is itself a reference.
@@ -124,11 +145,9 @@ pub(crate) struct ViewCache {
     /// the store just to render it again.
     results_cache: Vec<Track>,
 
-    /// A source's top-level playlist folders (e.g. Spotify's `/me/playlists`),
-    /// fetched once per session and cached: the Playlists screen calls
-    /// `remote_playlists` on every redraw, so a cache miss must only ever
-    /// happen the first time a given source is looked at, not once a frame.
-    remote_playlists: Mutex<HashMap<SourceId, Vec<(String, BrowseNode)>>>,
+    /// A source's top-level playlist folders, loaded in the background —
+    /// see `ensure_remote_playlists`.
+    remote_playlists: Arc<Mutex<HashMap<SourceId, RemotePlaylistsEntry>>>,
     /// A remote playlist's ingested tracks, cached per `(source, node)` —
     /// same "safe to call every redraw" requirement as `remote_playlists`.
     /// While `partial` a source may still be loading more in the background
@@ -200,30 +219,56 @@ impl ViewCache {
         }
     }
 
-    /// A source's top-level playlist folders (e.g. Spotify's own playlists,
-    /// via `Source::browse(Root)`). Fetched once per session and cached —
-    /// safe to call on every redraw of the Playlists screen without
-    /// re-hitting the source's API each frame.
+    /// A source's top-level playlist folders. Safe on every redraw —
+    /// `ensure_remote_playlists` backgrounds the actual `browse` call.
     pub fn remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) -> Vec<(String, BrowseNode)> {
-        if let Some(cached) = self.remote_playlists.lock().unwrap().get(source) {
-            return cached.clone();
-        }
-        let folders = match ctx.sources.get(source).map(|s| s.browse(&BrowseNode::Root, 0)) {
-            Some(Ok(page)) => page.folders,
-            Some(Err(e)) => {
-                ctx.bus.send(CoreEvent::SourceError {
-                    source: source.clone(),
-                    message: e.to_string(),
-                });
-                vec![]
-            }
-            None => vec![],
-        };
+        self.ensure_remote_playlists(source, ctx);
         self.remote_playlists
             .lock()
             .unwrap()
-            .insert(source.clone(), folders.clone());
-        folders
+            .get(source)
+            .map(|e| e.folders.clone())
+            .unwrap_or_default()
+    }
+
+    /// Single-flight background `browse(Root)` refresh — no ingestion or
+    /// persistence needed, a folder is just a name + `BrowseNode`.
+    fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
+        {
+            let mut cache = self.remote_playlists.lock().unwrap();
+            let entry = cache.entry(source.clone()).or_default();
+            if entry.browsing || !entry.partial {
+                return;
+            }
+            entry.browsing = true;
+        }
+
+        let Some(source_handle) = ctx.sources.get(source).cloned() else {
+            self.remote_playlists.lock().unwrap().entry(source.clone()).or_default().browsing = false;
+            return;
+        };
+        let source = source.clone();
+        let bus = ctx.bus.clone();
+        let cache = self.remote_playlists.clone();
+
+        std::thread::spawn(move || {
+            // Small list, no scroll position to pace against — load it all.
+            let result = source_handle.browse(&BrowseNode::Root, usize::MAX);
+            {
+                let mut cache = cache.lock().unwrap();
+                let entry = cache.entry(source.clone()).or_default();
+                entry.browsing = false;
+                entry.partial = false;
+                if let Ok(page) = &result {
+                    entry.folders = page.folders.clone();
+                    entry.partial = page.partial;
+                }
+            }
+            if let Err(e) = result {
+                bus.send(CoreEvent::SourceError { source, message: e.to_string() });
+            }
+            bus.send(CoreEvent::PlaylistsChanged);
+        });
     }
 
     /// All of a remote playlist's ingested track ids, cheap (reads straight

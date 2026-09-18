@@ -106,12 +106,6 @@
   from being assigned a hotkey at all, so a hotkey *can* currently be bound to Liked Songs and toggling
   it would call `remove_from_playlist` against it like any other playlist — add an explicit guard so a
   playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
-- [ ] Check whether a global, cross-source API request rate limiter exists anywhere, and add one if
-  not: opening the Playlists screen was observed hitting the Spotify API with ~10 requests almost in
-  the same second (see the stutter bug above — likely the same `ensure_remote_playlist_tracks`
-  per-hotkey-bound-playlist fan-out). It shouldn't matter which endpoint or which source subsystem
-  originates a request — there should be a shared minimum spacing of roughly 200ms + jitter between
-  any two outgoing source API requests, application-wide, not per-call-site throttling.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 ### Features

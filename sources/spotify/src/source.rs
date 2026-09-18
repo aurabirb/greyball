@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use core::{
-    BrowseNode, BrowsePage, Bus, Error, PagedList, Result, SearchHit, SearchQuery, Source, SourceId,
+    BrowseNode, BrowsePage, Bus, Error, PagedList, RemotePage, Result, SearchHit, SearchQuery, Source,
+    SourceId,
 };
 
 use crate::uri::{ItemKind, SpotifyRef};
@@ -33,6 +34,9 @@ const PLAYLIST_PAGE_SIZE: usize = 100;
 /// uses to fill in each simplified track's full metadata (album, ISRC).
 const ALBUM_PAGE_SIZE: usize = 50;
 
+/// Page size for walking `/me/playlists` — the API's max for this endpoint.
+const PLAYLISTS_PAGE_SIZE: usize = 50;
+
 /// `BrowseNode::Path` prefix marking an album id, distinguishing it from a
 /// bare playlist id in the same `Path` variant — safe because real Spotify
 /// ids are base-62 alphanumeric and never contain `:`.
@@ -42,16 +46,22 @@ pub struct SpotifySource {
     api: WebApi,
     bus: Bus,
     /// See `core::PagedList`.
-    liked: PagedList,
+    liked: PagedList<SearchHit>,
     /// One `PagedList` per playlist id browsed so far, created on first
     /// `browse` of that id — a playlist can exceed `PLAYLIST_PAGE_SIZE`
     /// tracks just like Liked Songs can exceed `LIKED_PAGE_SIZE`. Keyed by
     /// id rather than a single field because, unlike Liked Songs, there are
     /// many playlists and any of them may be browsed.
-    playlists: Mutex<HashMap<String, PagedList>>,
+    playlists: Mutex<HashMap<String, PagedList<SearchHit>>>,
     /// One `PagedList` per album id browsed so far, keyed by the bare album
     /// id (without `ALBUM_PREFIX`) — same rationale as `playlists`.
-    albums: Mutex<HashMap<String, PagedList>>,
+    albums: Mutex<HashMap<String, PagedList<SearchHit>>>,
+    /// The current user's own `/me/playlists` folder list, paged in the
+    /// background the same way `liked`/`albums` are — a large library can
+    /// have hundreds of playlists, and this walk runs under the same
+    /// `RemoteCtx`-driven `browse` call the UI's Playlists screen makes on
+    /// every redraw, so it must never block.
+    folders: PagedList<(String, BrowseNode)>,
 }
 
 impl SpotifySource {
@@ -62,6 +72,7 @@ impl SpotifySource {
             liked: PagedList::new("spotify: liked songs"),
             playlists: Mutex::new(HashMap::new()),
             albums: Mutex::new(HashMap::new()),
+            folders: PagedList::new("spotify: playlists"),
         }
     }
 }
@@ -141,7 +152,7 @@ impl Source for SpotifySource {
                     }
                 }
             },
-            BrowseNode::Root => {}
+            BrowseNode::Root => self.folders.retry(),
         }
     }
 
@@ -183,20 +194,33 @@ impl Source for SpotifySource {
 
     fn browse(&self, node: &BrowseNode, want: usize) -> Result<BrowsePage> {
         match node {
-            // Root: "Liked Songs" first, then the current user's playlists.
+            // Root: "Liked Songs" (synthetic, prepended outside the paged
+            // walk) first, then the current user's own playlists, paged in
+            // the background the same way Liked Songs' tracks are.
             BrowseNode::Root => {
+                let api = self.api.clone();
+                let (playlists, partial) = self.folders.snapshot(&self.bus, want, move |offset| {
+                    api.playlists_page(offset, PLAYLISTS_PAGE_SIZE).map(|page| RemotePage {
+                        total: page.total,
+                        consumed: page.consumed,
+                        hits: page
+                            .hits
+                            .into_iter()
+                            .map(|(id, name)| (name, BrowseNode::Path(id)))
+                            .collect(),
+                    })
+                });
                 let mut folders = vec![(
                     "Liked Songs".to_string(),
                     BrowseNode::Path(LIKED_SONGS.to_string()),
                 )];
-                let playlists = self.api.playlists().map_err(src_err)?;
-                folders.extend(playlists.into_iter().map(|(id, name)| (name, BrowseNode::Path(id))));
+                folders.extend(playlists);
                 Ok(BrowsePage {
                     title: "spotify".to_string(),
                     tracks: vec![],
                     folders,
-                    partial: false,
-                    errored: false,
+                    partial,
+                    errored: self.folders.errored(),
                 })
             }
             BrowseNode::Path(id) if id == LIKED_SONGS => {

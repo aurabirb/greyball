@@ -44,7 +44,7 @@ pub fn fetch_playlist_page(
     playlist_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage, String> {
+) -> Result<RemotePage<SearchHit>, String> {
     if session.is_none() {
         *session = Some(Session::establish(http)?);
     }
@@ -71,7 +71,7 @@ pub fn fetch_album_page(
     album_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage, String> {
+) -> Result<RemotePage<SearchHit>, String> {
     if session.is_none() {
         *session = Some(Session::establish(http)?);
     }
@@ -232,7 +232,7 @@ fn query_playlist(
     playlist_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage, String> {
+) -> Result<RemotePage<SearchHit>, String> {
     let payload = serde_json::json!({
         "variables": {
             "uri": format!("spotify:playlist:{playlist_id}"),
@@ -312,7 +312,7 @@ fn query_album(
     album_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage, String> {
+) -> Result<RemotePage<SearchHit>, String> {
     let payload = serde_json::json!({
         "variables": {
             "uri": format!("spotify:album:{album_id}"),

@@ -1,24 +1,24 @@
 //! Generic background pager for a `Source::browse` node whose full list
 //! can't be fetched in one blocking call without stalling the (synchronous)
-//! UI render path — e.g. a Liked Songs / saved-tracks list that's paginated
-//! server-side. Not source-specific: any `Source` with a similar paginated
-//! endpoint (Spotify, SoundCloud, ...) can hold a [`PagedList`] per browsable
-//! node and delegate to it from `browse`.
+//! UI render path — e.g. a Liked Songs / saved-tracks list, or a root
+//! playlist-folder listing, that's paginated server-side. Not source- or
+//! item-type-specific: any `Source` with a similar paginated endpoint
+//! (Spotify, SoundCloud, ...) can hold a [`PagedList<T>`] per browsable node
+//! and delegate to it from `browse`.
 
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::event::{Bus, CoreEvent};
-use crate::types::SearchHit;
 
 /// Gap between page fetches — avoids tripping a provider's rate limit/daily
 /// quota. `new_with_delay` overrides (tests use `Duration::ZERO`).
 const DEFAULT_PAGE_DELAY: Duration = Duration::from_secs(5);
 
 /// One page of a paginated remote list.
-pub struct RemotePage {
-    pub hits: Vec<SearchHit>,
+pub struct RemotePage<T> {
+    pub hits: Vec<T>,
     /// Total items the API reports, independent of `hits.len()` (a page can
     /// be short — filtered-out malformed items, or the last page).
     pub total: usize,
@@ -33,9 +33,8 @@ pub struct RemotePage {
     pub consumed: usize,
 }
 
-#[derive(Default)]
-struct State {
-    items: Vec<SearchHit>,
+struct State<T> {
+    items: Vec<T>,
     /// Raw items consumed so far — the offset for the next `fetch_page`
     /// call. Deliberately not `items.len()`: see `RemotePage::consumed`.
     consumed: usize,
@@ -54,18 +53,31 @@ struct State {
     errored: bool,
 }
 
+impl<T> Default for State<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            consumed: 0,
+            total: None,
+            fetching: false,
+            demand: 0,
+            errored: false,
+        }
+    }
+}
+
 /// A `Source::browse` node's list, loaded page-by-page in the background.
 /// Cheap to `Clone` (an `Arc` around the shared state) and safe to call
 /// `snapshot` from `browse` on every redraw: only the very first call does
 /// any blocking work.
 #[derive(Clone)]
-pub struct PagedList {
+pub struct PagedList<T> {
     label: Arc<str>,
-    state: Arc<Mutex<State>>,
+    state: Arc<Mutex<State<T>>>,
     page_delay: Duration,
 }
 
-impl PagedList {
+impl<T: Clone + Send + Sync + 'static> PagedList<T> {
     /// `label` identifies this list in the warning logged when a page fetch
     /// fails, e.g. `"spotify: liked songs"`. Paced at [`DEFAULT_PAGE_DELAY`]
     /// between pages — see [`Self::new_with_delay`] to override (tests want
@@ -100,9 +112,9 @@ impl PagedList {
     /// its pacing delay below this, so active scrolling loads fast while
     /// idle background completion stays slow. High-water mark, never
     /// shrinks.
-    pub fn snapshot<F>(&self, bus: &Bus, want: usize, fetch_page: F) -> (Vec<SearchHit>, bool)
+    pub fn snapshot<F>(&self, bus: &Bus, want: usize, fetch_page: F) -> (Vec<T>, bool)
     where
-        F: Fn(usize) -> Result<RemotePage, String> + Send + Sync + 'static,
+        F: Fn(usize) -> Result<RemotePage<T>, String> + Send + Sync + 'static,
     {
         let should_start = {
             let mut s = self.state.lock().unwrap();
@@ -167,7 +179,7 @@ impl PagedList {
     /// retry/backoff, if any) forever, once per redraw.
     fn fetch_one<F>(&self, fetch_page: &F) -> usize
     where
-        F: Fn(usize) -> Result<RemotePage, String>,
+        F: Fn(usize) -> Result<RemotePage<T>, String>,
     {
         let offset = self.state.lock().unwrap().consumed;
         match fetch_page(offset) {

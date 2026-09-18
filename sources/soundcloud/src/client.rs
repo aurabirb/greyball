@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core::{
-    Bus, BrowseNode, BrowsePage, Error, Media, MediaProvider, PagedList, Quality, Rendition,
-    RemotePage, Result, SearchHit, SearchQuery, Source, SourceId,
+    Bus, BrowseNode, BrowsePage, Error, Media, MediaProvider, PagedList, Quality, RateLimiter,
+    Rendition, RemotePage, Result, SearchHit, SearchQuery, Source, SourceId,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -51,10 +51,13 @@ pub struct SoundcloudSource {
     bus: Bus,
     /// Liked Tracks is the only paginated-in-the-background node so far —
     /// mirrors `sources_spotify::SpotifySource::liked`.
-    liked: PagedList,
+    liked: PagedList<SearchHit>,
     /// From `[soundcloud] hls` — prefer a higher-bitrate HLS stream over
     /// the 128kbps progressive one when the track offers one.
     hls: bool,
+    /// Paces `api_get` and the client-id scrape — no `RateGate`-style 429
+    /// cooldown here, api-v2 hasn't been observed to need one.
+    limiter: Arc<RateLimiter>,
 }
 
 impl SoundcloudSource {
@@ -72,6 +75,7 @@ impl SoundcloudSource {
             bus,
             liked: PagedList::new("soundcloud: liked tracks"),
             hls,
+            limiter: Arc::new(RateLimiter::new(Duration::from_millis(200), Duration::from_millis(100))),
         }
     }
 
@@ -92,6 +96,7 @@ impl SoundcloudSource {
 
     fn scrape_client_id(&self) -> Result<String> {
         log::debug!("soundcloud: GET {WEB} (scraping client_id)");
+        self.limiter.throttle();
         let resp = self.client.get(WEB).send().map_err(|e| src_err(format!("web player unreachable: {e}")))?;
         log::debug!("soundcloud: GET {WEB} -> {}", resp.status());
         let home = resp
@@ -114,6 +119,7 @@ impl SoundcloudSource {
 
         for url in scripts {
             log::debug!("soundcloud: GET {url} (scanning for client_id)");
+            self.limiter.throttle();
             let attempt = self.client.get(url).send().and_then(|r| {
                 log::debug!("soundcloud: GET {url} -> {}", r.status());
                 r.error_for_status().and_then(|r| r.text())
@@ -144,6 +150,7 @@ impl SoundcloudSource {
         let id = self.client_id()?;
         let url = format!("{API}{path}");
         log::debug!("soundcloud: GET {url} {query:?}");
+        self.limiter.throttle();
         let mut req = self
             .client
             .get(&url)
@@ -224,7 +231,7 @@ impl SoundcloudSource {
     /// MVP: offset/limit paging, not verified against a live token — the
     /// api-v2 collection shape (`collection` + `next_href`) is shared with
     /// `/search/tracks` above, which *is* verified live.
-    fn likes_page(&self, offset: usize, limit: usize) -> std::result::Result<RemotePage, String> {
+    fn likes_page(&self, offset: usize, limit: usize) -> std::result::Result<RemotePage<SearchHit>, String> {
         self.require_auth().map_err(|e| e.to_string())?;
         let offset_s = offset.to_string();
         let limit_s = limit.to_string();

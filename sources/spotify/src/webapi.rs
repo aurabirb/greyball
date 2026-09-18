@@ -9,9 +9,9 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use core::{Quality, RemotePage, SearchHit};
+use core::{Quality, RateLimiter, RemotePage, SearchHit};
 use serde::Deserialize;
 
 const API: &str = "https://api.spotify.com/v1";
@@ -34,20 +34,20 @@ const API_MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// giving up.
 const API_MAX_ATTEMPTS: u32 = 6;
 
-/// Paces every request through [`API_MIN_INTERVAL`] and, once any request
-/// gets a `429`, holds every *subsequent* request (this is the only caller
-/// for Spotify's search + browse endpoints, but callers can arrive from
-/// several threads at once — see `core::search`'s one-thread-per-source
+/// Paces every request through a shared [`RateLimiter`] and, once any
+/// request gets a `429`, holds every *subsequent* request (this is the only
+/// caller for Spotify's search + browse endpoints, but callers can arrive
+/// from several threads at once — see `core::search`'s one-thread-per-source
 /// fan-out) back until the shared cool-down expires.
 struct RateGate {
-    last_request: Mutex<Instant>,
+    limiter: RateLimiter,
     cooldown_until: Mutex<Option<Instant>>,
 }
 
 impl Default for RateGate {
     fn default() -> Self {
         Self {
-            last_request: Mutex::new(Instant::now() - API_MIN_INTERVAL),
+            limiter: RateLimiter::new(API_MIN_INTERVAL, Duration::from_millis(API_JITTER_MAX_MS)),
             cooldown_until: Mutex::new(None),
         }
     }
@@ -68,14 +68,7 @@ impl RateGate {
                 None => break,
             }
         }
-
-        let mut last = self.last_request.lock().unwrap();
-        let gap = API_MIN_INTERVAL + Self::jitter();
-        let elapsed = last.elapsed();
-        if elapsed < gap {
-            std::thread::sleep(gap - elapsed);
-        }
-        *last = Instant::now();
+        self.limiter.throttle();
     }
 
     /// Make every caller back off for at least `wait`.
@@ -85,16 +78,6 @@ impl RateGate {
         if slot.is_none_or(|current| current < until) {
             *slot = Some(until);
         }
-    }
-
-    /// A cheap, dependency-free jitter in `[0, API_JITTER_MAX_MS)` — no need
-    /// for real randomness, just enough spread to desynchronize callers.
-    fn jitter() -> Duration {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        Duration::from_millis(u64::from(nanos) % API_JITTER_MAX_MS)
     }
 }
 
@@ -166,6 +149,7 @@ struct ApiPlaylist {
 #[derive(Deserialize)]
 struct Playlists {
     items: Vec<ApiPlaylist>,
+    total: usize,
 }
 
 /// `/v1/me/tracks` (Liked Songs) item shape: `{ items: [{ track: {...} }] }`.
@@ -406,12 +390,19 @@ impl WebApi {
         body.into_hit().ok_or_else(|| "track has no id".to_string())
     }
 
-    /// The current user's playlists (owned + followed), as `(id, name)`.
-    /// MVP: first page only (up to 50, the API max for this endpoint).
-    pub fn playlists(&self) -> Result<Vec<(String, String)>, String> {
-        let url = format!("{API}/me/playlists?limit=50");
+    /// One page of the current user's playlists (owned + followed), as
+    /// `(id, name)`, plus the API's reported `total` — the caller
+    /// (`SpotifySource`'s `folders` `PagedList`) walks `offset` across
+    /// repeated calls the same way `saved_tracks_page` does for Liked Songs.
+    pub fn playlists_page(&self, offset: usize, limit: usize) -> Result<RemotePage<(String, String)>, String> {
+        let url = format!("{API}/me/playlists?limit={limit}&offset={offset}");
         let body: Playlists = self.get(&url)?.json().map_err(|e| e.to_string())?;
-        Ok(body.items.into_iter().map(|p| (p.id, p.name)).collect())
+        let consumed = body.items.len();
+        Ok(RemotePage {
+            total: body.total,
+            consumed,
+            hits: body.items.into_iter().map(|p| (p.id, p.name)).collect(),
+        })
     }
 
     /// One page of a playlist's tracks, plus the API's reported `total` — the
@@ -432,7 +423,7 @@ impl WebApi {
     /// endpoint a browser itself uses to read a public playlist. Local/
     /// unavailable items (null `item`) are skipped, but still counted in
     /// `consumed` — see `RemotePage::consumed`.
-    pub fn playlist_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage, String> {
+    pub fn playlist_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
         let url = format!("{API}/playlists/{id}/items?limit={limit}&offset={offset}");
         match self.get(&url) {
             Ok(resp) => {
@@ -478,7 +469,7 @@ impl WebApi {
     /// Same Development Quota Mode gap as `playlist_tracks_page`: a `403` on
     /// an album this app isn't allowed to read falls back to `web_player`'s
     /// `getAlbum` read path instead of failing outright.
-    pub fn album_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage, String> {
+    pub fn album_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
         let url = format!("{API}/albums/{id}/tracks?limit={limit}&offset={offset}");
         let page: AlbumTracks = match self.get(&url) {
             Ok(resp) => resp.json().map_err(|e| e.to_string())?,
@@ -552,7 +543,7 @@ impl WebApi {
     /// API's reported `total` — the caller (`SpotifySource`'s `PagedList`)
     /// walks `offset` across repeated calls to load the whole list in the
     /// background instead of blocking one call on the full walk.
-    pub fn saved_tracks_page(&self, offset: usize, limit: usize) -> Result<RemotePage, String> {
+    pub fn saved_tracks_page(&self, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
         let url = format!("{API}/me/tracks?limit={limit}&offset={offset}");
         let body: SavedTracks = self.get(&url)?.json().map_err(|e| e.to_string())?;
         // `consumed` must be the raw item count, not `hits.len()` — a saved
