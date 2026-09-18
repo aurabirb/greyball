@@ -421,8 +421,6 @@ pub struct MedleyView {
     /// `main_rect`) — `clamp_scroll` and mouse hit-testing need it, but only
     /// `required_size` (given the constraint size) can compute it.
     last_main_rect: Rect,
-    /// How much of `last_main_rect` isn't list body: 1 with a title row, 0 without.
-    main_title_h: usize,
     /// Whole-terminal size as of the last layout pass — the fullscreen
     /// modals (warnings/hotkey-menu/playlist-picker) render over the entire
     /// screen rather than `last_main_rect`, so their own offset clamping
@@ -590,7 +588,6 @@ impl MedleyView {
             cursor: [0; N_SCREENS],
             list_offset: [0; N_SCREENS],
             last_main_rect: Rect::from_size((0, 0), (0, 0)),
-            main_title_h: 0,
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
@@ -1458,9 +1455,8 @@ impl MedleyView {
         self.top_rows(s).into_iter().nth(self.cursor[PLAYLISTS]).map(|r| r.target())
     }
 
-    /// What the main list's rows are, for the hint line's count readout.
-    fn row_unit(&self, count: usize) -> &'static str {
-        let playlists = norm_screen(self.screen) == PLAYLISTS
+    fn row_unit(&self, screen: usize, count: usize) -> &'static str {
+        let playlists = norm_screen(screen) == PLAYLISTS
             && self.open_playlist.is_none()
             && self.open_remote.is_none();
         match (playlists, count == 1) {
@@ -1471,34 +1467,35 @@ impl MedleyView {
         }
     }
 
-    /// `screen`'s list title, or `None` where it would only repeat the tab name above it.
-    fn list_title(&self, s: &Session, screen: usize) -> Option<String> {
+    /// `screen`'s list title row: `<name>`, optionally followed by `  (<hint>)`.
+    fn list_title(&self, s: &Session, screen: usize) -> String {
         let screen = norm_screen(screen);
         if let Some(query) = self.active_filter().filter(|q| !q.is_empty() && self.filterable_screen(screen)) {
             let total = self.visible_track_ids(s, screen).len();
             let plural = if total == 1 { "" } else { "es" };
-            return Some(format!("filter {query:?} ({total} match{plural})"));
+            return format!("filter {query:?} ({total} match{plural})");
         }
-        match screen {
-            NOW_PLAYING => s.playing_context_name(),
-            SEARCH => match (self.last_query.clone(), self.editing == Editing::Search) {
-                (Some(q), true) => Some(format!("{q}  (Esc to cancel)")),
-                (None, true) => Some("(Esc to cancel)".to_string()),
-                (q, false) => q,
-            },
+        let (name, hint) = match screen {
+            NOW_PLAYING => (s.playing_context_name(), None),
+            SEARCH => (self.last_query.clone(), (self.editing == Editing::Search).then_some("Esc to cancel")),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
-                    s.playlists()
-                        .into_iter()
-                        .find(|p| p.id == id)
-                        .map(|p| format!("{}  (Esc to go back)", p.name))
-                } else {
-                    self.open_remote
-                        .as_ref()
-                        .map(|(sid, name, _)| format!("[{sid}] {name}  (Esc to go back)"))
-                }
+                let name = match (self.open_playlist, &self.open_remote) {
+                    (Some(id), _) => s.playlists().into_iter().find(|p| p.id == id).map(|p| p.name),
+                    (None, Some((sid, name, _))) => Some(format!("[{sid}] {name}")),
+                    (None, None) => None,
+                };
+                let hint = name.is_some().then_some("Esc to go back");
+                (name, hint)
             }
-            _ => None,
+            _ => (None, None),
+        };
+        let name = name.unwrap_or_else(|| {
+            let total = self.list_len(s, screen);
+            format!("{} ({total} {})", screen_name(screen), self.row_unit(screen, total))
+        });
+        match hint {
+            Some(hint) => format!("{name}  ({hint})"),
+            None => name,
         }
     }
 
@@ -1662,7 +1659,7 @@ impl MedleyView {
 
     /// Visible list rows as of the last layout pass — `last_main_rect` minus its title row.
     fn list_h(&self) -> usize {
-        self.last_main_rect.height().saturating_sub(self.main_title_h)
+        self.last_main_rect.height().saturating_sub(LIST_TITLE_ROWS)
     }
 
     /// Keep `list_offset[screen]` a valid window around `cursor[screen]`:
@@ -2014,13 +2011,13 @@ impl MedleyView {
                 *off = (*off + WHEEL_STEP).min(max_off);
                 Some(EventResult::consumed())
             }
-            // Row 0 is the list's title row where it has one, not a clickable list row.
+            // Row 0 is the list's title row, not a clickable list row.
             MouseEvent::Press(MouseButton::Left) => {
                 let row = local.y - ry;
-                if row < self.main_title_h || row >= self.main_title_h + self.list_h() {
+                if row < LIST_TITLE_ROWS || row >= LIST_TITLE_ROWS + self.list_h() {
                     return Some(EventResult::consumed());
                 }
-                let idx = self.list_offset[screen] + (row - self.main_title_h);
+                let idx = self.list_offset[screen] + (row - LIST_TITLE_ROWS);
                 let len = self.with_session(|s| self.list_len(s, screen));
                 if idx < len {
                     return Some(self.click_row(screen, idx));
@@ -2818,28 +2815,22 @@ fn draw_settings_pane(printer: &Printer, entries: &[SettingsEntry], offset: usiz
     }
 }
 
-/// A title bar plus a window of track rows and a scrollbar — the main
-/// content area's rendering, factored out so a docked Queue/History pane
-/// draws with exactly the same look, just into its own (already-windowed,
-/// already-sized-to-its-rect) `printer`. `rows` is already the resolved
-/// `offset..offset+list_h` window (see `MedleyView::rows`); `sel` is the
-/// absolute index of the highlighted row, `total` the full list length for
-/// the scrollbar thumb.
-fn draw_row_list(printer: &Printer, title: Option<&str>, rows: &[Row], offset: usize, sel: usize, total: usize) {
+/// Rows every list view spends on its title, in the main area and docked panes alike.
+const LIST_TITLE_ROWS: usize = 1;
+
+/// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
+fn draw_row_list(printer: &Printer, title: &str, rows: &[Row], offset: usize, sel: usize, total: usize) {
     // Reserve the rightmost column of the list body as a scrollbar gutter —
     // always present so there's somewhere to show "how far into a many-
     // thousand-row list (Liked Songs) am I", which `sel`/`offset` alone
     // don't convey.
     let content_w = printer.size.x.saturating_sub(1);
-    let title_h = usize::from(title.is_some());
-    if let Some(title) = title {
-        let indent = main_col_start(content_w);
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad(&format!("{:indent$}{title}", ""), content_w));
-        });
-    }
-    let body_h = printer.size.y.saturating_sub(title_h);
-    let body = printer.windowed(Rect::from_size((0, title_h), (printer.size.x, body_h)));
+    let indent = main_col_start(content_w);
+    printer.with_color(ColorStyle::title_primary(), |p| {
+        p.print((0, 0), &pad(&format!("{:indent$}{title}", ""), content_w));
+    });
+    let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
+    let body = printer.windowed(Rect::from_size((0, LIST_TITLE_ROWS), (printer.size.x, body_h)));
     draw_list_body(&body, rows, offset, sel, total);
 }
 
@@ -3370,11 +3361,7 @@ impl View for MedleyView {
                     .map(|&(pane, _, screen, offset, pane_h)| {
                         let rows = self.rows(s, screen, offset, pane_h);
                         let total = self.list_len(s, screen);
-                        // A docked pane has no tab naming it, so it always keeps a title.
-                        let title = self
-                            .list_title(s, screen)
-                            .unwrap_or_else(|| format!("{} ({total} tracks)", screen_name(screen)));
-                        (pane, title, rows, total)
+                        (pane, self.list_title(s, screen), rows, total)
                     })
                     .collect();
                 (
@@ -3406,7 +3393,7 @@ impl View for MedleyView {
                 let title = if focused { format!("[{title}]") } else { title.clone() };
                 draw_row_list(
                     &printer.windowed(rect),
-                    Some(&title),
+                    &title,
                     rows,
                     self.list_offset[screen],
                     self.cursor[screen],
@@ -3464,7 +3451,7 @@ impl View for MedleyView {
             m.1.elapsed().as_secs() as usize
         };
         draw_tab_bar(printer, self.screen, &np, marquee_offset, &st.state);
-        draw_row_list(&printer.windowed(main_rect), main_title.as_deref(), &rows, offset, sel, total);
+        draw_row_list(&printer.windowed(main_rect), &main_title, &rows, offset, sel, total);
 
         // command / hint line (row above the status line) — also the whole
         // screen's fixed bottom band, not `main_rect`.
@@ -3516,7 +3503,7 @@ impl View for MedleyView {
         };
         if total > 0 {
             let more = if list_loading { "+" } else { "" };
-            let unit = self.row_unit(total);
+            let unit = self.row_unit(self.screen, total);
             let readout = format!("{}/{total}{more} {unit}", sel.min(total - 1) + 1);
             let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
             if x >= line.width() + 2 {
@@ -3635,8 +3622,6 @@ impl View for MedleyView {
             .collect();
         let main_h_changed = main_rect.height() != self.last_main_rect.height();
         self.last_main_rect = main_rect;
-        // Before `list_h`, so row windowing and `draw`'s title row agree on the body height.
-        self.main_title_h = self.with_session(|s| usize::from(self.list_title(s, self.screen).is_some()));
         self.last_pane_rects = panes;
         let list_h = self.list_h();
         if main_h_changed {
