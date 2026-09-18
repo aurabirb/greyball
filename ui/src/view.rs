@@ -260,7 +260,7 @@ impl View for MedleyView {
                         }
                     };
                 let settings = if want_settings { settings_entries(s, self.panes.cfg) } else { Vec::new() };
-                let warn_count = s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count();
+                let warn_count = s.plugin_warning_count();
                 // Feed the scan walk the visible list every redraw so it's prioritized over store order.
                 if let Some(scan) = &s.scan {
                     let view_screen = self.active_screen();
@@ -370,7 +370,7 @@ impl View for MedleyView {
         let screen_size_changed = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
         if self.warnings.is_some() {
-            let statuses = self.with_session(|s| s.plugin_statuses());
+            let statuses = self.with_session(|s| s.plugin_statuses().to_vec());
             if let Some(modal) = &mut self.warnings {
                 modal.relayout(screen_size_changed, constraint, &statuses);
             }
@@ -455,7 +455,7 @@ impl View for MedleyView {
             && local.x < self.last_screen_size.x
             && local.y == self.last_screen_size.y.saturating_sub(2)
         {
-            self.warnings = Some(WarningsModal::default());
+            self.open_warnings();
             return EventResult::consumed();
         }
 
@@ -579,7 +579,7 @@ impl View for MedleyView {
                 _ => self.jump_list(false, LIST_JUMP_STEP),
             },
             Event::Key(Key::Enter) if self.focus == Focus::Warnings => {
-                self.warnings = Some(WarningsModal::default());
+                self.open_warnings();
                 EventResult::consumed()
             }
             Event::Key(Key::Enter) | Event::Char(' ') if self.focus == Focus::Pane(Pane::Settings) => {

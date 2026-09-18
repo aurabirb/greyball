@@ -378,12 +378,6 @@
   messages and reactive patterns to communicate between, and render, independent parts of the app (no
   part reaching into another's state or recomputing/polling per frame what an event should drive).
   The component model is in `ui/src/view/README.md`; what breaks it today, in value order:
-  - `Session::plugin_statuses` (`core/src/app.rs`) calls every plugin's `probe()` per call — Spotify's
-    reads and JSON-parses its token store from disk — and the UI calls it on every frame
-    (`MedleyView::draw`'s `warn_count`), every layout pass (`required_size` → `clamp_focus` →
-    `focus_order` → `warn_count`), every mouse event (`on_event`'s warnings-button check) and twice
-    more per frame/event while the warnings modal is open. Cache the health list in `Session`,
-    refresh it only on `CoreEvent::PluginStatusChanged`/setup results, and have the UI read the cache.
   - `MedleyView::draw` rebuilds full-length lists per frame: `visible_track_ids` clones the whole
     context/queue/playlist id `Vec` to feed `scan.follow_view` on every redraw, `list_len` calls it
     again just for `.len()` on every filterable screen, and `on_event` once more per keypress. With a

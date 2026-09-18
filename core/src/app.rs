@@ -425,10 +425,17 @@ pub struct Session {
     hotkey_memberships: Mutex<HotkeyMemo>,
 
     /// Most recent `Plugin::setup` outcome per plugin, until superseded — see
-    /// `plugin_statuses`. Written by the UI's `run_plugin_setup` once
+    /// `refresh_plugin_health`. Written by the UI's `run_plugin_setup` once
     /// `setup()` returns, so a real failure (an OAuth error, a listener-bind
     /// failure, ...) shows instead of `probe()`'s generic pre-login text.
     last_setup: HashMap<SourceId, PluginHealth>,
+
+    /// Cache of `plugin_statuses`, recomputed by `refresh_plugin_health`
+    /// instead of probing every plugin on every call — a probe can do disk
+    /// or network I/O (Spotify's cached-token read, Soulseek's slskd ping)
+    /// and this used to run under the session lock on every frame/layout/
+    /// mouse event.
+    plugin_health: Vec<(SourceId, PluginHealth)>,
 
     /// Latest plugin-command result (`ui::run_plugin_command`'s off-thread
     /// `Plugin::run_command` call), if any, waiting to be shown as a modal
@@ -498,7 +505,7 @@ impl Session {
                 plugin_commands.insert(c.word, p.clone());
             }
         }
-        Self {
+        let mut session = Self {
             bus,
             store,
             catalog,
@@ -526,8 +533,11 @@ impl Session {
             membership_feedback: Arc::new(Mutex::new(None)),
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
+            plugin_health: Vec::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
-        }
+        };
+        session.refresh_plugin_health();
+        session
     }
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
@@ -745,6 +755,7 @@ impl Session {
                 // Health can improve outside setup()/run_command() (e.g. an
                 // auto-refresh) — rewire so that isn't stuck until a manual setup.
                 self.rewire_all_plugins();
+                self.refresh_plugin_health();
                 Ok(true)
             }
             CoreEvent::SourceError { .. }
@@ -755,19 +766,36 @@ impl Session {
 
     // ---- plugins (Spotify/SoundCloud login status + deferred setup) ----
 
-    /// Every registered plugin's id + current health, freshly probed (cheap
-    /// — see `Plugin::probe`'s contract), overlaid with the last `setup()`
-    /// attempt's own result when probing still isn't `Ok`: `probe()` only
-    /// ever returns a few generic canned strings, so a real setup failure
-    /// (`last_setup`) is more informative and wins until a fresh probe comes
-    /// back `Ok` again, which always supersedes it. Safe to call on every
-    /// redraw of the warnings panel.
-    pub fn plugin_statuses(&self) -> Vec<(SourceId, PluginHealth)> {
-        self.plugins
+    /// Every registered plugin's id + cached health — see `plugin_health`.
+    /// Cheap: just a clone of the cache, no probing.
+    pub fn plugin_statuses(&self) -> &[(SourceId, PluginHealth)] {
+        &self.plugin_health
+    }
+
+    /// Number of plugins currently reporting a non-`Ok` health — for the
+    /// warnings button/tab, cheaper than filtering `plugin_statuses` at
+    /// every call site.
+    pub fn plugin_warning_count(&self) -> usize {
+        self.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count()
+    }
+
+    /// Re-probes every plugin and rebuilds `plugin_health`. Called once at
+    /// startup and anywhere a plugin's health can change afterward
+    /// (`CoreEvent::PluginStatusChanged`'s handler, `record_setup_result`,
+    /// plugin-command completion) — `probe()` itself can do real I/O
+    /// (Spotify's cached-token read, Soulseek's slskd ping), so this must
+    /// never run on a hot path like every redraw.
+    pub fn refresh_plugin_health(&mut self) {
+        self.plugin_health = self
+            .plugins
             .iter()
             .map(|p| {
                 let id = p.id();
                 let probed = p.probe();
+                // `probe()` only ever returns a few generic canned strings,
+                // so a real setup failure (`last_setup`) is more informative
+                // and wins until a fresh probe comes back `Ok` again, which
+                // always supersedes it.
                 let health = if probed.is_ok() {
                     probed
                 } else {
@@ -775,13 +803,14 @@ impl Session {
                 };
                 (id, health)
             })
-            .collect()
+            .collect();
     }
 
     /// Record `id`'s last `Plugin::setup` result — called once `setup()`
-    /// returns, by `run_plugin_setup`. See `plugin_statuses`.
+    /// returns, by `run_plugin_setup`. See `refresh_plugin_health`.
     pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
         self.last_setup.insert(id, health);
+        self.refresh_plugin_health();
     }
 
     /// A cloned handle to one plugin, to call its (blocking) `setup()` off

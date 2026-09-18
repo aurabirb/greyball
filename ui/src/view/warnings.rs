@@ -103,8 +103,16 @@ impl WarningsModal {
 }
 
 impl MedleyView {
+    /// Opens the warnings modal, first re-probing every plugin — `probe()`
+    /// can do real I/O (a cached-token read, a slskd ping), so this is the
+    /// one place health gets re-checked instead of on every redraw.
+    pub(super) fn open_warnings(&mut self) {
+        self.with_session_mut(|s| s.refresh_plugin_health());
+        self.warnings = Some(WarningsModal::default());
+    }
+
     pub(super) fn draw_warnings(&self, modal: &WarningsModal, printer: &Printer) {
-        let statuses = self.with_session(|s| s.plugin_statuses());
+        let statuses = self.with_session(|s| s.plugin_statuses().to_vec());
         let prompt = match &self.editing {
             Editing::PluginSetup(id) => Some(match self.with_session(|s| s.plugin(id)).map(|p| p.setup_kind()) {
                 Some(SetupKind::TextInput { prompt }) => prompt,
@@ -116,7 +124,7 @@ impl MedleyView {
     }
 
     pub(super) fn on_warnings_event(&mut self, event: &Event) -> EventResult {
-        let statuses = self.with_session(|s| s.plugin_statuses());
+        let statuses = self.with_session(|s| s.plugin_statuses().to_vec());
         let size = self.last_screen_size;
         let Some(modal) = &mut self.warnings else { return EventResult::Ignored };
         match modal.on_event(event, size, &statuses) {
@@ -132,13 +140,13 @@ impl MedleyView {
 
     /// Number of plugins currently reporting a non-`Ok` health.
     pub(super) fn warn_count(&self) -> usize {
-        self.with_session(|s| s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count())
+        self.with_session(|s| s.plugin_warning_count())
     }
 
     /// `Enter` (or a click) on the selected warnings-modal row.
     fn activate_selected_warning(&mut self) {
         let Some(selected) = self.warnings.as_ref().map(WarningsModal::selected) else { return };
-        let Some((id, _)) = self.with_session(|s| s.plugin_statuses().into_iter().nth(selected)) else {
+        let Some((id, _)) = self.with_session(|s| s.plugin_statuses().get(selected).cloned()) else {
             return;
         };
         let Some(plugin) = self.with_session(|s| s.plugin(&id)) else {
