@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use cursive::event::EventResult;
 
-use core::{Command, Session, TrackId};
+use core::{BrowseNode, Command, PlaylistId, ScanDriver, Session, SourceId, TrackId};
 
 use super::{Focus, HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE, SEARCH};
 use super::input::Editing;
@@ -11,6 +11,17 @@ use super::playlists::TopRow;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
 
 use super::tab_bar::screen_name;
+
+/// What `MedleyView::follow_scan` last fed `ScanDriver::follow_view` under — recomputing the id
+/// list (and re-reporting it) only costs something when one of these actually changed.
+#[derive(PartialEq, Eq)]
+pub(super) struct FollowSignature {
+    screen: usize,
+    list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
+    query: Option<String>,
+    len: usize,
+    highlighted: usize,
+}
 
 impl MedleyView {
     /// Track ids visible on `screen`, in display order.
@@ -101,7 +112,7 @@ impl MedleyView {
     /// `screen`'s list title row: `<name>`, optionally followed by `  (<hint>)`.
     pub(super) fn list_title(&self, s: &Session, screen: usize) -> String {
         if let Some(query) = self.active_filter().filter(|q| !q.is_empty() && self.filterable_screen(screen)) {
-            let total = self.visible_track_ids(s, screen).len();
+            let total = self.filtered_len(s, screen).unwrap_or(0);
             let plural = if total == 1 { "" } else { "es" };
             return format!("filter {query:?} ({total} match{plural})");
         }
@@ -141,7 +152,8 @@ impl MedleyView {
             if matched.is_empty() {
                 return vec![plain_row(format!("no matches for {query:?}"))];
             }
-            return track_rows(matched.into_iter().skip(offset).take(limit).collect());
+            // Only the visible window is ever cloned out of the matched `Arc`.
+            return track_rows(matched.iter().skip(offset).take(limit).cloned().collect());
         }
         match screen {
             NOW_PLAYING => {
@@ -198,17 +210,26 @@ impl MedleyView {
         }
     }
 
-    /// The current screen's full list length.
+    /// The current screen's full list length. Never builds the id/track list just to count it —
+    /// every underlying list already exposes a cheap length accessor.
     pub(super) fn list_len(&self, s: &Session, screen: usize) -> usize {
-        if self.filterable_screen(screen) {
-            return self.visible_track_ids(s, screen).len();
+        if let Some(len) = self.filtered_len(s, screen) {
+            return len;
         }
         match screen {
             NOW_PLAYING => s.playing_context_len(),
             SEARCH => s.results_len(),
             QUEUE => s.queue_len(),
             HIST => s.queue.history_len(),
-            PLAYLISTS => self.top_rows(s).len(),
+            PLAYLISTS => {
+                if let Some(id) = self.playlists.open {
+                    s.playlist_len(id)
+                } else if let Some((sid, _, node)) = &self.playlists.remote {
+                    s.remote_playlist_len(sid, node)
+                } else {
+                    self.top_rows(s).len()
+                }
+            }
             _ => 0,
         }
     }
@@ -246,7 +267,7 @@ impl MedleyView {
     /// `clamp_cursor`, generalized to an explicit `screen` and folding in the forward step + length lookup.
     pub(super) fn bump_pane_cursor(&mut self, screen: usize, step: usize) {
         self.lists[screen].cursor = self.lists[screen].cursor.saturating_add(step);
-        let len = self.with_session(|s| self.visible_track_ids(s, screen).len());
+        let len = self.with_session(|s| self.list_len(s, screen));
         let c = &mut self.lists[screen].cursor;
         if len == 0 {
             *c = 0;
@@ -276,5 +297,28 @@ impl MedleyView {
     pub(super) fn relayout_list(&mut self, screen: usize, resized: bool, list_h: usize) {
         let len = self.with_session(|s| self.list_len(s, screen));
         self.lists[screen].relayout(resized, len, list_h);
+    }
+
+    /// Feeds the scan walk the visible list — but only reruns `visible_track_ids` (a whole-list
+    /// clone) and re-reports it when `screen`'s identity, length, cursor or filter query actually
+    /// changed since the last call, not on every redraw. A length/identity change also covers list
+    /// contents changing with no keypress (search results landing, remote pagination, queue
+    /// advancing), just not a same-length reorder — an accepted approximation, not worth an exact
+    /// content diff every frame.
+    pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: usize) {
+        let highlighted = self.lists[screen].cursor;
+        let sig = FollowSignature {
+            screen,
+            list_id: self.playlists.list_id(),
+            query: self.active_filter().map(str::to_string),
+            len: self.list_len(s, screen),
+            highlighted,
+        };
+        let mut last = self.follow_sig.lock().unwrap();
+        if last.as_ref() == Some(&sig) {
+            return;
+        }
+        scan.follow_view(self.visible_track_ids(s, screen), highlighted);
+        *last = Some(sig);
     }
 }

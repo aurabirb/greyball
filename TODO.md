@@ -378,14 +378,6 @@
   messages and reactive patterns to communicate between, and render, independent parts of the app (no
   part reaching into another's state or recomputing/polling per frame what an event should drive).
   The component model is in `ui/src/view/README.md`; what breaks it today, in value order:
-  - `MedleyView::draw` rebuilds full-length lists per frame: `visible_track_ids` clones the whole
-    context/queue/playlist id `Vec` to feed `scan.follow_view` on every redraw, `list_len` calls it
-    again just for `.len()` on every filterable screen, and `on_event` once more per keypress. With a
-    filter active each of `rows`, `list_len`, `list_title` and `visible_track_ids` clones the entire
-    cached `Vec<Track>` (`filtered_tracks` returns `cache.result.clone()`) — four times per frame.
-    Return lengths/slices from the sources and the filter cache without cloning (`Arc<[Track]>` or a
-    closure over the cached slice), and call `follow_view` only when the screen, list identity,
-    cursor or list length changes.
   - `Session::playlists()` is a store read transaction plus a clone of every playlist's `items`; per
     frame it runs in `rows` (Playlists top level), `list_title`/`context_name` (open playlist),
     the playlist picker's `draw`, `top_rows`, and `help_lines`. Give `Session` a playlist-names cache

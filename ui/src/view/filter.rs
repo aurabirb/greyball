@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -27,7 +27,8 @@ struct FilterCache {
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
     source_len: usize,
-    result: Vec<core::Track>,
+    /// `Arc` so callers can hand out the whole matched list without cloning every `Track` in it.
+    result: Arc<[core::Track]>,
 }
 
 /// The `/`-filter's rank for one row against `query`, low-to-high, `None` if it doesn't match at all.
@@ -98,8 +99,9 @@ impl MedleyView {
         }
     }
 
-    /// `screen`'s tracks narrowed and ranked by the active local filter.
-    pub(super) fn filtered_tracks(&self, s: &Session, screen: usize) -> Option<Vec<core::Track>> {
+    /// `screen`'s tracks narrowed and ranked by the active local filter. `Arc` clone only — the
+    /// caller slices whatever window it actually needs instead of getting a full `Vec<Track>` copy.
+    pub(super) fn filtered_tracks(&self, s: &Session, screen: usize) -> Option<Arc<[core::Track]>> {
         let query = self.active_filter()?;
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;
@@ -122,7 +124,7 @@ impl MedleyView {
             .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t, r)))
             .collect();
         ranked.sort_by(|a, b| a.1.cmp(&b.1));
-        let result: Vec<core::Track> = ranked.into_iter().map(|(t, _)| t).collect();
+        let result: Arc<[core::Track]> = ranked.into_iter().map(|(t, _)| t).collect();
 
         *self.filter.cache.lock().unwrap() = Some(FilterCache {
             screen,
@@ -132,6 +134,11 @@ impl MedleyView {
             result: result.clone(),
         });
         Some(result)
+    }
+
+    /// Cheap count of `filtered_tracks`, `None` if the local filter isn't active on `screen`.
+    pub(super) fn filtered_len(&self, s: &Session, screen: usize) -> Option<usize> {
+        self.filtered_tracks(s, screen).map(|t| t.len())
     }
 
     /// Reset the current screen's cursor/scroll to the top.

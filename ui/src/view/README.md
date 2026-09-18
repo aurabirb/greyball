@@ -62,7 +62,7 @@ one component's outcome and mutates another (`ListEvent::Activate` from the pick
 and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling, never locks the
 session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
 deliberate exception). Interior mutability in `draw` is limited to clocks and caches (`Marquee`,
-`LocalFilter::cache`).
+`LocalFilter::cache`, `MedleyView::follow_sig` — dedupes `ScanDriver::follow_view` reports).
 
 ## Adding a component
 

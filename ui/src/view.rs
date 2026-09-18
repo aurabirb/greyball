@@ -1,6 +1,6 @@
 //! `MedleyView` — the whole TUI in one snapshot-rendered cursive view.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use cursive::{Printer, Rect, Vec2, View};
@@ -21,6 +21,7 @@ use filter::LocalFilter;
 use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
+use lists::FollowSignature;
 use log::LogPane;
 use panes::{PaneLayout, list_screen_for_pane};
 use playlist_picker::PlaylistPicker;
@@ -117,6 +118,8 @@ pub struct MedleyView {
     help: Option<HelpModal>,
     playlist_picker: Option<PlaylistPicker>,
     marquee: Marquee,
+    /// What `follow_scan` last reported to the scan walk — a cache, not view state; see its doc.
+    follow_sig: Mutex<Option<FollowSignature>>,
 }
 
 impl MedleyView {
@@ -146,6 +149,7 @@ impl MedleyView {
             help: None,
             playlist_picker: None,
             marquee: Marquee::new(),
+            follow_sig: Mutex::new(None),
         }
     }
 
@@ -261,12 +265,9 @@ impl View for MedleyView {
                     };
                 let settings = if want_settings { settings_entries(s, self.panes.cfg) } else { Vec::new() };
                 let warn_count = s.plugin_warning_count();
-                // Feed the scan walk the visible list every redraw so it's prioritized over store order.
+                // Feed the scan walk the visible list so it's prioritized over store order.
                 if let Some(scan) = &s.scan {
-                    let view_screen = self.active_screen();
-                    let ids = self.visible_track_ids(s, view_screen);
-                    let highlighted = self.lists[view_screen].cursor;
-                    scan.follow_view(ids, highlighted);
+                    self.follow_scan(s, scan, self.active_screen());
                 }
                 let pane_rows: Vec<(Pane, String, Vec<Row>, usize)> = list_panes
                     .iter()
@@ -490,14 +491,7 @@ impl View for MedleyView {
         }
 
         // One lock: taking the session guard twice in one statement deadlocks.
-        let len = self.with_session(|s| {
-            let tracks = self.visible_track_ids(s, self.screen).len();
-            if self.screen == PLAYLISTS && self.playlists.at_top_level() {
-                tracks.max(self.top_rows(s).len())
-            } else {
-                tracks
-            }
-        });
+        let len = self.with_session(|s| self.list_len(s, self.screen));
 
         let result = match event {
             Event::Key(Key::Tab) => {
