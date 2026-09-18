@@ -122,7 +122,7 @@ impl MedleyView {
     }
 
     /// This row's display name, looked up fresh.
-    pub(super) fn hotkey_row_name_for(&self, target: &HotkeyTarget) -> String {
+    fn hotkey_row_name_for(&self, target: &HotkeyTarget) -> String {
         match target {
             HotkeyTarget::Builtin(action) => action.label().to_string(),
             HotkeyTarget::Local(_) | HotkeyTarget::Remote(..) => self.with_session(|s| {
@@ -173,7 +173,7 @@ impl MedleyView {
     }
 
     /// Shared by `clear_selected_hotkey`/`clear_captured_hotkey`.
-    pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
+    fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
         let key = self.with_session(|s| s.playlist_hotkey(&target));
         self.with_session_mut(|s| s.unbind_hotkey(&target));
         self.hotkey_feedback = key.map(|k| format!("Unbound '{k}'"));

@@ -24,7 +24,7 @@ fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: 
 
 impl MedleyView {
     /// Selects row `idx` of `screen`'s list.
-    pub(super) fn click_row(&mut self, screen: usize, idx: usize) -> EventResult {
+    fn click_row(&mut self, screen: usize, idx: usize) -> EventResult {
         self.cursor[screen] = idx;
         self.clamp_scroll();
         let now = Instant::now();

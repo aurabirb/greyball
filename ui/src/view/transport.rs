@@ -61,7 +61,7 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
 }
 
 /// The play/pause *button*'s icon: the action a press would take, not the state it's in.
-pub(super) fn player_action_icon(state: &PlayerState) -> &'static str {
+fn player_action_icon(state: &PlayerState) -> &'static str {
     match state {
         PlayerState::Playing => "⏸",
         PlayerState::Paused | PlayerState::Stopped => "▶",

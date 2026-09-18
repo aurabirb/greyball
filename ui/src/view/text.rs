@@ -20,7 +20,7 @@ pub(super) fn pad_right_aligned(s: &str, width: usize) -> String {
 }
 
 /// Strips U+FE0E/U+FE0F variation selectors.
-pub(super) fn strip_variation_selectors(s: &str) -> String {
+fn strip_variation_selectors(s: &str) -> String {
     s.chars().filter(|&c| c != '\u{FE0E}' && c != '\u{FE0F}').collect()
 }
 

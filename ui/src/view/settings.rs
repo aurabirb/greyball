@@ -20,7 +20,7 @@ pub(super) enum SettingsEntry {
     Scan { enabled: bool, available: bool },
 }
 
-pub(super) fn settings_entry_line(e: &SettingsEntry) -> String {
+fn settings_entry_line(e: &SettingsEntry) -> String {
     match e {
         SettingsEntry::Info(s) => s.clone(),
         SettingsEntry::Source { name, enabled } => format!("[{}] {name}", if *enabled { "x" } else { " " }),

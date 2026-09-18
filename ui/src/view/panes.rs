@@ -20,9 +20,9 @@ pub(super) fn list_screen_for_pane(pane: Pane) -> Option<usize> {
 }
 
 /// Rows reserved at the very top of the terminal and bottom.
-pub(super) const TAB_BAR_ROWS: usize = 1;
+const TAB_BAR_ROWS: usize = 1;
 
-pub(super) const BOTTOM_BAR_ROWS: usize = 2;
+const BOTTOM_BAR_ROWS: usize = 2;
 
 /// `Action::CyclePaneLayout`'s rotation, one `(side, stack)` step per press.
 pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
@@ -161,7 +161,7 @@ impl MedleyView {
     }
 
     /// `pane`'s own placement: its `pane_mode_overrides` entry, else the shared default.
-    pub(super) fn pane_mode(&self, pane: Pane) -> PaneMode {
+    fn pane_mode(&self, pane: Pane) -> PaneMode {
         self.pane_mode_overrides.get(&pane).copied().unwrap_or(self.pane_cfg.mode)
     }
 
@@ -226,7 +226,7 @@ impl MedleyView {
     }
 
     /// Keep `log_scroll` inside the actual scrollable range for `pane`'s current content and on-screen size.
-    pub(super) fn clamp_pane_scroll(&mut self, pane: Pane) {
+    fn clamp_pane_scroll(&mut self, pane: Pane) {
         let Some((width, h)) = self.pane_content_dims(pane) else { return };
         let lines = match pane {
             Pane::Log => self.log_render_lines().0,

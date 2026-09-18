@@ -14,16 +14,16 @@ use super::text::{pad, pad_right_aligned, truncate};
 
 /// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
 #[derive(Clone)]
-pub(super) struct Span {
-    pub(super) text: String,
-    pub(super) color: Option<Color>,
-    pub(super) italic: bool,
+struct Span {
+    text: String,
+    color: Option<Color>,
+    italic: bool,
 }
 
 /// One column's rendered cell, from `render_cell`.
 #[derive(Clone)]
 pub(super) struct Cell {
-    pub(super) spans: Vec<Span>,
+    spans: Vec<Span>,
 }
 
 impl Cell {
@@ -31,7 +31,7 @@ impl Cell {
         Self::colored(text, None)
     }
 
-    pub(super) fn colored(text: impl Into<String>, color: Option<Color>) -> Self {
+    fn colored(text: impl Into<String>, color: Option<Color>) -> Self {
         Self { spans: vec![Span { text: text.into(), color, italic: false }] }
     }
 
@@ -39,22 +39,22 @@ impl Cell {
         self.spans.iter().map(|s| s.text.as_str()).collect()
     }
 
-    pub(super) fn styled(&self) -> bool {
+    fn styled(&self) -> bool {
         self.spans.iter().any(|s| s.italic || s.color.is_some())
     }
 }
 
 /// A rendered list row; every column is a `Cell` produced by `render_cell`.
 pub(super) struct Row {
-    pub(super) tags: Cell,
-    pub(super) main: Cell,
+    tags: Cell,
+    main: Cell,
     /// One letter per hotkey-bound playlist holding this track, italic while that membership is pending.
     pub(super) hotkeys: Cell,
-    pub(super) source: Cell,
-    pub(super) duration: Cell,
-    pub(super) current: bool,
+    source: Cell,
+    duration: Cell,
+    current: bool,
     /// This row's own presence in the list on screen is still settling (a remote add/remove in flight).
-    pub(super) pending: bool,
+    pending: bool,
 }
 
 /// A `Row` with only its main column set — placeholder messages and the Playlists top level.
@@ -71,7 +71,7 @@ pub(super) fn plain_row(main: impl Into<String>) -> Row {
 }
 
 /// Which `Row` column a `render_cell` call is producing.
-pub(super) enum Column {
+enum Column {
     Tags,
     Main,
     Hotkeys,
@@ -80,7 +80,7 @@ pub(super) enum Column {
 }
 
 /// The single per-column cell renderer — a pure function of the track plus the state handed in.
-pub(super) fn render_cell(col: Column, t: &core::Track, cached: bool, visible: &[String], hotkeys: &[HotkeyMembership]) -> Cell {
+fn render_cell(col: Column, t: &core::Track, cached: bool, visible: &[String], hotkeys: &[HotkeyMembership]) -> Cell {
     match col {
         Column::Tags => {
             let color = visible.iter().find_map(|attr| t.attrs.get(attr).and_then(|v| tag_color(attr, v)));
@@ -125,7 +125,7 @@ pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &Ha
 }
 
 /// Per-tag-attr cell renderer, keyed by attr name (a `Config::visible_track_attrs` entry).
-pub(super) fn tag_color(attr: &str, value: &str) -> Option<Color> {
+fn tag_color(attr: &str, value: &str) -> Option<Color> {
     match attr {
         "bpm" => bpm_color(value),
         _ => None,
@@ -133,7 +133,7 @@ pub(super) fn tag_color(attr: &str, value: &str) -> Option<Color> {
 }
 
 /// Colors bpm on a blue→green→red gradient clamped to 60-180 bpm.
-pub(super) fn bpm_color(bpm: &str) -> Option<Color> {
+fn bpm_color(bpm: &str) -> Option<Color> {
     const LOW: f64 = 60.0;
     const MID: f64 = 120.0;
     const HIGH: f64 = 180.0;
@@ -169,7 +169,7 @@ pub(super) fn draw_row_list(printer: &Printer, title: &str, rows: &[Row], offset
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
-pub(super) fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
+fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
@@ -219,7 +219,7 @@ pub(super) fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel
 }
 
 /// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order.
-pub(super) fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
+fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
     let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4;
     if width <= fixed {
         return Vec::new();
@@ -239,24 +239,24 @@ pub(super) fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
 }
 
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
-pub(super) const ROW_MARK_W: usize = 2;
+const ROW_MARK_W: usize = 2;
 
 /// Column a row's main text starts at — what the title row is indented by to line up with it.
-pub(super) fn main_col_start(content_w: usize) -> usize {
+fn main_col_start(content_w: usize) -> usize {
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
     ROW_MARK_W + layout.get(1).map_or(0, |&(start, ..)| start)
 }
 
 /// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`).
-pub(super) const TAGS_COL_W: usize = 3;
+const TAGS_COL_W: usize = 3;
 
-pub(super) const SOURCE_COL_W: usize = 6;
+const SOURCE_COL_W: usize = 6;
 
-pub(super) const DURATION_COL_W: usize = 6;
+const DURATION_COL_W: usize = 6;
 
-pub(super) const HOTKEYS_COL_W: usize = 8;
+const HOTKEYS_COL_W: usize = 8;
 
-pub(super) fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str, width: usize) -> String {
+fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str, width: usize) -> String {
     let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4; // 4 single-space gaps
     if width <= fixed {
         return truncate(main, width);

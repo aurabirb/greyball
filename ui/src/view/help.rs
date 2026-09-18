@@ -11,10 +11,10 @@ use super::scroll::bound_offset;
 use super::text::pad;
 
 /// Row the help screen's content starts on.
-pub(super) const HELP_LIST_TOP: usize = 1;
+const HELP_LIST_TOP: usize = 1;
 
 /// Content for the help/shortcuts screen.
-pub(super) fn build_help_lines(
+fn build_help_lines(
     playlist_hotkeys: &[(char, String)],
     builtin_remaps: &[(char, String)],
     plugin_commands: &[(String, String)],
@@ -57,7 +57,7 @@ pub(super) fn build_help_lines(
 
 impl MedleyView {
     /// The help screen's content lines.
-    pub(super) fn help_lines(&self) -> Vec<String> {
+    fn help_lines(&self) -> Vec<String> {
         let plugin_commands = self.with_session(|s| s.plugin_command_help());
         let (playlist_hotkeys, builtin_remaps) = self.with_session(|s| {
             let playlists = s.playlists();

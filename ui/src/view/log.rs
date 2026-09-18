@@ -13,7 +13,7 @@ pub(super) fn log_pin_after_scroll(scroll: usize, pin: Option<usize>, live_len: 
 }
 
 /// Length of the Log snapshot to actually render this frame.
-pub(super) fn log_visible_len(scroll: usize, pin: Option<usize>, live_len: usize) -> usize {
+fn log_visible_len(scroll: usize, pin: Option<usize>, live_len: usize) -> usize {
     if scroll == 0 { live_len } else { pin.unwrap_or(live_len).min(live_len) }
 }
 

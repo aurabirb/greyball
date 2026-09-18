@@ -15,7 +15,7 @@ use super::text::pad;
 pub(super) const WARNINGS_LIST_TOP: usize = 2;
 
 /// Cap on how many plugin messages the warnings modal's bottom section shows.
-pub(super) const WARNINGS_MESSAGES_MAX: usize = 5;
+const WARNINGS_MESSAGES_MAX: usize = 5;
 
 /// Only ever called for `count > 0` — the button isn't drawn at all when there are no warnings.
 pub(super) fn warnings_label(count: usize) -> String {
@@ -29,7 +29,7 @@ pub(super) fn defocuses_warnings(event: &Event) -> bool {
 
 impl MedleyView {
     /// "{id}: {msg}" for every plugin currently reporting a non-`Ok` health.
-    pub(super) fn warnings_messages(&self) -> Vec<String> {
+    fn warnings_messages(&self) -> Vec<String> {
         self.with_session(|s| {
             s.plugin_statuses()
                 .into_iter()
@@ -39,7 +39,7 @@ impl MedleyView {
     }
 
     /// Rows the bottom messages section reserves.
-    pub(super) fn warnings_messages_h(&self) -> usize {
+    fn warnings_messages_h(&self) -> usize {
         let n = self.warnings_messages().len();
         if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) }
     }

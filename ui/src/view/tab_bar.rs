@@ -10,7 +10,7 @@ use super::text::scroll_title;
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
 /// The main content's row-0 tabs, `(screen, bare name)`, in both display and hotkey order.
-pub(super) const TABS: [(usize, &str); 5] = [
+const TABS: [(usize, &str); 5] = [
     (NOW_PLAYING, "Now Playing"),
     (PLAYLISTS, "Playlists"),
     (SEARCH, "Search"),
@@ -19,7 +19,7 @@ pub(super) const TABS: [(usize, &str); 5] = [
 ];
 
 /// Background for the active tab only — every other tab uses the terminal's default colors, unstyled.
-pub(super) const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
+const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
 
 /// `screen`'s bare tab name, shared by the tab strip and the docked Queue/History pane title.
 pub(super) fn screen_name(screen: usize) -> &'static str {
@@ -37,14 +37,14 @@ pub(super) fn tab_label(index: usize, name: &str, collapsed: bool) -> String {
 }
 
 /// Total width of every tab label plus the gaps between them, for the given `collapsed` mode.
-pub(super) fn tabs_width(collapsed: bool) -> usize {
+fn tabs_width(collapsed: bool) -> usize {
     let gap = 1;
     TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label, collapsed).chars().count()).sum::<usize>()
         + gap * TABS.len().saturating_sub(1)
 }
 
 /// Each tab's screen, start column and width, from column 0 with a 1-column gap between tabs.
-pub(super) fn tab_layout(collapsed: bool) -> Vec<(usize, usize, usize)> {
+fn tab_layout(collapsed: bool) -> Vec<(usize, usize, usize)> {
     let widths: Vec<usize> =
         TABS.iter().enumerate().map(|(i, &(_, label))| tab_label(i, label, collapsed).chars().count()).collect();
     let gap = 1;
@@ -74,7 +74,7 @@ pub(super) fn tab_at_x(x: usize, width: usize, state: &PlayerState) -> Option<us
 }
 
 /// Whether the tab labels must collapse to single letters to leave room for the transport strip.
-pub(super) fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
+fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
     let gap = TRANSPORT_GAP;
     let transport_w = transport_layout(0, state).last().map_or(0, |&(_, s, w)| s + w);
     tabs_width(false) + gap + transport_w > content_w

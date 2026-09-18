@@ -1,7 +1,7 @@
 use core::Session;
 
 /// Width left for the status line's track-name field after the leading icon and the trailing block.
-pub(super) fn name_field_width(total_w: usize, prefix_w: usize, reserved_w: usize) -> usize {
+fn name_field_width(total_w: usize, prefix_w: usize, reserved_w: usize) -> usize {
     total_w.saturating_sub(prefix_w).saturating_sub(reserved_w)
 }
 
