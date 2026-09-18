@@ -212,12 +212,67 @@
   step dropped. Adding a playlist mid-work comes for free through whatever the Playlists window
   already offers (`:newplaylist`); the new row should appear selected in the floating instance.
   Consequences to handle in the same change: `` ` `` is `BuiltinAction::OpenHotkeyMenu`'s default
-  key and today opens the fullscreen built-ins remap menu — retarget that built-in to the playlist
-  popup and leave the built-ins menu reachable through `:keys` only (update `command::HELP`, the
-  help screen and the hint texts that mention either); delete the Playlists-screen backtick override
+  key and today opens the fullscreen built-ins remap menu — retarget that built-in to the floating
+  Playlists instance; built-in remapping stays reachable through `:keys` (which the merged
+  Help/hotkey window below takes over, along with `?`) — update `command::HELP`, the help text and
+  the hint texts that mention either; delete the Playlists-screen backtick override
   in `on_event` and the standalone `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`, which
   (1) and (2) replace. Do the extraction as its own pure-move commit(s) first (AGENTS.md: `sed`/
   `awk`, build + clippy clean), then add the second instance.
+- [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
+  — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
+  `draw_help`/`help_lines`/`build_help_lines`/`jump_help` and `draw_hotkey_menu`/`hotkey_rows`/
+  `open_hotkey_capture` and their `on_event` branches (`ui/src/view.rs`) rather than keeping either
+  alongside. Floating = the bordered box over the current view that the playlist hotkey rework
+  introduces; reuse it.
+  Content: one table of items, each `{command, description, shortcut}`, grouped into titled
+  sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
+  then movement/navigation, then player controls, then everything else (panes/windows, playlist
+  actions, playlist hotkeys, …). One source of truth, no duplication: today the same facts live in
+  `command::HELP` (name, description), `keybindings::RAW_KEYS` (key, description),
+  `BuiltinAction::label`/`default_key` (`core/src/app.rs`) and the alias table in
+  `command::parse` — fold them into one item table (section, command spelling with aliases and
+  args, description, the `BuiltinAction` or other bindable target if any) that this window, command
+  parsing/alias help and key dispatch all read; an action that is both a `:command` and a key (e.g.
+  `:open`/`o`, `:newplaylist`/`+`) is one row with both columns filled, never two rows.
+  Layout: three column lanes — command, description, shortcut (right-aligned at the box's right
+  edge, showing the live effective key, not the default). If no item in a section has a command,
+  that section draws without the command lane and the description takes its width. Descriptions
+  may be long or multi-line (first line a short summary, further lines detail); they wrap inside
+  the description lane only, never under the command or shortcut lanes:
+  ```
+  [ Commands ]
+
+  :open/:o [file/url]     open item                                              o
+                          longer explanation wrapped to the description lane,
+                          continuing on as many lines as it needs.
+
+  :newplaylist/:n <name>  create a new playlist                                  +
+                          more detail here.
+  ```
+  Precompute the layout once per (content, width), not per frame: lane widths per section from the
+  widest command/shortcut cell, then each item's wrapped description and so its height in rows,
+  with a uniform blank line between items and uniform spacing around section titles; cache the
+  resulting flat line list plus each item's first-line index and rebuild only on resize or a
+  hotkeys/playlists/plugin-commands change. `draw` and scrolling only slice that cache and never
+  take the session lock per frame or per scroll event — this is also the fix for the Help
+  scroll-lockup bug above; delete that bug entry when this ships (keep its "confirm which path
+  issued the skip" part as its own bug if still unexplained).
+  Navigation: the cursor moves item to item — only an item's first line is selectable/highlighted,
+  its continuation lines scroll with it but are never a cursor stop; Up/Down/j/k, PgUp/PgDn,
+  Home/End and the wheel as in the current menus; Tab/Shift-Tab jump to the next/previous section
+  (move the cursor to its first item and scroll its title to the top of the box — just a scroll to
+  position, no tab strip); Esc or `?` closes.
+  Rebinding: Enter on a row starts the existing one-keystroke capture (`hotkey_capture`/
+  `bind_captured_key`), Backspace clears that row's binding back to its default/none
+  (`clear_selected_hotkey`), with bind/steal/refusal feedback on the box's bottom hint line as
+  today. Almost every row should be bindable: rows backed by a `BuiltinAction` already are; give
+  `:commands` that take no argument and the actions now hard-coded as raw keys in `on_event` a
+  bindable target too (extending `BuiltinAction`/`HotkeyTarget` — this also settles the raw-handler
+  hotkey bug above, since one table then knows every taken key). Rows that can't sensibly be bound
+  (commands needing an argument, fixed keys like Esc/Enter/arrows) show their key but refuse Enter
+  with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
+  `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
 - [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
   (`TABS` in `ui/src/view.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
   (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
