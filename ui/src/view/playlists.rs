@@ -35,50 +35,71 @@ pub(super) fn top_row_name(row: &TopRow, playlists: &[Playlist]) -> String {
     }
 }
 
-/// A remote browse folder/playlist as tracked by `open_remote`/`RememberedPlaylist::Remote`.
+/// An open remote browse folder/playlist: source, display name, node.
 type RemoteOpen = (SourceId, String, BrowseNode);
 
 /// Which kind of playlist view was open on the Playlists screen when it was left for another screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum RememberedPlaylist {
+enum RememberedPlaylist {
     Local(PlaylistId),
     Remote(SourceId, String, BrowseNode),
 }
 
-/// Pure state transition backing `leave_playlists`.
-fn playlists_left(
-    open_playlist: Option<PlaylistId>,
-    open_remote: Option<RemoteOpen>,
+/// Where the Playlists screen is: its top-level list, or inside one local/remote playlist.
+#[derive(Default)]
+pub(super) struct PlaylistNav {
+    /// The local playlist whose tracks are shown; mutually exclusive with `remote`.
+    pub(super) open: Option<PlaylistId>,
+    pub(super) remote: Option<RemoteOpen>,
+    /// What was open when the screen was last left, reopened on switching back.
     remembered: Option<RememberedPlaylist>,
-) -> (Option<PlaylistId>, Option<RemoteOpen>, Option<RememberedPlaylist>) {
-    let remembered = match (open_playlist, open_remote) {
-        (Some(id), _) => Some(RememberedPlaylist::Local(id)),
-        (None, Some((sid, name, node))) => Some(RememberedPlaylist::Remote(sid, name, node)),
-        (None, None) => remembered,
-    };
-    (None, None, remembered)
 }
 
-/// What to reopen on switching back to Playlists; a remembered local playlist that no longer exists is dropped.
-pub(super) fn resolve_remembered_playlist(
-    remembered: Option<RememberedPlaylist>,
-    playlists: &[Playlist],
-) -> Option<RememberedPlaylist> {
-    remembered.filter(|r| match r {
-        RememberedPlaylist::Local(id) => playlists.iter().any(|p| p.id == *id),
-        RememberedPlaylist::Remote(..) => true,
-    })
+impl PlaylistNav {
+    pub(super) fn at_top_level(&self) -> bool {
+        self.open.is_none() && self.remote.is_none()
+    }
+
+    /// Identity of the open list, for caches keyed on it.
+    pub(super) fn list_id(&self) -> (Option<PlaylistId>, Option<(SourceId, BrowseNode)>) {
+        (self.open, self.remote.clone().map(|(sid, _, node)| (sid, node)))
+    }
+
+    /// Leaving the screen closes whatever is open but remembers it.
+    pub(super) fn leave(&mut self) {
+        self.remembered = match (self.open.take(), self.remote.take()) {
+            (Some(id), _) => Some(RememberedPlaylist::Local(id)),
+            (None, Some((sid, name, node))) => Some(RememberedPlaylist::Remote(sid, name, node)),
+            (None, None) => self.remembered.take(),
+        };
+    }
+
+    /// Esc back to the top level: unlike `leave`, this forgets what was open.
+    pub(super) fn back_out(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Reopens what `leave` remembered, unless it's a local playlist that no longer exists in `playlists`.
+    pub(super) fn restore(&mut self, playlists: &[Playlist]) {
+        match self.remembered.clone() {
+            Some(RememberedPlaylist::Local(id)) if playlists.iter().any(|p| p.id == id) => self.open = Some(id),
+            Some(RememberedPlaylist::Remote(sid, name, node)) => self.remote = Some((sid, name, node)),
+            _ => {}
+        }
+    }
+
+    pub(super) fn open_local(&mut self, id: PlaylistId) {
+        self.open = Some(id);
+        self.remote = None;
+    }
+
+    pub(super) fn open_remote(&mut self, sid: SourceId, name: String, node: BrowseNode) {
+        self.open = None;
+        self.remote = Some((sid, name, node));
+    }
 }
 
 impl MedleyView {
-    pub(super) fn leave_playlists(&mut self) {
-        let (open, remote, remembered) =
-            playlists_left(self.open_playlist, self.open_remote.clone(), self.remembered_playlist.clone());
-        self.open_playlist = open;
-        self.open_remote = remote;
-        self.remembered_playlist = remembered;
-    }
-
     /// The Playlists screen's combined top-level list.
     pub(super) fn top_rows(&self, s: &Session) -> Vec<TopRow> {
         let mut rows: Vec<TopRow> = s.playlists().into_iter().map(|p| TopRow::Local(p.id)).collect();
@@ -95,10 +116,10 @@ impl MedleyView {
         if self.screen != PLAYLISTS {
             return None;
         }
-        if let Some(id) = self.open_playlist {
+        if let Some(id) = self.playlists.open {
             return Some(id);
         }
-        if self.open_remote.is_some() {
+        if self.playlists.remote.is_some() {
             return None;
         }
         match self.top_rows(s).get(self.lists[PLAYLISTS].cursor) {
@@ -112,10 +133,10 @@ impl MedleyView {
         if self.screen != PLAYLISTS {
             return None;
         }
-        if let Some(id) = self.open_playlist {
+        if let Some(id) = self.playlists.open {
             return Some(HotkeyTarget::Local(id));
         }
-        if let Some((sid, _, node)) = &self.open_remote {
+        if let Some((sid, _, node)) = &self.playlists.remote {
             return Some(HotkeyTarget::Remote(sid.clone(), node.clone()));
         }
         self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor).map(|r| r.target())
@@ -135,8 +156,7 @@ impl MedleyView {
                     core::BrowseNode::Root => String::new(),
                 };
                 self.screen = PLAYLISTS;
-                self.open_playlist = None;
-                self.open_remote = Some((sid, name, node));
+                self.playlists.open_remote(sid, name, node);
                 self.lists[PLAYLISTS].cursor = 0;
                 self.filter_query = None; // a different list now — stale filter would be confusing
                 self.clamp_scroll(); // new list under an old (now meaningless) cursor
@@ -160,20 +180,20 @@ impl MedleyView {
     }
 
     pub(super) fn activate(&mut self) -> EventResult {
-        if self.screen == PLAYLISTS && self.open_playlist.is_none() && self.open_remote.is_none() {
+        if self.screen == PLAYLISTS && self.playlists.at_top_level() {
             let row = self.with_session(|s| {
                 self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor)
             });
             match row {
                 Some(TopRow::Local(id)) => {
-                    self.open_playlist = Some(id);
+                    self.playlists.open_local(id);
                     self.lists[PLAYLISTS].cursor = 0;
                     self.filter_query = None;
                     self.clamp_scroll(); // opened a new list — old window is meaningless
                     return EventResult::consumed();
                 }
                 Some(TopRow::Remote(sid, name, node)) => {
-                    self.open_remote = Some((sid, name, node));
+                    self.playlists.open_remote(sid, name, node);
                     self.lists[PLAYLISTS].cursor = 0;
                     self.filter_query = None;
                     self.clamp_scroll();

@@ -166,7 +166,7 @@ impl MedleyView {
         if self.pane_mode(pane) == PaneMode::Screen {
             if let Some(screen) = list_screen_for_pane(pane) {
                 self.screen = screen;
-                self.leave_playlists();
+                self.playlists.leave();
             } else {
                 self.screen_pane = if self.screen_pane == Some(pane) { None } else { Some(pane) };
             }

@@ -38,9 +38,9 @@ impl MedleyView {
             QUEUE => s.queue_window(0, s.queue_len()),
             HIST => s.history_window(0, s.queue.history_len()),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
+                if let Some(id) = self.playlists.open {
                     s.playlist_window(id, 0, s.playlist_len(id))
-                } else if let Some((sid, _, node)) = &self.open_remote {
+                } else if let Some((sid, _, node)) = &self.playlists.remote {
                     s.remote_playlist_window(sid, node, 0, s.remote_playlist_len(sid, node))
                 } else {
                     vec![]
@@ -57,9 +57,9 @@ impl MedleyView {
             QUEUE => s.queue_len(),
             HIST => s.queue.history_len(),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
+                if let Some(id) = self.playlists.open {
                     s.playlist_len(id)
-                } else if let Some((sid, _, node)) = &self.open_remote {
+                } else if let Some((sid, _, node)) = &self.playlists.remote {
                     s.remote_playlist_len(sid, node)
                 } else {
                     0
@@ -73,7 +73,7 @@ impl MedleyView {
     pub(super) fn filterable_screen(&self, screen: usize) -> bool {
         match screen {
             NOW_PLAYING | QUEUE | HIST => true,
-            PLAYLISTS => self.open_playlist.is_some() || self.open_remote.is_some(),
+            PLAYLISTS => !self.playlists.at_top_level(),
             _ => false,
         }
     }
@@ -93,7 +93,7 @@ impl MedleyView {
             return None;
         }
         let source_len = self.filterable_source_len(s, screen);
-        let list_id = (self.open_playlist, self.open_remote.clone().map(|(sid, _, node)| (sid, node)));
+        let list_id = self.playlists.list_id();
 
         if let Some(cache) = self.filter_cache.lock().unwrap().as_ref()
             && cache.screen == screen

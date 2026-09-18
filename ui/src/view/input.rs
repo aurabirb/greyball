@@ -14,7 +14,7 @@ use super::{HIST, MedleyView, PLAYLISTS, SEARCH};
 use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
-use super::playlists::{RememberedPlaylist, resolve_remembered_playlist};
+
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
@@ -70,7 +70,7 @@ impl MedleyView {
                     Ok(p) => p,
                     Err(e) => return popup(e),
                 };
-                let open = self.open_playlist;
+                let open = self.playlists.open;
                 if parsed == command::Parsed::Help {
                     self.help = Some(HelpModal::default());
                     return EventResult::consumed();
@@ -86,7 +86,7 @@ impl MedleyView {
                 }
                 if command::Parsed::History == parsed {
                     self.screen = HIST;
-                    self.leave_playlists();
+                    self.playlists.leave();
                     self.filter_query = None;
                     self.clamp_scroll();
                     return EventResult::consumed();
@@ -238,18 +238,11 @@ impl MedleyView {
                 self.screen = n;
                 // Leaving the Playlists screen for anything else.
                 if n != PLAYLISTS {
-                    self.leave_playlists();
-                } else if !was_playlists && self.open_playlist.is_none() && self.open_remote.is_none() {
+                    self.playlists.leave();
+                } else if !was_playlists && self.playlists.at_top_level() {
                     // Switching back into Playlists fresh: restore the remembered playlist.
-                    let resolved = self
-                        .with_session(|s| resolve_remembered_playlist(self.remembered_playlist.clone(), &s.playlists()));
-                    match resolved {
-                        Some(RememberedPlaylist::Local(id)) => self.open_playlist = Some(id),
-                        Some(RememberedPlaylist::Remote(sid, name, node)) => {
-                            self.open_remote = Some((sid, name, node))
-                        }
-                        None => {}
-                    }
+                    let playlists = self.with_session(|s| s.playlists());
+                    self.playlists.restore(&playlists);
                 }
                 // A different screen's list — any filter over the old one is meaningless now.
                 self.filter_query = None;

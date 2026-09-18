@@ -14,10 +14,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{
-    BrowseNode, Command, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode, PlaylistId, Session, Side,
-    SourceId,
-};
+use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode, Session, Side};
 
 use crate::{SessionHandle, keybindings};
 use crate::command::Pane;
@@ -30,7 +27,7 @@ use input::{Editing, key_name};
 use log::LogPane;
 use panes::{list_screen_for_pane, split};
 use playlist_picker::PlaylistPicker;
-use playlists::RememberedPlaylist;
+use playlists::PlaylistNav;
 use rows::{Row, draw_row_list};
 use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
 use settings::{SettingsPane, settings_entries};
@@ -112,13 +109,8 @@ pub struct MedleyView {
     filter_cache: std::sync::Mutex<Option<FilterCache>>,
     /// Last queue/wedge result.
     queue_feedback: Option<String>,
-    /// UI-local: which local playlist's tracks are shown on the playlists screen.
-    open_playlist: Option<PlaylistId>,
-    /// UI-local: which remote browse folder (e.g. a Spotify playlist) is shown on the playlists screen.
-    open_remote: Option<(SourceId, String, BrowseNode)>,
-    /// Whichever playlist was open when the Playlists screen was last left; Esc back to the top level forgets it.
-    remembered_playlist: Option<RememberedPlaylist>,
-    /// UI-local: which optional panes are currently open, in stack order (first = nearest the main content).
+    playlists: PlaylistNav,
+
     open_panes: Vec<Pane>,
     /// Shared default placement — screen vs. embedded, which side, which stacking axis.
     pane_cfg: PaneLayoutConfig,
@@ -163,9 +155,7 @@ impl MedleyView {
             filter_matcher: SkimMatcherV2::default(),
             filter_cache: std::sync::Mutex::new(None),
             queue_feedback: None,
-            open_playlist: None,
-            open_remote: None,
-            remembered_playlist: None,
+            playlists: PlaylistNav::default(),
             open_panes: Vec::new(),
             pane_cfg,
             pane_mode_overrides: HashMap::new(),
@@ -286,10 +276,10 @@ impl View for MedleyView {
                 let main_title = self.list_title(s, self.screen);
                 // A paginated remote list only knows what it has loaded so far.
                 let list_loading = self.screen == PLAYLISTS
-                    && match &self.open_remote {
+                    && match &self.playlists.remote {
                         Some((sid, _, node)) => s.remote_playlist_loading(sid, node),
                         None => {
-                            self.open_playlist.is_none()
+                            self.playlists.open.is_none()
                                 && s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid))
                         }
                     };
@@ -652,10 +642,7 @@ impl View for MedleyView {
         // One lock: taking the session guard twice in one statement deadlocks.
         let len = self.with_session(|s| {
             let tracks = self.visible_track_ids(s, self.screen).len();
-            if self.screen == PLAYLISTS
-                && self.open_playlist.is_none()
-                && self.open_remote.is_none()
-            {
+            if self.screen == PLAYLISTS && self.playlists.at_top_level() {
                 tracks.max(self.top_rows(s).len())
             } else {
                 tracks
@@ -697,12 +684,9 @@ impl View for MedleyView {
             },
             Event::Key(Key::Esc)
                 if self.screen == PLAYLISTS
-                    && (self.open_playlist.is_some() || self.open_remote.is_some()) =>
+                    && !self.playlists.at_top_level() =>
             {
-                self.open_playlist = None;
-                self.open_remote = None;
-                // Explicitly backing out to the list means "forget this", unlike switching screens.
-                self.remembered_playlist = None;
+                self.playlists.back_out();
                 self.lists[PLAYLISTS].cursor = 0;
                 self.filter_query = None; // going back — the filtered list no longer applies
                 EventResult::consumed()

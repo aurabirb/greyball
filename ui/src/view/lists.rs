@@ -24,9 +24,9 @@ impl MedleyView {
             QUEUE => s.queue_ids(),
             HIST => s.history_ids(),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
+                if let Some(id) = self.playlists.open {
                     s.playlist_track_ids(id)
-                } else if let Some((sid, _, node)) = &self.open_remote {
+                } else if let Some((sid, _, node)) = &self.playlists.remote {
                     s.remote_playlist_track_ids(sid, node)
                 } else {
                     vec![]
@@ -63,7 +63,7 @@ impl MedleyView {
         let index = tracks.iter().position(|t| *t == id).unwrap_or(0);
         // Only the Playlists screen's own remote-browse state is ever meaningful here.
         let remote = if screen == PLAYLISTS {
-            self.open_remote.as_ref().map(|(sid, _, node)| (sid.clone(), node.clone()))
+            self.playlists.remote.as_ref().map(|(sid, _, node)| (sid.clone(), node.clone()))
         } else {
             None
         };
@@ -78,10 +78,10 @@ impl MedleyView {
             QUEUE => Some("Queue".to_string()),
             HIST => Some("History".to_string()),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
+                if let Some(id) = self.playlists.open {
                     s.playlists().into_iter().find(|p| p.id == id).map(|p| p.name)
                 } else {
-                    self.open_remote.as_ref().map(|(_, name, _)| name.clone())
+                    self.playlists.remote.as_ref().map(|(_, name, _)| name.clone())
                 }
             }
             _ => None,
@@ -89,9 +89,7 @@ impl MedleyView {
     }
 
     pub(super) fn row_unit(&self, screen: usize, count: usize) -> &'static str {
-        let playlists = screen == PLAYLISTS
-            && self.open_playlist.is_none()
-            && self.open_remote.is_none();
+        let playlists = screen == PLAYLISTS && self.playlists.at_top_level();
         match (playlists, count == 1) {
             (true, true) => "playlist",
             (true, false) => "playlists",
@@ -111,7 +109,7 @@ impl MedleyView {
             NOW_PLAYING => (s.playing_context_name(), None),
             SEARCH => (self.last_query.clone(), (self.editing == Editing::Search).then_some("Esc to cancel")),
             PLAYLISTS => {
-                let name = match (self.open_playlist, &self.open_remote) {
+                let name = match (self.playlists.open, &self.playlists.remote) {
                     (Some(id), _) => s.playlists().into_iter().find(|p| p.id == id).map(|p| p.name),
                     (None, Some((sid, name, _))) => Some(format!("[{sid}] {name}")),
                     (None, None) => None,
@@ -133,7 +131,7 @@ impl MedleyView {
 
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
     pub(super) fn rows(&self, s: &Session, screen: usize, offset: usize, limit: usize) -> Vec<Row> {
-        let pending: HashSet<TrackId> = match &self.open_remote {
+        let pending: HashSet<TrackId> = match &self.playlists.remote {
             Some((sid, _, node)) if screen == PLAYLISTS => s.remote_pending_ids(sid, node).into_iter().collect(),
             _ => HashSet::new(),
         };
@@ -170,9 +168,9 @@ impl MedleyView {
             QUEUE => track_rows(s.queue_window(offset, limit)),
             HIST => track_rows(s.history_window(offset, limit)),
             PLAYLISTS => {
-                if let Some(id) = self.open_playlist {
+                if let Some(id) = self.playlists.open {
                     track_rows(s.playlist_window(id, offset, limit))
-                } else if let Some((sid, _, node)) = &self.open_remote {
+                } else if let Some((sid, _, node)) = &self.playlists.remote {
                     track_rows(s.remote_playlist_window(sid, node, offset, limit))
                 } else {
                     let playlists = s.playlists();
