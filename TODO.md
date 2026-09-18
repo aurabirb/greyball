@@ -156,6 +156,24 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
+- [ ] Split `ui/src/view.rs` (~4,700 lines: one `MedleyView` struct with ~180 lines of fields, a
+  ~1,900-line `impl MedleyView`, a ~1,200-line `impl View` holding all of `draw`/`on_event`, and ~65
+  free functions) into modules under `ui/src/view/`. Suggested seams, following the file's own
+  `// ----` section markers and free-function clusters: `rows.rs` (`Row`/`Cell`/`Column`,
+  `tracks_to_rows`, `render_cell`, `column_layout`, `draw_row_list`/`draw_list_body`, `list_title`),
+  `status_line.rs` (`StatusLineLayout`/`StatusLineWidths`, `status_line_layout`, transport glyphs,
+  `progress_bar`, plus the draw and mouse hit-test halves that must stay in sync — make them share one
+  layout call instead of mirroring it), `panes.rs` (`Pane` layout/`split`, `draw_pane`, log scroll/pin,
+  Queue/History docked panes), `settings.rs` (`SettingsEntry` and its draw/edit handling),
+  `hotkeys.rs` (hotkey menu, capture modal, `bind_captured_key`), `playlists.rs` (`TopRow`,
+  `RememberedPlaylist`, open playlist/remote navigation), `filter.rs` (`FilterCache`/`FilterRank`,
+  local filter), `mouse.rs` (`handle_mouse`, `click_row`, double-click), `input.rs` (`Editing`,
+  command line, `commit_edit`, key dispatch). Do it as pure moves first (per AGENTS.md: `sed`/`awk`,
+  not retyping; one module per commit, build + clippy clean each time), keeping `MedleyView` one
+  struct with `impl` blocks spread across the modules; only afterwards group its fields into
+  per-concern sub-structs (`LogState`, `HotkeyUi`, `PlaylistNav`, …). Delete any `#[cfg(test)]` blocks
+  encountered and trim multi-line doc comments to one line while moving. Best done before the
+  architecture review below, so that review works on navigable files.
 - [ ] Run a code and architecture review: make sure the program uses messages and reactive patterns
   to communicate between, and render, independent parts of the app (no part reaching into another's
   state or recomputing/polling per frame what an event should drive), and fix what doesn't. Then write
