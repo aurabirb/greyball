@@ -188,8 +188,8 @@
   does). Keys this screen's raw handlers consume first (`x` export, `:`, Enter, …) stay theirs —
   see the raw-handler hotkey bug above; don't make them assignable.
   (2) `` ` `` from anywhere opens a second instance of the Playlists window, floating — a bordered
-  box over the current view, not fullscreen (draw the view underneath as usual, then the box on
-  top; the same floating presentation as the per-window mode item below — build it once) — with its
+  box over the current view, not fullscreen (the floating mode from the per-window mode item
+  below, which ships first — reuse it, don't build a second one) — with its
   own state but the same behavior as the tabbed one: own cursor/scroll, own open local/remote
   playlist and drill-in/back navigation, own filter, and every Playlists-screen key working in it,
   including (1)'s direct assign, Backspace clearing the selected playlist's key, `x` export and
@@ -223,8 +223,7 @@
   — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
   `HelpModal`/`help_lines`/`build_help_lines`/`on_help_event` (`ui/src/view/help.rs`) and
   `HotkeyUi`'s menu half (`menu`/`draw_menu`/`menu_rows` and the menu arm of `on_hotkey_ui_event`,
-  `ui/src/view/hotkeys.rs`) rather than keeping either alongside. Floating = the bordered box over the current view that the playlist hotkey rework
-  introduces; reuse it.
+  `ui/src/view/hotkeys.rs`) rather than keeping either alongside. Floating = the floating window mode from the per-window mode item; reuse it.
   Content: one table of items, each `{command, description, shortcut}`, grouped into titled
   sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
   then movement/navigation, then player controls, then everything else (panes/windows, playlist
@@ -279,9 +278,8 @@
   **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
   main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
   **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`PaneLayout::fullscreen`),
-  and **floating** (a bordered box over the current view, not fullscreen — the same floating
-  presentation the playlist hotkey rework above introduces for its second Playlists instance; one
-  implementation, and that item's extracted window type is the model for the other windows).
+  and **floating** (a bordered box over the current view, not fullscreen — this item owns that
+  presentation; the playlist hotkey rework and the merged Help/hotkey window build on it).
   Today the two families are separate mechanisms: tab screens are fixed numbered screens that can
   only be tabs, panes have only `Screen`/`Embedded` (`pane_mode`/`pane_mode_overrides`, `:panes
   <pane> <screen|embedded>`, `toggle_pane`), and Queue/History exist twice — as a tab and as a pane
@@ -298,7 +296,12 @@
   least one window tabbed so the main area is never empty. Persist each window's mode (and open/
   closed state for non-tabbed ones) in `state.toml` next to volume and hotkeys (`save_state`,
   `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. The
-  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`).
+  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`). Do it before the playlist hotkey
+  rework and the merged Help/hotkey window, in three stages, each shippable: (A) one rect-drawn
+  component per window — including extracting the Playlists window into its own instantiable type
+  — with tabs and panes unified under the three modes that exist today (tabbed/docked/screen), no
+  new behavior; (B) the floating mode; (C) the toggle key, `:panes <window> <mode>`, persistence
+  and the Settings display.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
