@@ -33,18 +33,21 @@ use scroll::{
     CursorWindow, LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, follow_cursor_offset,
     modal_list_h, stepped_cursor,
 };
+use status_line::{STATUS_BAR_WIDTH, StatusLineWidths, bpm_status_tag, progress_bar, status_line_layout};
 use tab_bar::{draw_tab_bar, screen_name, tab_at_x, transport_at_x};
 use text::{in_span, ms, truncate_ellipsis, wrap};
 use transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
 
 mod rows;
 mod scroll;
+mod status_line;
 mod tab_bar;
 mod text;
 mod transport;
 
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
+pub use status_line::window_title_track_text;
 pub use transport::player_state_glyph;
 
 /// The track list `Command::PlayContext` last started playing from; independent of the Playlists screen's state.
@@ -3027,93 +3030,4 @@ fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: 
 /// Whether a keyboard event arriving while `Focus::Warnings` is focused should knock focus off the button.
 fn defocuses_warnings(event: &Event) -> bool {
     !matches!(event, Event::Key(Key::Enter))
-}
-
-/// Width left for the status line's track-name field after the leading icon and the trailing block.
-fn name_field_width(total_w: usize, prefix_w: usize, reserved_w: usize) -> usize {
-    total_w.saturating_sub(prefix_w).saturating_sub(reserved_w)
-}
-
-/// The status line's scrubber width.
-const STATUS_BAR_WIDTH: usize = 24;
-
-/// Click targets on the bottom status line — `(start column, width)` each, in screen columns.
-struct StatusLineLayout {
-    prev: (usize, usize),
-    playpause: (usize, usize),
-    next: (usize, usize),
-    scrubber: (usize, usize),
-    bpm: (usize, usize),
-    shuffle: (usize, usize),
-}
-
-/// Every segment's already-rendered display width, for [`status_line_layout`].
-struct StatusLineWidths {
-    prev: usize,
-    playpause: usize,
-    next: usize,
-    curtime: usize,
-    bar: usize,
-    totaltime: usize,
-    bpm: usize,
-    shuffle: usize,
-}
-
-/// Column layout for the status line.
-fn status_line_layout(total_w: usize, w: &StatusLineWidths) -> (usize, StatusLineLayout) {
-    let gap = 2;
-    let prev = (0, w.prev);
-    let playpause = (w.prev + 1, w.playpause);
-    let next = (w.prev + 1 + w.playpause + 1, w.next);
-    let cluster_w = w.prev + 1 + w.playpause + 1 + w.next;
-    let title_start = cluster_w + gap;
-    let reserved =
-        gap + w.curtime + 1 + w.bar + 1 + w.totaltime + gap + w.bpm + 1 + w.shuffle;
-    let name_w = name_field_width(total_w, title_start, reserved);
-
-    let mut x = title_start + name_w + gap;
-    x += w.curtime + 1;
-    let scrubber = (x, w.bar);
-    x += w.bar + 1 + w.totaltime + gap;
-    let bpm = (x, w.bpm);
-    x += w.bpm + 1;
-    let shuffle = (x, w.shuffle);
-    (name_w, StatusLineLayout { prev, playpause, next, scrubber, bpm, shuffle })
-}
-
-fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
-    if dur == 0 {
-        return "-".repeat(width);
-    }
-    let filled = ((pos as f64 / dur as f64) * width as f64).round() as usize;
-    let filled = filled.min(width);
-    format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
-}
-
-/// Bracketed BPM-scan status tag shown next to the status line's scrubber.
-fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
-    let Some(scan) = s.scan.as_ref() else {
-        return "[bd]".to_string();
-    };
-    let mode_letter = match scan.mode() {
-        core::ScanMode::Disabled => return "[bd]".to_string(),
-        core::ScanMode::CacheOnly => 'b',
-        core::ScanMode::Active => 'B',
-    };
-    // Purely a plugin-status indicator, never the resolved value itself.
-    let status_letter = match track.and_then(|t| scan.status("bpm", t.id)) {
-        Some(core::ScanStatus::Downloading) => 'd',
-        Some(core::ScanStatus::Error) => 'e',
-        Some(core::ScanStatus::Skipped) => 's',
-        None => 'w',
-    };
-    format!("[{mode_letter}{status_letter}]")
-}
-
-/// Full, un-scrolled track text for the terminal window title.
-pub fn window_title_track_text(track: Option<&core::Track>) -> String {
-    match track {
-        Some(t) => format!("{} - {}", t.display_artist(), t.title),
-        None => "medley".to_string(),
-    }
 }
