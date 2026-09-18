@@ -87,7 +87,7 @@ impl MedleyView {
                 if command::Parsed::History == parsed {
                     self.screen = HIST;
                     self.playlists.leave();
-                    self.filter_query = None;
+                    self.filter.query = None;
                     self.clamp_scroll();
                     return EventResult::consumed();
                 }
@@ -146,7 +146,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Editing::Filter => {
-                self.filter_query = if text.trim().is_empty() { None } else { Some(text) };
+                self.filter.query = if text.trim().is_empty() { None } else { Some(text) };
                 EventResult::consumed()
             }
             Editing::None => EventResult::Ignored,
@@ -245,7 +245,7 @@ impl MedleyView {
                     self.playlists.restore(&playlists);
                 }
                 // A different screen's list — any filter over the old one is meaningless now.
-                self.filter_query = None;
+                self.filter.query = None;
                 // Switching to Search focuses the input immediately, same as `/`.
                 if n == SEARCH {
                     self.editing = Editing::Search;

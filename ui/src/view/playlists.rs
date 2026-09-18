@@ -158,7 +158,7 @@ impl MedleyView {
                 self.screen = PLAYLISTS;
                 self.playlists.open_remote(sid, name, node);
                 self.lists[PLAYLISTS].cursor = 0;
-                self.filter_query = None; // a different list now — stale filter would be confusing
+                self.filter.query = None; // a different list now — stale filter would be confusing
                 self.clamp_scroll(); // new list under an old (now meaningless) cursor
                 EventResult::consumed()
             }
@@ -188,14 +188,14 @@ impl MedleyView {
                 Some(TopRow::Local(id)) => {
                     self.playlists.open_local(id);
                     self.lists[PLAYLISTS].cursor = 0;
-                    self.filter_query = None;
+                    self.filter.query = None;
                     self.clamp_scroll(); // opened a new list — old window is meaningless
                     return EventResult::consumed();
                 }
                 Some(TopRow::Remote(sid, name, node)) => {
                     self.playlists.open_remote(sid, name, node);
                     self.lists[PLAYLISTS].cursor = 0;
-                    self.filter_query = None;
+                    self.filter.query = None;
                     self.clamp_scroll();
                     return EventResult::consumed();
                 }

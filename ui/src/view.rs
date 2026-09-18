@@ -10,8 +10,6 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use fuzzy_matcher::skim::SkimMatcherV2;
-
 use unicode_width::UnicodeWidthStr;
 
 use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode, Session, Side};
@@ -20,7 +18,7 @@ use crate::{SessionHandle, keybindings};
 use crate::command::Pane;
 use crate::keybindings::Action;
 
-use filter::FilterCache;
+use filter::LocalFilter;
 use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
@@ -101,12 +99,7 @@ pub struct MedleyView {
     last_screen_size: Vec2,
     editing: Editing,
     buffer: String,
-    /// Committed screen-local filter query (`Editing::Filter`, Enter to commit).
-    filter_query: Option<String>,
-    /// Fuzzy matcher backing the `/`-filter.
-    filter_matcher: SkimMatcherV2,
-    /// Memoized result of the last `filtered_tracks` computation.
-    filter_cache: std::sync::Mutex<Option<FilterCache>>,
+    filter: LocalFilter,
     /// Last queue/wedge result.
     queue_feedback: Option<String>,
     playlists: PlaylistNav,
@@ -151,9 +144,7 @@ impl MedleyView {
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
-            filter_query: None,
-            filter_matcher: SkimMatcherV2::default(),
-            filter_cache: std::sync::Mutex::new(None),
+            filter: LocalFilter::default(),
             queue_feedback: None,
             playlists: PlaylistNav::default(),
             open_panes: Vec::new(),
@@ -501,7 +492,7 @@ impl View for MedleyView {
                 && matches!(event, Event::Char(c) if c.is_ascii_digit());
             if outside_click || leading_digit {
                 if is_filter {
-                    self.filter_query = None; // clear it — show the full list again
+                    self.filter.query = None; // clear it — show the full list again
                 }
                 self.editing = Editing::None;
                 self.buffer.clear();
@@ -525,7 +516,7 @@ impl View for MedleyView {
                 }
                 Event::Key(Key::Esc) => {
                     if is_filter {
-                        self.filter_query = None; // clear it — show the full list again
+                        self.filter.query = None; // clear it — show the full list again
                     }
                     self.editing = Editing::None;
                     self.buffer.clear();
@@ -688,7 +679,7 @@ impl View for MedleyView {
             {
                 self.playlists.back_out();
                 self.lists[PLAYLISTS].cursor = 0;
-                self.filter_query = None; // going back — the filtered list no longer applies
+                self.filter.query = None; // going back — the filtered list no longer applies
                 EventResult::consumed()
             }
             // Nav keys past this point only apply while a pane is focused.

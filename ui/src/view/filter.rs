@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
@@ -8,8 +10,18 @@ use crate::row::RowItem;
 use super::{HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE};
 use super::input::Editing;
 
-/// `MedleyView::filter_cache`'s contents.
-pub(super) struct FilterCache {
+/// The screen-local `/`-filter: fuzzy-narrows the viewed list without touching `Session`.
+#[derive(Default)]
+pub(super) struct LocalFilter {
+    /// Committed query (Enter); while still typing, `active_filter` reads the edit buffer instead.
+    pub(super) query: Option<String>,
+    matcher: SkimMatcherV2,
+    /// Filtering and ranking a whole list is too slow to redo per redraw; a `Mutex` only because `draw` takes `&self`.
+    cache: Mutex<Option<FilterCache>>,
+}
+
+/// The last `filtered_tracks` result, plus the key it was computed under.
+struct FilterCache {
     screen: usize,
     /// `(open_playlist, open_remote)` identity, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
@@ -82,7 +94,7 @@ impl MedleyView {
     pub(super) fn active_filter(&self) -> Option<&str> {
         match &self.editing {
             Editing::Filter => Some(self.buffer.as_str()),
-            _ => self.filter_query.as_deref(),
+            _ => self.filter.query.as_deref(),
         }
     }
 
@@ -95,7 +107,7 @@ impl MedleyView {
         let source_len = self.filterable_source_len(s, screen);
         let list_id = self.playlists.list_id();
 
-        if let Some(cache) = self.filter_cache.lock().unwrap().as_ref()
+        if let Some(cache) = self.filter.cache.lock().unwrap().as_ref()
             && cache.screen == screen
             && cache.list_id == list_id
             && cache.query == query
@@ -107,12 +119,12 @@ impl MedleyView {
         let tracks = self.all_tracks_for_screen(s, screen);
         let mut ranked: Vec<(core::Track, FilterRank)> = tracks
             .into_iter()
-            .filter_map(|t| rank_filter(&self.filter_matcher, &t.main(), query).map(|r| (t, r)))
+            .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t, r)))
             .collect();
         ranked.sort_by(|a, b| a.1.cmp(&b.1));
         let result: Vec<core::Track> = ranked.into_iter().map(|(t, _)| t).collect();
 
-        *self.filter_cache.lock().unwrap() = Some(FilterCache {
+        *self.filter.cache.lock().unwrap() = Some(FilterCache {
             screen,
             list_id,
             query: query.to_string(),
