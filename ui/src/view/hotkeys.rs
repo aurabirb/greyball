@@ -6,7 +6,8 @@ use cursive::theme::ColorStyle;
 
 use core::{BindError, HotkeyTarget};
 
-use super::{MedleyView, top_row_name};
+use super::MedleyView;
+use super::playlists::top_row_name;
 use super::scroll::{follow_cursor_offset, modal_list_h, stepped_cursor};
 use super::text::{pad, truncate_ellipsis};
 

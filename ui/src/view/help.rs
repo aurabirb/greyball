@@ -5,7 +5,8 @@ use core::HotkeyTarget;
 
 use crate::{command, keybindings};
 
-use super::{MedleyView, top_row_name};
+use super::MedleyView;
+use super::playlists::top_row_name;
 use super::scroll::bound_offset;
 use super::text::pad;
 
