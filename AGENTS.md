@@ -7,6 +7,9 @@ working-agreement rule is established, add it here directly rather than only in 
 ## Workflow
 - One `general-purpose` agent per task, run sequentially — never in parallel, never forked.
   Each agent starts with no memory of prior conversations, so give it a full self-contained brief.
+- An agent brief carries guidance, not just the goal: do a quick look first (grep, skim the likely
+  files) and include where to look (files, functions, relevant commits) and an educated guess at how
+  to implement it, marked as a guess the agent should verify against the code.
 - Before committing: `cargo build --workspace --all-features` and
   `cargo clippy --workspace --all-features --all-targets` — both must be clean. There is no
   `cargo test` step — see the Tests rule under Code style.
