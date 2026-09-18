@@ -110,9 +110,9 @@
   Left/Right; `,`/`.` via `keybindings.rs`'s `BuiltinAction::SeekForward/SeekBack`) — in `run`, after a
   successful `Command::Seek`, find the playing track's index in the current screen's list (the
   position-aware lookup from the duplicate-marker bug above; `visible_track_ids` for identity
-  otherwise) and move the cursor there through the same setter the search-jump path uses
-  (`self.cursor[screen] = idx` ~line 1409, which already handles scroll-into-view) — no-op when the
-  playing track isn't in the list on screen. Don't do it for mouse scrubber seeks.
+  otherwise) and move the cursor there the way `click_row` does (`self.cursor[screen] = idx;
+  self.clamp_scroll();`, which scrolls it into view) — no-op when the playing track isn't in the list
+  on screen. Don't do it for mouse scrubber seeks.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
