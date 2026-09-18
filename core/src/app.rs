@@ -873,6 +873,13 @@ impl Session {
                 }
                 Ok(true)
             }
+            PlayerEvent::PreloadHint { source, uri } => {
+                let hinted = self.store.track_by_rendition(source, uri)?.map(|t| t.id);
+                if hinted.is_some() && hinted == self.queue.get_current() {
+                    self.preload_upcoming();
+                }
+                Ok(false)
+            }
             PlayerEvent::LoadFailed { source, uri } => {
                 self.last_status.state = PlayerState::Stopped;
                 // Only the track the queue still considers current is worth a
@@ -1512,53 +1519,58 @@ impl Session {
     /// path, so an ad-hoc/manually-queued track list always advances in
     /// order regardless of the shuffle setting.
     fn play_next_in_context(&mut self) -> bool {
-        let Some(ctx) = self.context.as_ref() else {
+        let Some(next_index) = self.next_context_index() else {
             return false;
         };
-        if ctx.tracks.is_empty() {
-            return false;
+        let shuffle = self.queue.get_shuffle();
+        let ctx = self.context.as_mut().unwrap();
+        if shuffle {
+            ctx.shuffle_bag.pop();
         }
-        let next_index = if self.queue.get_shuffle() {
-            let Some(next_index) = self.next_shuffled_context_index() else {
-                return false;
-            };
-            next_index
-        } else {
-            let next_index = ctx.index + 1;
-            // The snapshot ended, but if it came from a remote node still
-            // loading in the background, re-check the live list before
-            // giving up — it may have grown past what was captured at play
-            // time.
-            if ctx.tracks.get(next_index).is_none()
-                && let Some((source, node)) = ctx.remote.clone()
-            {
-                let live = self.remote_playlist_track_ids(&source, &node);
-                let ctx = self.context.as_mut().unwrap();
-                if live.len() > ctx.tracks.len() {
-                    ctx.tracks = live;
-                }
-            }
-            let ctx = self.context.as_ref().unwrap();
-            if ctx.tracks.get(next_index).is_none() {
-                return false;
-            }
-            next_index
-        };
-        let ctx = self.context.as_ref().unwrap();
         let next_id = ctx.tracks[next_index];
-        self.context.as_mut().unwrap().index = next_index;
+        ctx.index = next_index;
         self.save_now_playing_context();
         self.play_now(next_id);
         true
     }
 
-    /// Draw the next index for shuffle mode from `ctx.shuffle_bag`,
-    /// refilling and reshuffling it with every index in `ctx.tracks` once
-    /// exhausted — a no-repeat shuffle bag, so every track in the context
-    /// gets a turn before any repeats. Excludes the currently-playing index
-    /// from a freshly-dealt bag when there's more than one track, so
-    /// refilling never immediately replays what just finished.
-    fn next_shuffled_context_index(&mut self) -> Option<usize> {
+    /// The index `play_next_in_context` moves to next, without consuming
+    /// it. Under shuffle that's the top of the bag, dealt here when empty so
+    /// an early `upcoming_track` and the later advance agree.
+    fn next_context_index(&mut self) -> Option<usize> {
+        let ctx = self.context.as_ref()?;
+        if ctx.tracks.is_empty() {
+            return None;
+        }
+        if self.queue.get_shuffle() {
+            self.deal_shuffle_bag();
+            return self.context.as_ref()?.shuffle_bag.last().copied();
+        }
+        let next_index = ctx.index + 1;
+        // The snapshot ended, but if it came from a remote node still
+        // loading in the background, re-check the live list before
+        // giving up — it may have grown past what was captured at play
+        // time.
+        if ctx.tracks.get(next_index).is_none()
+            && let Some((source, node)) = ctx.remote.clone()
+        {
+            let live = self.remote_playlist_track_ids(&source, &node);
+            let ctx = self.context.as_mut().unwrap();
+            if live.len() > ctx.tracks.len() {
+                ctx.tracks = live;
+            }
+        }
+        let ctx = self.context.as_ref().unwrap();
+        ctx.tracks.get(next_index).map(|_| next_index)
+    }
+
+    /// Refill an exhausted `ctx.shuffle_bag` with a fresh shuffle of every
+    /// index in `ctx.tracks` — a no-repeat shuffle bag, so every track in
+    /// the context gets a turn before any repeats. Excludes the
+    /// currently-playing index from a freshly-dealt bag when there's more
+    /// than one track, so refilling never immediately replays what just
+    /// finished.
+    fn deal_shuffle_bag(&mut self) {
         let ctx = self.context.as_mut().unwrap();
         if ctx.shuffle_bag.is_empty() {
             let mut bag: Vec<usize> = (0..ctx.tracks.len()).collect();
@@ -1570,7 +1582,33 @@ impl Session {
             }
             ctx.shuffle_bag = bag;
         }
-        ctx.shuffle_bag.pop()
+    }
+
+    /// What `advance(false)` will play, decided without starting it.
+    fn upcoming_track(&mut self) -> Option<TrackId> {
+        if self.queue.get_repeat() == RepeatSetting::RepeatTrack
+            && let Some(id) = self.queue.get_current()
+        {
+            return Some(id);
+        }
+        if let Some(&id) = self.queue.window(0, 1).first() {
+            return Some(id);
+        }
+        let index = self.next_context_index()?;
+        Some(self.context.as_ref()?.tracks[index])
+    }
+
+    /// Warm the upcoming track on the active player, if that's who will play it.
+    fn preload_upcoming(&mut self) {
+        let Some(track) = self.upcoming_track().and_then(|id| self.store.get_track(id).ok().flatten()) else {
+            return;
+        };
+        if let Resolution::Ready(r) = Resolver::resolve_track(&track, &Target::Playback)
+            && let (Some(next), Some(active)) = (self.pick_player(&r), self.active_player())
+            && Arc::ptr_eq(&next, &active)
+        {
+            active.preload(&r);
+        }
     }
 
     fn active_player(&self) -> Option<Arc<dyn Player>> {

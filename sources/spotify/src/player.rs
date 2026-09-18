@@ -26,7 +26,6 @@ use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
 use librespot_core::SpotifyUri;
-use librespot_metadata::Metadata;
 use librespot_playback::audio_backend;
 use librespot_playback::audio_backend::{Sink, SinkResult};
 use librespot_playback::config::{AudioFormat, Bitrate, PlayerConfig};
@@ -108,6 +107,7 @@ enum Cmd {
         position_ms: u32,
         cache: bool,
     },
+    Preload(String),
     Toggle,
     Seek(u32),
     SetVolume(f32),
@@ -209,6 +209,10 @@ impl Player for SpotifyPlayer {
             position_ms,
             cache,
         });
+    }
+
+    fn preload(&self, r: &Rendition) {
+        let _ = self.tx.send(Cmd::Preload(r.uri.clone()));
     }
 
     fn toggle(&self) {
@@ -349,24 +353,23 @@ fn capture_resume(
 /// The bits of worker state a load needs to touch — bundled so `do_load`
 /// stays under clippy's argument-count limit.
 struct LoadCtx<'a> {
-    session: &'a Session,
     player: &'a LsPlayer,
     bus: &'a Bus,
     snap: &'a Arc<Mutex<Snap>>,
 }
 
-/// Body of a `Cmd::Load`: validate + resolve the URI, fetch duration
-/// metadata, update `snap`, kick off the actual `player.load`, and compute
-/// the resulting `playback_start`. Shared by the `Cmd::Load` command arm and
-/// the post-reconnect auto-resume path so there's exactly one place that
-/// knows how to start a track playing.
-async fn do_load(
+/// Body of a `Cmd::Load`: validate the URI, update `snap`, kick off the
+/// actual `player.load`, and compute the resulting `playback_start`. Shared
+/// by the `Cmd::Load` command arm and the post-reconnect auto-resume path so
+/// there's exactly one place that knows how to start a track playing.
+/// `duration_ms` is the rendition's; `LsEvent::TrackChanged` corrects it.
+fn do_load(
     ctx: LoadCtx<'_>,
     uri: String,
-    duration_hint: u32,
+    duration_ms: u32,
     start_paused: bool,
     position_ms: u32,
-) -> Option<(Option<(SourceId, String)>, u32, Option<Instant>)> {
+) -> Option<((SourceId, String), Option<Instant>)> {
     let Ok(sp_uri) = SpotifyUri::from_uri(&uri) else {
         log::warn!("spotify: bad uri {uri}");
         ctx.bus.send(CoreEvent::Player(PlayerEvent::Finished {
@@ -382,12 +385,7 @@ async fn do_load(
         }));
         return None;
     }
-    let cur = Some((crate::source_id(), uri.clone()));
-    // Prefer the metadata duration; fall back to the hint from the rendition.
-    let duration_ms = match librespot_metadata::Track::get(ctx.session, &sp_uri).await {
-        Ok(t) if t.duration > 0 => t.duration as u32,
-        _ => duration_hint,
-    };
+    let cur = (crate::source_id(), uri.clone());
     {
         let mut s = ctx.snap.lock().unwrap_or_else(|e| e.into_inner());
         s.state = if start_paused {
@@ -408,7 +406,7 @@ async fn do_load(
     } else {
         Some(Instant::now() - Duration::from_millis(position_ms as u64))
     };
-    Some((cur, duration_ms, playback_start))
+    Some((cur, playback_start))
 }
 
 /// Worker entry point. Owns the librespot `Player`, mixer and session, and
@@ -524,19 +522,13 @@ async fn run(
                 pending.uri,
                 pending.paused
             );
-            let ctx = LoadCtx { session: &session, player: &player, bus: &bus, snap: &snap };
-            if let Some((c, d, p)) = do_load(
-                ctx,
-                pending.uri,
-                pending.duration_ms,
-                pending.paused,
-                pending.position_ms,
-            )
-            .await
+            let ctx = LoadCtx { player: &player, bus: &bus, snap: &snap };
+            if let Some((c, p)) =
+                do_load(ctx, pending.uri, pending.duration_ms, pending.paused, pending.position_ms)
             {
-                cur = c;
+                cur = Some(c);
                 cur_cache = true;
-                duration_ms = d;
+                duration_ms = pending.duration_ms;
                 playback_start = p;
                 materialized_sent = false;
             }
@@ -547,15 +539,22 @@ async fn run(
                     cmd = rx.recv() => match cmd {
                         None => break 'inner LoopExit::Shutdown,
                         Some(Cmd::Load { uri, duration_ms: hint, start_paused, position_ms, cache }) => {
-                        let ctx = LoadCtx { session: &session, player: &player, bus: &bus, snap: &snap };
-                        if let Some((c, d, p)) = do_load(ctx, uri, hint, start_paused, position_ms).await {
-                            cur = c;
+                        let ctx = LoadCtx { player: &player, bus: &bus, snap: &snap };
+                        if let Some((c, p)) = do_load(ctx, uri, hint, start_paused, position_ms) {
+                            cur = Some(c);
                             cur_cache = cache;
-                            duration_ms = d;
+                            duration_ms = hint;
                             playback_start = p;
                             materialized_sent = false;
                         }
                     }
+                    Some(Cmd::Preload(uri)) => match SpotifyUri::from_uri(&uri) {
+                        Ok(sp_uri) if sp_uri.is_playable() => {
+                            log::debug!("spotify: preloading {uri}");
+                            player.preload(sp_uri);
+                        }
+                        _ => log::warn!("spotify: cannot preload {uri}"),
+                    },
                     Some(Cmd::Toggle) => {
                         let playing = snap.lock().unwrap_or_else(|e| e.into_inner()).state == PlayerState::Playing;
                         if playing { player.pause() } else { player.play() }
@@ -602,6 +601,21 @@ async fn run(
                         playback_start = None;
                         set_state(&snap, PlayerState::Stopped, 0);
                         bus.send(CoreEvent::Player(PlayerEvent::Stopped));
+                    }
+                    Some(LsEvent::TrackChanged { audio_item }) if audio_item.duration_ms > 0 => {
+                        duration_ms = audio_item.duration_ms;
+                        snap.lock().unwrap_or_else(|e| e.into_inner()).duration_ms = duration_ms;
+                    }
+                    Some(LsEvent::TimeToPreloadNextTrack { .. }) => {
+                        if let Some((source, uri)) = cur.clone() {
+                            bus.send(CoreEvent::Player(PlayerEvent::PreloadHint { source, uri }));
+                        }
+                    }
+                    // A load that failed only because the AP died must resume, not skip.
+                    Some(LsEvent::Unavailable { .. }) if session.is_invalid() => {
+                        log::warn!("spotify: track unavailable on a dead session, reconnecting");
+                        resume = capture_resume(&cur, duration_ms, playback_start, &snap.lock().unwrap_or_else(|e| e.into_inner()));
+                        break 'inner LoopExit::SessionDied;
                     }
                     Some(LsEvent::EndOfTrack { .. }) | Some(LsEvent::Unavailable { .. }) => {
                         playback_start = None;

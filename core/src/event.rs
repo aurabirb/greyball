@@ -57,6 +57,8 @@ pub enum PlayerEvent {
     Stopped,
     Progress { position_ms: u32, duration_ms: u32 },
     Finished { source: SourceId, uri: String },
+    /// `uri` is close to its end — time to `Player::preload` what follows it.
+    PreloadHint { source: SourceId, uri: String },
     /// A `Load` failed after playback already committed to it (a resolve or
     /// stream error, not a normal stop) — `Session` tries the local-cache
     /// playback fallback for this rendition's track before giving up.

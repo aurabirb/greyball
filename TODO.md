@@ -16,23 +16,14 @@
 - [ ] The play/pause symbol shows the *current* state instead of the *action pressing it would take* —
   it's a button, so while a track is playing it should show the pause symbol (what you'd get by
   pressing it), and while paused it should show the play symbol. Swap them.
-- [ ] Spotify playback has audible gaps — at every track transition, and a ~1-2s one mid-song when
-  the librespot AP connection dies ("Connection to server closed." → `spotify: session invalid (dead
-  access-point connection), reconnecting`; upstream librespot
+- [ ] Spotify playback has an audible ~1-2s gap mid-song when the librespot AP connection dies
+  ("Connection to server closed." → `spotify: session invalid (dead access-point connection),
+  reconnecting`; upstream librespot
   [#1151](https://github.com/librespot-org/librespot/issues/1151)/
   [#1486](https://github.com/librespot-org/librespot/issues/1486), unfixed — a librespot `dev` pin
-  didn't help, deps stay on crates.io 0.8.0). ncspot (same librespot 0.8.0, same session/cache/player
-  config) handles AP death no better; what it has that we lack is next-track preload. Fixes, most
+  didn't help, deps stay on crates.io 0.8.0), plus avoidable load on the playing session. Fixes, most
   impactful first:
-  1. Preload + drop the pre-load metadata fetch. `sources/spotify/src/player.rs` discards
-     `LsEvent::TimeToPreloadNextTrack` and never calls `player.preload`, and `do_load` awaits its own
-     `Track::get` round-trip before `player.load` (librespot fetches metadata again itself). Add a
-     default no-op `preload(&Rendition)` to `core::Player`, forward the event as a
-     `PlayerEvent::PreloadHint`, add a non-mutating `peek_next` in `core/src/app.rs` mirroring
-     `advance`, call `preload` when the next track is on the same player, and take duration from
-     `LsEvent::TrackChanged` instead of `Track::get`. Verify: EndOfTrack→Playing delta in the debug log
-     drops from ~0.5-1s to tens of ms.
-  2. Background reconnect with deferred swap. An already-loaded track doesn't need the AP — audio
+  1. Background reconnect with deferred swap. An already-loaded track doesn't need the AP — audio
      streams over plain HTTPS CDN range requests, the AP is only used for the audio key at load time —
      so the mid-song gap comes from our own `player.stop(); session.shutdown()` + rebuild on
      `is_invalid()`. Instead keep the old session/player draining (events forwarded,
@@ -40,19 +31,17 @@
      Load/Preload to it, then drop the old; fall back to the current cold-resume path only if the
      draining player reports Unavailable/Stopped. Verify with a temporary hook calling
      `session.shutdown()` mid-track (not yet live-tested that the track survives).
-  3. `SpotifyPlugin::wiring()` builds a brand-new `SpotifyPlayer`/`Session` on every
+  2. `SpotifyPlugin::wiring()` builds a brand-new `SpotifyPlayer`/`Session` on every
      `rewire_all_plugins` (any `PluginStatusChanged`: soulseek reachability at startup, the ~hourly
      Spotify web-token refresh, plugin setup/commands), logging a second session in on the same
      credentials while the first is playing. Cache the wiring and rebuild only when librespot
      credentials change. Verify: one "Connecting to AP" at startup, none at token refresh.
-  4. Take load off the playing session: `is_materialized` (`scan_audio.rs`) does an uncached
+  3. Take load off the playing session: `is_materialized` (`scan_audio.rs`) does an uncached
      `Track::get` every 500ms tick inline in the player select loop — resolve file ids once per track
      and just check the cache path per tick; `spawn_materialize_to_cache` does blocking I/O inside
      `tokio::spawn` on a 2-worker runtime — use `spawn_blocking`; the background scan issues audio-key
      requests + full CDN downloads over the playing session — pause Spotify scan fetches while Spotify
      is playing or give the scanner its own session.
-  5. In the `Unavailable` event arm, treat it as a session death when `session.is_invalid()` instead
-     of `Finished`, so a load that failed on a dead AP doesn't skip the track.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] UI stutter when first opening the Playlists screen on a large library — reported still happening
   after commit `58c6960` (which fixed a real but apparently-not-the-only per-row `MediaCache` redb-

@@ -192,6 +192,8 @@ pub trait Player: Send + Sync {
     /// `cache`: whether this play may populate `MediaCache`. Unused today —
     /// every caller passes `true`.
     fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool);
+    /// Warm up `r` so a following `load` of it starts without a gap.
+    fn preload(&self, _r: &Rendition) {}
     fn toggle(&self);
     fn seek(&self, position_ms: u32);
     /// clamp 0.0..=1.0
