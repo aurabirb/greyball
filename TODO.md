@@ -88,6 +88,14 @@
   remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
   cleaned map.
 ### Features
+- [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
+  `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
+  plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
+  updated when the playing track changes, not only on quit. On launch, if that track still resolves,
+  open the context it came from and put the cursor on it the way `click_row` does
+  (`self.cursor[screen] = idx; self.clamp_scroll()`), waiting for a remote playlist to paginate far
+  enough if needed; if the context is gone, fall back to wherever the track can be found (library/
+  Liked Songs), else do nothing. Select only — don't start playback.
 - [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
   playing track.
   Suspected fix: all four end in `self.run(Command::Seek(±5000))` (`ui/src/view.rs` ~line 4159 for
