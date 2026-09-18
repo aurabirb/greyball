@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread;
 
 use cursive::Cursive;
-use cursive::event::{Event, EventResult, Key};
+use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::views::Dialog;
 
 use core::{Command, CoreEvent, Dispatch, Plugin, SourceId, TrackId};
@@ -283,5 +283,51 @@ impl MedleyView {
             }
             Action::None => EventResult::Ignored,
         }
+    }
+
+    /// Drops the text being typed; a cancelled filter shows the full list again.
+    fn cancel_edit(&mut self) {
+        if self.editing == Editing::Filter {
+            self.filter.query = None;
+        }
+        self.editing = Editing::None;
+        self.buffer.clear();
+    }
+
+    /// The active text field captures every event; `None` when there is none, or `event` cancels it and still needs handling.
+    pub(super) fn on_edit_event(&mut self, event: &Event) -> Option<EventResult> {
+        if self.editing == Editing::None {
+            return None;
+        }
+        let outside_click = matches!(event, Event::Mouse { event: MouseEvent::Press(_), .. });
+        // A digit as Search's first keystroke is a screen switch, not a query.
+        let leading_digit = self.editing == Editing::Search
+            && self.buffer.is_empty()
+            && matches!(event, Event::Char(c) if c.is_ascii_digit());
+        if outside_click || leading_digit {
+            self.cancel_edit();
+            return None;
+        }
+        let edited = match event {
+            Event::Char(c) => {
+                self.buffer.push(*c);
+                true
+            }
+            Event::Key(Key::Backspace) => {
+                self.buffer.pop();
+                true
+            }
+            Event::Key(Key::Esc) => {
+                self.cancel_edit();
+                false
+            }
+            Event::Key(Key::Enter) => return Some(self.commit_edit()),
+            _ => false,
+        };
+        // The filter narrows live as you type.
+        if edited && self.editing == Editing::Filter {
+            self.reset_filter_selection();
+        }
+        Some(EventResult::consumed())
     }
 }

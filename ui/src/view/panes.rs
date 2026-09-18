@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cursive::{Printer, Rect, Vec2};
-use cursive::event::EventResult;
+use cursive::event::{Event, EventResult, Key};
 use cursive::theme::ColorStyle;
 
 use core::{Axis, PaneLayoutConfig, PaneMode, Side};
@@ -9,6 +9,7 @@ use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 use crate::command::Pane;
 
 use super::{HIST, MedleyView, QUEUE};
+use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::settings::settings_entries;
 use super::text::pad;
 
@@ -262,5 +263,24 @@ impl MedleyView {
             }
             Pane::Vis | Pane::Queue | Pane::History => {}
         }
+    }
+
+    /// The fullscreen pane's events: Esc closes it, nav keys scroll it, everything else is swallowed.
+    pub(super) fn on_fullscreen_pane_event(&mut self, pane: Pane, event: &Event) -> EventResult {
+        match (event, Nav::of(event)) {
+            (Event::Key(Key::Esc), _) => {
+                self.panes.fullscreen = None;
+                if pane == Pane::Vis {
+                    self.vis.set_enabled(false);
+                    return EventResult::with_cb(|siv| siv.set_fps(crate::BASELINE_FPS));
+                }
+            }
+            (_, Some(nav @ (Nav::Line(_) | Nav::Page(_)))) => {
+                let (up, step) = nav.step(PAGE_SCROLL_STEP);
+                self.scroll_pane(pane, up, step);
+            }
+            _ => {}
+        }
+        EventResult::consumed()
     }
 }

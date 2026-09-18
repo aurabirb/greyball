@@ -455,81 +455,13 @@ impl View for MedleyView {
             self.hotkeys.feedback = None;
             self.with_session(|s| s.clear_membership_feedback());
         }
-        // Active text field: capture everything, except a click elsewhere or a digit as Search's first keystroke.
-        if self.editing != Editing::None {
-            let is_filter = self.editing == Editing::Filter;
-            let outside_click = matches!(event, Event::Mouse { event: MouseEvent::Press(_), .. });
-            let leading_digit = self.editing == Editing::Search
-                && self.buffer.is_empty()
-                && matches!(event, Event::Char(c) if c.is_ascii_digit());
-            if outside_click || leading_digit {
-                if is_filter {
-                    self.filter.query = None; // clear it — show the full list again
-                }
-                self.editing = Editing::None;
-                self.buffer.clear();
-                return self.on_event(event);
-            }
-            return match event {
-                Event::Char(c) => {
-                    self.buffer.push(c);
-                    // The filter narrows live as you type.
-                    if is_filter {
-                        self.reset_filter_selection();
-                    }
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Backspace) => {
-                    self.buffer.pop();
-                    if is_filter {
-                        self.reset_filter_selection();
-                    }
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Esc) => {
-                    if is_filter {
-                        self.filter.query = None; // clear it — show the full list again
-                    }
-                    self.editing = Editing::None;
-                    self.buffer.clear();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Enter) => self.commit_edit(),
-                _ => EventResult::consumed(),
-            };
-        }
 
-        // Fullscreen Screen-mode pane: Esc closes it, nav keys scroll it, everything else is swallowed.
+        if let Some(result) = self.on_edit_event(&event) {
+            return result;
+        }
         if let Some(pane) = self.panes.fullscreen {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.panes.fullscreen = None;
-                    if pane == Pane::Vis {
-                        self.vis.set_enabled(false);
-                        return EventResult::with_cb(|siv| siv.set_fps(crate::BASELINE_FPS));
-                    }
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Up) | Event::Char('k') => {
-                    self.scroll_pane(pane, true, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Down) | Event::Char('j') => {
-                    self.scroll_pane(pane, false, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageUp) | Event::Char('K') => {
-                    self.scroll_pane(pane, true, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageDown) | Event::Char('J') => {
-                    self.scroll_pane(pane, false, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                _ => EventResult::consumed(),
-            };
+            return self.on_fullscreen_pane_event(pane, &event);
         }
-
         if self.warnings.is_some() {
             return self.on_warnings_event(&event);
         }
