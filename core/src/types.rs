@@ -145,6 +145,15 @@ impl Track {
         }
     }
 
+    /// "Artist - Title", or just the title with no known artist.
+    pub fn display_name(&self) -> String {
+        if self.artists.is_empty() {
+            self.title.clone()
+        } else {
+            format!("{} - {}", self.display_artist(), self.title)
+        }
+    }
+
     pub fn duration_str(&self) -> String {
         let ms = if self.duration_ms > 0 {
             self.duration_ms

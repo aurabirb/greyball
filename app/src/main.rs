@@ -378,11 +378,25 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         register_plugin(plugin, &mut sources, &mut media, &mut HashMap::new(), &mut plugins);
     }
 
+    // Built before `media_cache` (which needs it) rather than down by the
+    // rest of the store wiring below.
+    let db_dir = data_dir();
+    if let Err(e) = std::fs::create_dir_all(&db_dir) {
+        log::warn!("config: cannot create data dir {}: {e}", db_dir.display());
+    }
+    let store: Arc<dyn Store> = Arc::new(medley_core::RedbStore::open(db_dir.join("db"))?);
+
     // Shared between playback and scanning: every source's decoded audio
     // lands here, keyed by rendition — whichever `ScanPlugin` first decodes
     // a rendition saves the rest (and playback itself) from re-fetching/
-    // re-decrypting/re-decoding it.
-    let media_cache = Arc::new(MediaCache::new(data_dir().join("media-cache")));
+    // re-decrypting/re-decoding it. Takes `store` only to resolve a
+    // human-readable filename and to prune entries for tracks the store no
+    // longer has — never to originate a fetch.
+    let media_cache = Arc::new(MediaCache::new(data_dir().join("media-cache"), store.clone()));
+    {
+        let media_cache = media_cache.clone();
+        std::thread::spawn(move || media_cache.prune_orphans());
+    }
     let rodio = Arc::new(RodioPlayer::new(media.clone(), bus.clone(), media_cache.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();
     if http_enabled {
@@ -426,12 +440,6 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
 
     log_registered_sources(&sources);
-
-    let db_dir = data_dir();
-    if let Err(e) = std::fs::create_dir_all(&db_dir) {
-        log::warn!("config: cannot create data dir {}: {e}", db_dir.display());
-    }
-    let store: Arc<dyn Store> = Arc::new(medley_core::RedbStore::open(db_dir.join("db"))?);
 
     let mut session = build_session(
         cfg,

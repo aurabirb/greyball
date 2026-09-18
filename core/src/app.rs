@@ -1942,7 +1942,7 @@ impl Session {
             return;
         };
         let is_member = self.remote_playlist_track_ids(&source, &node).contains(&track);
-        let name = track_display_name(&t);
+        let name = t.display_name();
         let feedback = self.membership_feedback.clone();
         let pending = self.pending_remote_adds.clone();
         if !is_member {
@@ -2017,7 +2017,7 @@ impl Session {
             return Ok(Dispatch::Ok);
         };
         let targets = self.liked_targets(&t);
-        let name = track_display_name(&t);
+        let name = t.display_name();
         if targets.is_empty() {
             let verb = if like { "like" } else { "unlike" };
             let msg = format!("Can't {verb} {name:?}: no liked-songs source for this track");
@@ -2177,16 +2177,6 @@ fn load_history_file(path: &Path) -> Vec<(TrackId, DateTime<Utc>)> {
         .collect()
 }
 
-/// "Artist - Title", or just the title with no known artist — shared by
-/// `toggle_remote_playlist_membership` and `set_liked`'s feedback messages.
-fn track_display_name(t: &Track) -> String {
-    if t.artists.is_empty() {
-        t.title.clone()
-    } else {
-        format!("{} - {}", t.display_artist(), t.title)
-    }
-}
-
 /// `Command::TogglePlaylistMembership`'s core logic, pulled out so it's
 /// unit-testable without a `Store`: adds `track` if absent, else removes
 /// every occurrence (a track could be duplicated by hand-editing/import).
@@ -2244,11 +2234,7 @@ fn build_entry(t: &Track, primary: String) -> M3uEntry {
             .map(|d| (d as f64 / 1000.0).round() as i64)
             .unwrap_or(-1)
     };
-    let title = if t.artists.is_empty() {
-        t.title.clone()
-    } else {
-        format!("{} - {}", t.display_artist(), t.title)
-    };
+    let title = t.display_name();
     let meta = SoftMeta {
         isrc: t.isrc.clone(),
         album: t.album.clone(),
