@@ -80,16 +80,6 @@
   preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
-- [ ] Scrolling the Log pane is very slow or unresponsive. Likely cause (unconfirmed — profile or
-  log event→draw latency first): `LogPane::lines` (`ui/src/view/log.rs`) clones the entire log snapshot
-  (`Vec<String>`) on every call, and both `LogPane::draw` and `LogPane::scroll_by` (run on every scroll event)
-  then `wrap()` every line of it just to get a total wrapped height — O(whole log) per frame and per
-  wheel tick, which grows unbounded over a session and is worst under `RUST_LOG=debug`. Fix direction:
-  borrow instead of cloning, cache wrapped line counts per (line, width) and only wrap newly appended
-  lines / the visible window, invalidating on resize. Also rule out an event-side cause: wheel events
-  queuing up behind slow draws (coalesce consecutive scroll events before redrawing), and the
-  Log-pane mouse handling at `handle_mouse`'s `pane == Pane::Log` Press/Hold/Release branch swallowing
-  or mis-routing wheel events.
 - [ ] A playlist hotkey persisted in `state.toml` can shadow a built-in key (seen: `s` no longer
   toggles shuffle). `bind_hotkey` (`core/src/app.rs`) refuses to bind over a built-in, but
   `Session::set_hotkeys` loads the persisted map unchecked, and `effective_target_at` lets an explicit
