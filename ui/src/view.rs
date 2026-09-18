@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use core::{
     BindError, BrowseNode, Command, CoreEvent, Dispatch, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode,
-    Playlist, PlaylistId, Plugin, PluginHealth, Session, SetupKind, Side, SourceId, TrackId,
+    Playlist, PlaylistId, Plugin, Session, Side, SourceId, TrackId,
 };
 
 use crate::{SessionHandle, command, keybindings};
@@ -39,6 +39,7 @@ use status_line::{STATUS_BAR_WIDTH, StatusLineWidths, bpm_status_tag, progress_b
 use tab_bar::{draw_tab_bar, screen_name, tab_at_x, transport_at_x};
 use text::{in_span, ms, truncate_ellipsis};
 use transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
+use warnings::{WARNINGS_LIST_TOP, defocuses_warnings, warnings_label};
 
 mod log;
 mod panes;
@@ -49,6 +50,7 @@ mod status_line;
 mod tab_bar;
 mod text;
 mod transport;
+mod warnings;
 
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
@@ -78,10 +80,6 @@ fn startup_screen(initial_screen: &str) -> usize {
 
 /// Two clicks on the same row within this long count as a double-click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
-/// Row the warnings modal's plugin list starts on (row 0 = title, row 1 = blank spacer).
-const WARNINGS_LIST_TOP: usize = 2;
-/// Cap on how many plugin messages the warnings modal's bottom section shows.
-const WARNINGS_MESSAGES_MAX: usize = 5;
 /// Row the hotkey-menu modal's playlist list starts on — same shape as `WARNINGS_LIST_TOP`.
 const HOTKEY_LIST_TOP: usize = 2;
 /// Row the "Add to Playlist" picker's list starts on — same shape as `HOTKEY_LIST_TOP`.
@@ -365,83 +363,6 @@ impl MedleyView {
     /// Where focus should land when it can no longer stay on the warnings button.
     fn fallback_focus(&self) -> Focus {
         Focus::Main
-    }
-
-    /// "{id}: {msg}" for every plugin currently reporting a non-`Ok` health.
-    fn warnings_messages(&self) -> Vec<String> {
-        self.with_session(|s| {
-            s.plugin_statuses()
-                .into_iter()
-                .filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}")))
-                .collect()
-        })
-    }
-
-    /// Rows the bottom messages section reserves.
-    fn warnings_messages_h(&self) -> usize {
-        let n = self.warnings_messages().len();
-        if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) }
-    }
-
-    /// Visible plugin rows in the warnings modal's navigable list, given the whole-screen height.
-    fn warnings_list_h(&self, screen_h: usize) -> usize {
-        modal_list_h(screen_h, WARNINGS_LIST_TOP).saturating_sub(self.warnings_messages_h())
-    }
-
-    /// Fullscreen plugin-warnings modal.
-    fn draw_warnings(&self, printer: &Printer) {
-        let statuses = self.with_session(|s| s.plugin_statuses());
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad("Plugin warnings", p.size.x));
-        });
-
-        if statuses.is_empty() {
-            printer.print((0, WARNINGS_LIST_TOP), "(no plugins registered)");
-        }
-        let list_h = self.warnings_list_h(printer.size.y);
-        for (i, (id, health)) in statuses.iter().enumerate().skip(self.warnings_offset).take(list_h) {
-            let y = WARNINGS_LIST_TOP + (i - self.warnings_offset);
-            let icon = match health {
-                PluginHealth::Ok => "✓",
-                PluginHealth::Warn(_) => "⚠",
-                PluginHealth::Fail(_) => "✗",
-            };
-            let line = pad(&format!("{icon} {id}"), printer.size.x);
-            if i == self.warnings_cursor {
-                printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
-            } else {
-                printer.print((0, y), &line);
-            }
-        }
-
-        let messages = self.warnings_messages();
-        if !messages.is_empty() {
-            let messages_top = WARNINGS_LIST_TOP + list_h + 1;
-            for (j, msg) in messages.iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
-                printer.print((0, messages_top + j), &pad(msg, printer.size.x));
-            }
-        }
-
-        if let Editing::PluginSetup(id) = &self.editing {
-            let prompt = self
-                .with_session(|s| s.plugin(id))
-                .map(|p| match p.setup_kind() {
-                    SetupKind::TextInput { prompt } => prompt,
-                    SetupKind::Action => String::new(),
-                })
-                .unwrap_or_default();
-            let y1 = printer.size.y.saturating_sub(2);
-            let y2 = printer.size.y.saturating_sub(1);
-            printer.with_color(ColorStyle::highlight_inactive(), |p| {
-                p.print((0, y1), &pad(&prompt, p.size.x));
-            });
-            printer.print((0, y2), &pad(&format!("> {}  [Esc] cancel", self.buffer), printer.size.x));
-        } else {
-            let bottom = printer.size.y.saturating_sub(1);
-            printer.with_color(ColorStyle::highlight_inactive(), |p| {
-                p.print((0, bottom), &pad("  [Enter] run setup   [Esc] close", p.size.x));
-            });
-        }
     }
 
     /// Draws `lines` as a scrollable cursor list starting at row `list_top`.
@@ -1072,14 +993,6 @@ impl MedleyView {
         self.list_offset[screen] = bound_offset(self.list_offset[screen], len, list_h);
     }
 
-    /// Move `warnings_cursor` by `step` rows, keeping `warnings_offset` following it via `CursorWindow`.
-    fn jump_warnings(&mut self, up: bool, step: usize) {
-        let n = self.with_session(|s| s.plugin_statuses().len());
-        let h = self.warnings_list_h(self.last_screen_size.y);
-        CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }
-            .jump(up, step, n, h);
-    }
-
     /// Same idea as `jump_warnings`, for the hotkey-menu modal.
     fn jump_hotkey_menu(&mut self, up: bool, step: usize) {
         let n = self.hotkey_rows().len();
@@ -1093,12 +1006,6 @@ impl MedleyView {
         let h = modal_list_h(self.last_screen_size.y, PLAYLIST_PICKER_LIST_TOP);
         CursorWindow { cursor: &mut self.playlist_picker_cursor, offset: &mut self.playlist_picker_offset }
             .jump(up, step, n, h);
-    }
-
-    /// Resync `warnings_offset` to `warnings_cursor` without moving the cursor.
-    fn follow_warnings_offset(&mut self) {
-        let h = self.warnings_list_h(self.last_screen_size.y);
-        CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }.follow(h);
     }
 
     /// Same idea as `follow_warnings_offset`, for the hotkey menu.
@@ -1115,36 +1022,6 @@ impl MedleyView {
     }
 
     // ---- plugin warnings (Spotify/SoundCloud login status) --------------
-
-    fn open_warnings(&mut self) {
-        self.warnings_open = true;
-        self.warnings_cursor = 0;
-        self.warnings_offset = 0;
-    }
-
-    /// Number of plugins currently reporting a non-`Ok` health.
-    fn warn_count(&self) -> usize {
-        self.with_session(|s| s.plugin_statuses().iter().filter(|(_, h)| !h.is_ok()).count())
-    }
-
-    /// `Enter` (or a click) on the selected warnings-modal row.
-    fn activate_selected_warning(&mut self) {
-        let Some((id, _)) =
-            self.with_session(|s| s.plugin_statuses().into_iter().nth(self.warnings_cursor))
-        else {
-            return;
-        };
-        let Some(plugin) = self.with_session(|s| s.plugin(&id)) else {
-            return;
-        };
-        match plugin.setup_kind() {
-            SetupKind::Action => self.run_plugin_setup(id, None),
-            SetupKind::TextInput { .. } => {
-                self.buffer.clear();
-                self.editing = Editing::PluginSetup(id);
-            }
-        }
-    }
 
     // ---- help / shortcuts -------------------------------------------------
 
@@ -1258,30 +1135,6 @@ impl MedleyView {
         self.with_session_mut(|s| s.unbind_hotkey(&target));
         self.hotkey_feedback = key.map(|k| format!("Unbound '{k}'"));
         EventResult::consumed()
-    }
-
-    /// Run a plugin's `setup()` on a background thread.
-    fn run_plugin_setup(&self, id: SourceId, input: Option<String>) {
-        let session = self.session.clone();
-        let bus = self.with_session(|s| s.bus.clone());
-        thread::spawn(move || {
-            let Some(plugin) = session.lock().unwrap().plugin(&id) else {
-                return;
-            };
-            let health = plugin.setup(input);
-            let succeeded = health.is_ok();
-            let wiring = plugin.wiring();
-            let mut guard = session.lock().unwrap();
-            guard.apply_wiring(&id, wiring);
-            // See `Session::plugin_statuses`.
-            guard.record_setup_result(id, health);
-            drop(guard);
-            // The UI's cue to redraw the warnings panel / pick up whatever just got registered.
-            bus.send(CoreEvent::PluginStatusChanged);
-            if succeeded {
-                bus.send(CoreEvent::PluginLoginSucceeded);
-            }
-        });
     }
 
     /// Run a plugin-registered `:`-command (e.g. `:spotify addlogin`) on a background thread.
@@ -2650,20 +2503,10 @@ impl View for MedleyView {
     }
 }
 
-/// Only ever called for `count > 0` — the button isn't drawn at all when there are no warnings.
-fn warnings_label(count: usize) -> String {
-    format!(" ⚠ warnings ({count}) ")
-}
-
 /// Whether a click on (`screen`, `idx`) at `now`, given the previous click `last`, counts as a double-click.
 fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: usize, idx: usize) -> bool {
     matches!(
         last,
         Some((t, s, i)) if s == screen && i == idx && now.duration_since(t) <= DOUBLE_CLICK_WINDOW
     )
-}
-
-/// Whether a keyboard event arriving while `Focus::Warnings` is focused should knock focus off the button.
-fn defocuses_warnings(event: &Event) -> bool {
-    !matches!(event, Event::Key(Key::Enter))
 }
