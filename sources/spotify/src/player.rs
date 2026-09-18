@@ -19,13 +19,14 @@ use std::time::{Duration, Instant};
 
 use core::{
     Bus, CoreEvent, Error, MediaCache, Player, PlayerEvent, PlayerState, PlayerStatus, ReadSeek,
-    Rendition, ScanFetchMode, SourceId,
+    Rendition, SourceId,
 };
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
 use librespot_core::SpotifyUri;
+use librespot_metadata::audio::AudioItem;
 use librespot_playback::audio_backend;
 use librespot_playback::audio_backend::{Sink, SinkResult};
 use librespot_playback::config::{AudioFormat, Bitrate, PlayerConfig};
@@ -179,7 +180,6 @@ impl SpotifyPlayer {
             .name("spotify-player".into())
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
                     .enable_all()
                     .build()
                 {
@@ -238,6 +238,10 @@ impl Player for SpotifyPlayer {
 
     fn status(&self) -> PlayerStatus {
         self.snap.lock().unwrap_or_else(|e| e.into_inner()).status()
+    }
+
+    fn scan_fetch_paused(&self) -> bool {
+        self.snap.lock().unwrap_or_else(|e| e.into_inner()).state == PlayerState::Playing
     }
 
     fn levels(&self) -> [f32; 5] {
@@ -514,6 +518,9 @@ async fn run(
         // `cur` — reset on every new load so the tick branch below polls
         // (and eventually announces) each track exactly once.
         let mut materialized_sent = false;
+        // `TrackChanged`'s item, held until a `Playing`/`Paused` for `cur` proves it isn't a superseded load's.
+        let mut pending_item: Option<Box<AudioItem>> = None;
+        let mut cur_item: Option<Box<AudioItem>> = None;
         let mut tick = tokio::time::interval(TICK);
 
         if let Some(pending) = resume.take() {
@@ -546,6 +553,8 @@ async fn run(
                             duration_ms = hint;
                             playback_start = p;
                             materialized_sent = false;
+                            pending_item = None;
+                            cur_item = None;
                         }
                     }
                     Some(Cmd::Preload(uri)) => match SpotifyUri::from_uri(&uri) {
@@ -585,14 +594,20 @@ async fn run(
                         resume = capture_resume(&cur, duration_ms, playback_start, &snap.lock().unwrap_or_else(|e| e.into_inner()));
                         break 'inner LoopExit::SessionDied;
                     }
-                    Some(LsEvent::Playing { position_ms, .. }) => {
+                    Some(LsEvent::Playing { position_ms, track_id, .. }) => {
+                        if is_cur(&cur, &track_id) && pending_item.is_some() {
+                            cur_item = pending_item.take();
+                        }
                         playback_start = Some(Instant::now() - Duration::from_millis(position_ms as u64));
                         set_state(&snap, PlayerState::Playing, position_ms);
                         if let Some((source, uri)) = cur.clone() {
                             bus.send(CoreEvent::Player(PlayerEvent::Playing { source, uri }));
                         }
                     }
-                    Some(LsEvent::Paused { position_ms, .. }) => {
+                    Some(LsEvent::Paused { position_ms, track_id, .. }) => {
+                        if is_cur(&cur, &track_id) && pending_item.is_some() {
+                            cur_item = pending_item.take();
+                        }
                         playback_start = None;
                         set_state(&snap, PlayerState::Paused, position_ms);
                         bus.send(CoreEvent::Player(PlayerEvent::Paused));
@@ -602,9 +617,12 @@ async fn run(
                         set_state(&snap, PlayerState::Stopped, 0);
                         bus.send(CoreEvent::Player(PlayerEvent::Stopped));
                     }
-                    Some(LsEvent::TrackChanged { audio_item }) if audio_item.duration_ms > 0 => {
-                        duration_ms = audio_item.duration_ms;
-                        snap.lock().unwrap_or_else(|e| e.into_inner()).duration_ms = duration_ms;
+                    Some(LsEvent::TrackChanged { audio_item }) => {
+                        if audio_item.duration_ms > 0 {
+                            duration_ms = audio_item.duration_ms;
+                            snap.lock().unwrap_or_else(|e| e.into_inner()).duration_ms = duration_ms;
+                        }
+                        pending_item = Some(audio_item);
                     }
                     Some(LsEvent::TimeToPreloadNextTrack { .. }) => {
                         if let Some((source, uri)) = cur.clone() {
@@ -641,14 +659,14 @@ async fn run(
                         }));
                     }
                     if !materialized_sent
-                        && let Some((source, uri)) = cur.clone()
-                        && crate::scan_audio::is_materialized(&session, &uri).await
+                        && let (Some((source, uri)), Some(item)) = (cur.clone(), cur_item.as_ref())
+                        && crate::scan_audio::is_materialized(&session, item)
                     {
                         materialized_sent = true;
                         log::debug!("spotify: materialized {uri}");
                         bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
                         if cur_cache {
-                            spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri);
+                            spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri, item.clone());
                         }
                     }
                 }
@@ -689,35 +707,37 @@ async fn run(
     }
 }
 
-/// Best-effort: now that `is_materialized` confirms `uri`'s Ogg Vorbis file
-/// is fully in librespot's own on-disk cache, decrypt it and write the
-/// plain bytes into the shared `MediaCache` too — so a `ScanMode::CacheOnly`
-/// walk (which never touches a `Player`/`MediaProvider`, only `MediaCache`,
-/// see `core::scan::open_scan_audio`) can read this track without any
-/// Spotify-specific code of its own. `CacheOnly` here guarantees this never
-/// originates a CDN fetch — the file is already local. Spawned off the
-/// worker's select loop so a slow disk read/decrypt never delays command
-/// handling; failures are just logged, never surfaced to playback.
-fn spawn_materialize_to_cache(session: Session, media_cache: Arc<MediaCache>, source: SourceId, uri: String) {
+/// Once `is_materialized`, copy the decrypted Ogg into the shared `MediaCache` so a `CacheOnly` scan can read it.
+fn spawn_materialize_to_cache(
+    session: Session,
+    media_cache: Arc<MediaCache>,
+    source: SourceId,
+    uri: String,
+    item: Box<AudioItem>,
+) {
     tokio::spawn(async move {
-        let audio = match crate::scan_audio::fetch_scan_audio(&session, &uri, ScanFetchMode::CacheOnly).await {
+        let audio = match crate::scan_audio::open_materialized(&session, &uri, &item).await {
             Ok(audio) => audio,
             Err(e) => {
-                log::debug!("spotify: materialize-to-cache fetch failed for {uri}: {e}");
+                log::debug!("spotify: materialize-to-cache open failed for {uri}: {e}");
                 return;
             }
         };
-        let bytes = match core::audio_decode::read_all(audio) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                log::warn!("spotify: materialize-to-cache read failed for {uri}: {e}");
-                return;
-            }
-        };
-        if let Err(e) = media_cache.put(&source, &uri, &bytes) {
-            log::warn!("spotify: materialize-to-cache write failed for {uri}: {e}");
+        let copied = tokio::task::spawn_blocking(move || {
+            let bytes = core::audio_decode::read_all(audio).map_err(|e| format!("read failed for {uri}: {e}"))?;
+            media_cache.put(&source, &uri, &bytes).map_err(|e| format!("write failed for {uri}: {e}"))
+        })
+        .await;
+        match copied {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => log::warn!("spotify: materialize-to-cache {e}"),
+            Err(e) => log::warn!("spotify: materialize-to-cache task failed: {e}"),
         }
     });
+}
+
+fn is_cur(cur: &Option<(SourceId, String)>, track_id: &SpotifyUri) -> bool {
+    cur.as_ref().is_some_and(|(_, uri)| track_id.to_uri().is_ok_and(|t| &t == uri))
 }
 
 fn set_state(snap: &Arc<Mutex<Snap>>, state: PlayerState, position_ms: u32) {

@@ -569,6 +569,14 @@ fn any_plugin_needs(inner: &Inner, plugins: &[Arc<dyn ScanPlugin>], track: &Trac
     })
 }
 
+/// Whether a live fetch for `track` would go through a player that's asking scans to hold off.
+fn fetch_paused(ctx: &ScanCtx, track: &Track) -> bool {
+    track.renditions.iter().any(|r| {
+        !ctx.media.contains_key(&r.source)
+            && ctx.players.get(&r.source).is_some_and(|p| p.scan_fetch_paused())
+    })
+}
+
 /// Run the first plugin that both `needs()` `track` and is off its own
 /// `min_interval` cooldown. Returns whether a plugin was actually invoked.
 /// `priority`: this is the currently-playing-track fast path, which always
@@ -609,6 +617,12 @@ fn scan_one(
         }
 
         let mode = if priority || driver_mode == ScanMode::CacheOnly {
+            ScanFetchMode::CacheOnly
+        } else if fetch_paused(ctx, track) {
+            // No status recorded, so the track stays queued for the first walk after the pause lifts.
+            if !track.renditions.iter().any(|r| ctx.media_cache.cached_path(&r.source, &r.uri).is_some()) {
+                return false;
+            }
             ScanFetchMode::CacheOnly
         } else if inner.cache_full || plugin.wants_full_audio() {
             ScanFetchMode::Full

@@ -7,7 +7,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use core::ReadSeek;
 use librespot_audio::{AudioDecrypt, AudioFile};
-use librespot_core::{Session, SpotifyId, SpotifyUri};
+use librespot_core::{FileId, Session, SpotifyId, SpotifyUri};
 use librespot_metadata::audio::{AudioFileFormat, AudioItem};
 
 /// Spotify prepends a proprietary header to its Ogg Vorbis streams; real Vorbis data starts here.
@@ -29,9 +29,50 @@ pub async fn fetch_scan_audio(
     mode: core::ScanFetchMode,
 ) -> core::Result<Box<dyn ReadSeek + Send>> {
     let parsed = SpotifyUri::from_uri(uri).map_err(|_| core::Error::Unsupported("bad spotify uri"))?;
-    let (source, from_cache) = open_audio_stream(session, parsed, mode)
+    let audio_item = AudioItem::get_file(session, parsed)
         .await
-        .map_err(|reason| core::Error::Other(format!("spotify: scan audio unavailable: {reason}")))?;
+        .map_err(|e| unavailable(format!("{uri}: AudioItem::get_file failed: {e}")))?;
+    let Some(audio_item) = find_available(session, audio_item).await else {
+        return Err(unavailable(format!("{uri}: no available (region-relinked) audio item")));
+    };
+    open_audio(session, uri, &audio_item, mode).await
+}
+
+/// `fetch_scan_audio` off an already-resolved `audio_item`: no metadata request, never a CDN fetch.
+pub(crate) async fn open_materialized(
+    session: &Session,
+    uri: &str,
+    audio_item: &AudioItem,
+) -> core::Result<Box<dyn ReadSeek + Send>> {
+    open_audio(session, uri, audio_item, core::ScanFetchMode::CacheOnly).await
+}
+
+/// Whether an Ogg Vorbis file of `audio_item` sits fully in librespot's on-disk cache; disk-only.
+pub(crate) fn is_materialized(session: &Session, audio_item: &AudioItem) -> bool {
+    cached_file(session, audio_item).is_some()
+}
+
+fn unavailable(reason: String) -> core::Error {
+    core::Error::Other(format!("spotify: scan audio unavailable: {reason}"))
+}
+
+fn ogg_files(audio_item: &AudioItem) -> impl Iterator<Item = (AudioFileFormat, FileId)> + '_ {
+    OGG_FORMATS.iter().filter_map(|f| audio_item.files.get(f).map(|id| (*f, *id)))
+}
+
+fn cached_file(session: &Session, audio_item: &AudioItem) -> Option<(AudioFileFormat, FileId)> {
+    let cache = session.cache()?;
+    ogg_files(audio_item).find(|(_, id)| cache.file_path(*id).is_some_and(|p| p.exists()))
+}
+
+async fn open_audio(
+    session: &Session,
+    uri: &str,
+    audio_item: &AudioItem,
+    mode: core::ScanFetchMode,
+) -> core::Result<Box<dyn ReadSeek + Send>> {
+    let (source, from_cache) =
+        open_audio_stream(session, uri, audio_item, mode).await.map_err(unavailable)?;
     // `Subfile` seeks to the offset on construction, skipping Spotify's
     // custom Ogg header so symphonia sees a clean Vorbis stream.
     let subfile = Subfile::new(source, SPOTIFY_OGG_HEADER_END)
@@ -40,49 +81,22 @@ pub async fn fetch_scan_audio(
     Ok(Box::new(DrainOnDrop { inner: subfile, drain }))
 }
 
-/// Whether any Ogg Vorbis rendition of `uri` already sits fully in
-/// librespot's own on-disk cache. Metadata-only (`AudioItem::get_file`) —
-/// never calls `AudioFile::open`, so unlike `fetch_scan_audio` this can
-/// never itself originate (or race) a CDN fetch, and is safe for
-/// `SpotifyPlayer`'s worker to poll on every tick while a track loads.
-pub(crate) async fn is_materialized(session: &Session, uri: &str) -> bool {
-    let Ok(parsed) = SpotifyUri::from_uri(uri) else { return false };
-    let Ok(audio_item) = AudioItem::get_file(session, parsed).await else { return false };
-    let Some(audio_item) = find_available(session, audio_item).await else { return false };
-    let Some(cache) = session.cache() else { return false };
-    OGG_FORMATS
-        .iter()
-        .filter_map(|f| audio_item.files.get(f))
-        .any(|id| cache.file_path(*id).is_some_and(|p| p.exists()))
-}
-
 async fn open_audio_stream(
     session: &Session,
-    uri: SpotifyUri,
+    uri: &str,
+    audio_item: &AudioItem,
     mode: core::ScanFetchMode,
 ) -> Result<(AudioDecrypt<AudioFile>, bool), String> {
-    let Some(track_id): Option<SpotifyId> = (&uri).try_into().ok() else {
-        return Err("uri isn't a track id, can't fetch scan audio".to_string());
-    };
-
-    let audio_item = AudioItem::get_file(session, uri)
-        .await
-        .map_err(|e| format!("{track_id:?}: AudioItem::get_file failed: {e}"))?;
-    let Some(audio_item) = find_available(session, audio_item).await else {
-        return Err(format!("{track_id:?}: no available (region-relinked) audio item"));
-    };
+    let track_id: SpotifyId = SpotifyUri::from_uri(uri)
+        .ok()
+        .and_then(|u| (&u).try_into().ok())
+        .ok_or_else(|| format!("{uri} isn't a track id, can't fetch scan audio"))?;
 
     // Prefer whichever Vorbis file is already in the local audio cache (i.e.
     // the bitrate the track was played at) so analysis reuses those bytes
     // and never touches the CDN. Only when nothing is cached do we fall
     // back to the smallest available file, to keep that download light.
-    let available = || {
-        OGG_FORMATS.iter().filter_map(|f| audio_item.files.get(f).map(|id| (*f, *id)))
-    };
-    let cache = session.cache();
-    let cached = available()
-        .find(|(_, id)| cache.and_then(|c| c.file_path(*id)).is_some_and(|p| p.exists()));
-    let (format, file_id) = match cached {
+    let (format, file_id) = match cached_file(session, audio_item) {
         Some(hit) => hit,
         // `CacheOnly` (the prioritized now-playing path) never
         // originates a network fetch — the live player is already fetching
@@ -92,7 +106,7 @@ async fn open_audio_stream(
         None if mode == core::ScanFetchMode::CacheOnly => {
             return Err(format!("{track_id:?}: not yet cached, skipping (CacheOnly)"));
         }
-        None => match available().next() {
+        None => match ogg_files(audio_item).next() {
             Some(f) => f,
             None => return Err(format!("{track_id:?}: no Ogg Vorbis file available at all")),
         },

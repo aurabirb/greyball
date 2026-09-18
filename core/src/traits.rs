@@ -208,6 +208,11 @@ pub trait Player: Send + Sync {
         [0.0; 5]
     }
 
+    /// True while a live `open_for_scan` fetch would compete with this player's own playback.
+    fn scan_fetch_paused(&self) -> bool {
+        false
+    }
+
     /// Best-effort seekable audio for offline analysis, independent of the
     /// live playback pipeline (starting a scan must never interrupt or race
     /// what's currently playing). Default: unsupported. Spotify implements
