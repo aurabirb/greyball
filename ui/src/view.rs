@@ -28,8 +28,13 @@ use crate::command::Pane;
 use crate::keybindings::Action;
 use crate::row::RowItem;
 
+use scroll::{
+    CursorWindow, LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, draw_scrollbar,
+    follow_cursor_offset, modal_list_h, stepped_cursor,
+};
 use text::{in_span, ms, pad_right_aligned, truncate, truncate_ellipsis, wrap};
 
+mod scroll;
 mod text;
 
 pub(crate) use text::pad;
@@ -56,48 +61,6 @@ fn startup_screen(initial_screen: &str) -> usize {
     }
 }
 
-/// Cursor stepping shared by every index-into-a-list screen/modal.
-fn stepped_cursor(cur: usize, len: usize, up: bool, step: usize) -> usize {
-    if up {
-        cur.saturating_sub(step)
-    } else if len == 0 {
-        cur
-    } else {
-        (cur + step).min(len - 1)
-    }
-}
-
-/// Visible row count for a fullscreen modal list starting at `list_top`, given the whole-screen height.
-fn modal_list_h(screen_h: usize, list_top: usize) -> usize {
-    screen_h.saturating_sub(list_top).saturating_sub(2)
-}
-
-/// Shared "jump N rows, clamped to what's actually there" behavior for a scrollable list/pane.
-trait Scrollable {
-    /// Move `step` rows up or down through `len` rows of content shown in a `view_h`-row viewport.
-    fn jump(&mut self, up: bool, step: usize, len: usize, view_h: usize);
-}
-
-/// One screen/modal's cursor + the viewport offset that follows it.
-struct CursorWindow<'a> {
-    cursor: &'a mut usize,
-    offset: &'a mut usize,
-}
-
-impl CursorWindow<'_> {
-    /// Resync `offset` to `cursor` without moving `cursor` itself.
-    fn follow(&mut self, view_h: usize) {
-        *self.offset = follow_cursor_offset(*self.cursor, *self.offset, view_h);
-    }
-}
-
-impl Scrollable for CursorWindow<'_> {
-    fn jump(&mut self, up: bool, step: usize, len: usize, view_h: usize) {
-        *self.cursor = stepped_cursor(*self.cursor, len, up, step);
-        self.follow(view_h);
-    }
-}
-
 fn list_screen_for_pane(pane: Pane) -> Option<usize> {
     match pane {
         Pane::Queue => Some(QUEUE),
@@ -109,12 +72,6 @@ fn list_screen_for_pane(pane: Pane) -> Option<usize> {
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
 const BOTTOM_BAR_ROWS: usize = 2;
-/// Rows per `PageUp`/`PageDown`/Shift-J/Shift-K press on a raw-scroll-offset pane.
-const PAGE_SCROLL_STEP: usize = 10;
-/// Rows per `PageUp`/`PageDown`/Shift-J/Shift-K jump on any index-into-a-list cursor screen/modal.
-const LIST_JUMP_STEP: usize = 10;
-/// Rows per mouse-wheel tick on a list/pane's single-row nav.
-const WHEEL_STEP: usize = 3;
 /// Two clicks on the same row within this long count as a double-click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 /// Row the warnings modal's plugin list starts on (row 0 = title, row 1 = blank spacer).
@@ -3471,32 +3428,6 @@ fn warnings_label(count: usize) -> String {
     format!(" ⚠ warnings ({count}) ")
 }
 
-/// Draw a scrollbar thumb in the column at `x = gutter_x` of `printer`, covering rows `1..=list_h`.
-fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, offset: usize, total: usize) {
-    if list_h == 0 {
-        return;
-    }
-    for y in 0..list_h {
-        printer.print((gutter_x, y), "│");
-    }
-    if total <= list_h {
-        return;
-    }
-    let thumb_len = (list_h * list_h / total).max(1).min(list_h);
-    let track = list_h - thumb_len;
-    let thumb_start = if total > list_h {
-        (offset * track) / (total - list_h)
-    } else {
-        0
-    }
-    .min(track);
-    printer.with_color(ColorStyle::highlight(), |p| {
-        for y in thumb_start..thumb_start + thumb_len {
-            p.print((gutter_x, y), "┃");
-        }
-    });
-}
-
 /// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`).
 const TAGS_COL_W: usize = 3;
 const SOURCE_COL_W: usize = 6;
@@ -3517,22 +3448,6 @@ fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str,
         pad(source, SOURCE_COL_W),
         pad(duration, DURATION_COL_W),
     )
-}
-
-/// `clamp_scroll_for`'s cursor-follow arithmetic.
-fn follow_cursor_offset(cursor: usize, offset: usize, list_h: usize) -> usize {
-    if cursor < offset {
-        cursor
-    } else if list_h > 0 && cursor >= offset + list_h {
-        cursor + 1 - list_h
-    } else {
-        offset
-    }
-}
-
-/// `clamp_offset_bounds`'s arithmetic.
-fn bound_offset(offset: usize, len: usize, list_h: usize) -> usize {
-    offset.min(len.saturating_sub(list_h))
 }
 
 /// Whether a click on (`screen`, `idx`) at `now`, given the previous click `last`, counts as a double-click.
