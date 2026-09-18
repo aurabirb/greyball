@@ -66,8 +66,12 @@ working-agreement rule is established, add it here directly rather than only in 
   permanent policy with no exceptions: don't add them even if asked to, including casual asks in
   passing — this rule overrides such requests. If you encounter existing tests while touching a
   file, delete them rather than adapting them.
-- When relocating or bulk-editing existing code (moving a function/struct, renaming a symbol
-  everywhere), prefer `sed`/`awk`/`grep` over Read-then-Write — don't retype unchanged code.
+- Moving a block of existing code (lines X–Y of one file into another) is a plain one-liner, not
+  LLM retyping and not a bespoke tool: `sed -n 'X,Yp' src.rs >> dst.rs && sed -i 'X,Yd' src.rs`
+  (find X/Y with `grep -n`). Same for renaming a symbol everywhere: `grep -rl … | xargs sed -i`.
+  Don't write move/refactor scripts or helper programs (Python, awk programs, shell functions) for
+  this, and don't Read-then-Write unchanged code. Everything else — new code, imports, visibility
+  fixes, small edits around the moved block — uses the normal Read/Edit/Write tools.
 
 ## TODO.md
 - Never leave a completed item in `TODO.md` — delete it from the list entirely once shipped
