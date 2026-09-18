@@ -71,7 +71,7 @@ impl MedleyView {
                 };
                 let open = self.playlists.open;
                 if parsed == command::Parsed::Help {
-                    self.help = Some(HelpModal::default());
+                    self.help = Some(HelpModal::new(self.help_lines()));
                     return EventResult::consumed();
                 }
                 // `Screen` mode: fullscreen, one at a time.
@@ -261,11 +261,12 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.help = Some(HelpModal::default());
+                self.help = Some(HelpModal::new(self.help_lines()));
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                self.playlist_picker = Some(PlaylistPicker::new(id));
+                let playlists = self.with_session(|s| s.playlists());
+                self.playlist_picker = Some(PlaylistPicker::new(id, playlists));
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {

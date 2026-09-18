@@ -212,7 +212,7 @@ impl View for MedleyView {
             return;
         }
         if let Some(picker) = &self.playlist_picker {
-            picker.draw(printer, &self.with_session(|s| s.playlists()));
+            picker.draw(printer);
             return;
         }
         if let Some(help) = &self.help {
@@ -377,11 +377,8 @@ impl View for MedleyView {
             }
         }
         self.hotkeys.relayout(screen_size_changed, constraint);
-        if self.playlist_picker.is_some() {
-            let n = self.with_session(|s| s.playlists().len());
-            if let Some(picker) = &mut self.playlist_picker {
-                picker.relayout(screen_size_changed, constraint, n);
-            }
+        if let Some(picker) = &mut self.playlist_picker {
+            picker.relayout(screen_size_changed, constraint);
         }
         let (main_h_changed, pane_bodies) = self.panes.relayout(constraint);
         let list_h = self.list_h();
@@ -590,7 +587,7 @@ impl View for MedleyView {
             // With a playlist selected on the Playlists screen, backtick binds that playlist instead of opening the menu.
             Event::Char('`') if self.with_session(|s| self.selected_hotkey_target(s)).is_some() => {
                 if let Some(target) = self.with_session(|s| self.selected_hotkey_target(s)) {
-                    self.hotkeys.capture = Some(target);
+                    self.open_hotkey_capture(target);
                 }
                 EventResult::consumed()
             }

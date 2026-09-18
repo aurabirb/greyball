@@ -15,35 +15,40 @@ use super::text::pad;
 const LIST_TOP: usize = 1;
 
 /// The help/shortcuts screen (`?` or `:help`), a scrollable text page; exists only while open.
-#[derive(Default)]
+/// `lines` is built once at open — nothing on this screen can change while it's exclusively focused.
 pub(super) struct HelpModal {
     scroll: usize,
+    lines: Vec<String>,
 }
 
 impl HelpModal {
+    pub(super) fn new(lines: Vec<String>) -> Self {
+        Self { scroll: 0, lines }
+    }
+
     /// Content rows between the title and the footer.
     fn view_h(size: Vec2) -> usize {
         size.y.saturating_sub(1).saturating_sub(LIST_TOP)
     }
 
     /// Scrolls on nav keys/wheel; `true` when `event` closes the screen.
-    fn on_event(&mut self, event: &Event, len: usize, size: Vec2) -> bool {
+    fn on_event(&mut self, event: &Event, size: Vec2) -> bool {
         if let Some(nav) = Nav::of(event) {
             let (up, step) = nav.step(PAGE_SCROLL_STEP);
             let scroll = if up { self.scroll.saturating_sub(step) } else { self.scroll.saturating_add(step) };
-            self.scroll = bound_offset(scroll, len, Self::view_h(size));
+            self.scroll = bound_offset(scroll, self.lines.len(), Self::view_h(size));
         }
         *event == Event::Key(Key::Esc)
     }
 
-    fn draw(&self, printer: &Printer, lines: &[String]) {
+    fn draw(&self, printer: &Printer) {
         printer.with_color(ColorStyle::title_primary(), |p| {
             p.print((0, 0), &pad("Help / Shortcuts", p.size.x));
         });
 
         let h = Self::view_h(printer.size);
-        let scroll = bound_offset(self.scroll, lines.len(), h);
-        for (i, line) in lines.iter().skip(scroll).take(h).enumerate() {
+        let scroll = bound_offset(self.scroll, self.lines.len(), h);
+        for (i, line) in self.lines.iter().skip(scroll).take(h).enumerate() {
             printer.print((0, LIST_TOP + i), line);
         }
 
@@ -96,8 +101,8 @@ fn build_help_lines(
 }
 
 impl MedleyView {
-    /// The help screen's content lines.
-    fn help_lines(&self) -> Vec<String> {
+    /// The help screen's content lines, built once when the modal opens.
+    pub(super) fn help_lines(&self) -> Vec<String> {
         let plugin_commands = self.with_session(|s| s.plugin_command_help());
         let (playlist_hotkeys, builtin_remaps) = self.with_session(|s| {
             let playlists = s.playlists();
@@ -124,13 +129,12 @@ impl MedleyView {
     }
 
     pub(super) fn draw_help(&self, help: &HelpModal, printer: &Printer) {
-        help.draw(printer, &self.help_lines());
+        help.draw(printer);
     }
 
     pub(super) fn on_help_event(&mut self, event: &Event) -> EventResult {
-        let len = self.help_lines().len();
         let size = self.last_screen_size;
-        if self.help.as_mut().is_some_and(|help| help.on_event(event, len, size)) {
+        if self.help.as_mut().is_some_and(|help| help.on_event(event, size)) {
             self.help = None;
             self.focus = self.fallback_focus();
         }

@@ -47,19 +47,10 @@
   should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`PaneLayout::main_rect`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
   and wide-glyph titles on screen.
-- [ ] Opening Help (`?`/`:help`) and scrolling far makes the app very busy and can lock it up, and
-  playback sometimes skips to the next track while it's stuck. Likely cause: `help_lines`
-  (`ui/src/view/help.rs`) rebuilds the whole help text from scratch on every `draw_help` frame AND on
-  every scroll event (`on_help_event`), each time taking the session lock twice and calling
-  `s.playlists()`, `s.hotkeys()` and `self.top_rows(s)` — which walks every source's remote playlists
-  (and can kick `ViewCache` fetches) — just to label hotkeys. Held-down/wheel scrolling queues events
-  faster than that can run, so the UI thread spins while holding the session lock; the skip is
-  probably the player/auto-advance path starved of that lock (or of CPU) long enough to read as an
-  underrun/end-of-track — confirm in `medley.log` which path issued the advance and make it robust
-  to a busy UI regardless. Fix: build the help lines once when `HelpModal` opens (rebuild only on a hotkeys/
-  playlists-changed event or resize), keep `HelpModal::draw`/`on_event` to slicing the cached lines, and
-  coalesce queued scroll events before redrawing. Check the other fullscreen modals built the same
-  way (`draw_warnings`, `draw_hotkey_ui`, the playlist picker) for the same per-frame rebuild.
+- [ ] Playback has been seen to skip to the next track while the UI was stuck busy (e.g. during heavy
+  Help scrolling, since fixed). Confirm in `medley.log` which path issued the advance and make it
+  robust to a busy UI regardless — likely the auto-advance path misreading a lock/CPU stall as an
+  underrun/end-of-track.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
