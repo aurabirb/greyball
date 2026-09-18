@@ -116,7 +116,7 @@ fn split(total: Vec2, open_panes: &[Pane], cfg: PaneLayoutConfig) -> (Rect, Vec<
         // Left/Right: pane block is a narrow column alongside main, full band height.
         Side::Left | Side::Right => {
             let avail = band.x.saturating_sub(GUTTER);
-            // Fixed fraction, floored so it never eats the whole screen; MVP — no per-pane resizing yet.
+            // Fixed fraction, floored so it never eats the whole screen.
             let extent = if avail < 2 { avail } else { (avail / 3).clamp(1, avail - 1) };
             let main_w = avail - extent;
             let (main_x, side_x) = if cfg.side == Side::Left {

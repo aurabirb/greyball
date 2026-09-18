@@ -172,7 +172,7 @@ impl MedleyView {
                     self.queue_feedback = Some(format!("  {kind}: {after} tracks"));
                 }
             }
-            // Flash feedback for the two now-clickable status-line tags.
+            // Flash feedback for the two clickable status-line tags.
             if is_toggle_shuffle {
                 let on = self.with_session(|s| s.shuffle());
                 self.queue_feedback = Some(format!("  Shuffle: {}", if on { "on" } else { "off" }));
@@ -293,7 +293,7 @@ impl MedleyView {
         self.buffer.clear();
     }
 
-    /// The active text field captures every event; `None` when there is none, or `event` cancels it and still needs handling.
+    /// The active text field captures every event; `None` when idle, or when `event` cancels it and still needs handling.
     pub(super) fn on_edit_event(&mut self, event: &Event) -> Option<EventResult> {
         if self.editing == Editing::None {
             return None;

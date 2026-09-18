@@ -29,14 +29,14 @@
   and no list shows a track's liked state at all. Route it through the same pending/settle path as
   `ViewCache::toggle_remote_membership` (a source needs to say where an add lands — Spotify puts new
   likes first, not last) and add a liked marker to the shared row builder (`tracks_to_rows`,
-  `ui/src/view.rs`).
+  `ui/src/view/rows.rs`).
 - [ ] A playlist hotkey can be bound to a key a raw handler in `MedleyView::on_event`
   (`ui/src/view.rs`) consumes first — seen with `x` (M3U export): the binding succeeds but the key
   never toggles. Refuse such keys in `bind_hotkey` like built-ins, or move those raw keys into
   `BuiltinAction` so the one table covers them.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
-  (`ui/src/view.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
+  (`ui/src/view/rows.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
   its last cell is never written, and `draw_list_body` paints no row text below `rows.len()`; tab
   bar, hint line and status line may have the same off-by-one against `printer.size.x` — every row
   `draw` owns should be written edge to edge each frame (or the view cleared first); (2) width
@@ -44,22 +44,22 @@
   glyph macOS Terminal/iTerm renders wider or narrower than that (emoji, variation selectors, CJK,
   ambiguous-width box/transport glyphs like `━╍⏸`) pushes a line into or short of the last column,
   leaving leftovers cursive's diffing never rewrites; (3) resize handling — `Event::WindowResize`
-  should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`last_main_rect`
+  should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`PaneLayout::main_rect`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
   and wide-glyph titles on screen.
 - [ ] Opening Help (`?`/`:help`) and scrolling far makes the app very busy and can lock it up, and
   playback sometimes skips to the next track while it's stuck. Likely cause: `help_lines`
-  (`ui/src/view.rs`) rebuilds the whole help text from scratch on every `draw_help` frame AND on
-  every scroll event (`jump_help`), each time taking the session lock twice and calling
+  (`ui/src/view/help.rs`) rebuilds the whole help text from scratch on every `draw_help` frame AND on
+  every scroll event (`on_help_event`), each time taking the session lock twice and calling
   `s.playlists()`, `s.hotkeys()` and `self.top_rows(s)` — which walks every source's remote playlists
   (and can kick `ViewCache` fetches) — just to label hotkeys. Held-down/wheel scrolling queues events
   faster than that can run, so the UI thread spins while holding the session lock; the skip is
   probably the player/auto-advance path starved of that lock (or of CPU) long enough to read as an
   underrun/end-of-track — confirm in `medley.log` which path issued the advance and make it robust
-  to a busy UI regardless. Fix: build the help lines once in `open_help` (rebuild only on a hotkeys/
-  playlists-changed event or resize), keep `draw_help`/`jump_help` to slicing the cached lines, and
+  to a busy UI regardless. Fix: build the help lines once when `HelpModal` opens (rebuild only on a hotkeys/
+  playlists-changed event or resize), keep `HelpModal::draw`/`on_event` to slicing the cached lines, and
   coalesce queued scroll events before redrawing. Check the other fullscreen modals built the same
-  way (`draw_warnings`, `draw_hotkey_menu`, the playlist picker) for the same per-frame rebuild.
+  way (`draw_warnings`, `draw_hotkey_ui`, the playlist picker) for the same per-frame rebuild.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
@@ -69,7 +69,7 @@
 - [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
   it plays — only the one occurrence actually being played (by position in the context, not by track
   identity) should be marked.
-  Suspected fix: `tracks_to_rows` (`ui/src/view.rs`) sets `Row::current` from
+  Suspected fix: `tracks_to_rows` (`ui/src/view/rows.rs`) sets `Row::current` from
   `t.is_current(s.now_playing_id())` — pure track identity. Expose the playing position from core (a
   `Session::playing_context_index()` reading `PlaybackContext::index`, plus which list it refers to —
   `remote`/playlist id — so it only applies when the list on screen IS the playing context) and have
@@ -90,8 +90,8 @@
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
 - [ ] Scrolling the Log pane is very slow or unresponsive. Likely cause (unconfirmed — profile or
-  log event→draw latency first): `log_render_lines` (`ui/src/view.rs`) clones the entire log snapshot
-  (`Vec<String>`) on every call, and both `draw` and `clamp_pane_scroll` (run on every scroll event)
+  log event→draw latency first): `LogPane::lines` (`ui/src/view/log.rs`) clones the entire log snapshot
+  (`Vec<String>`) on every call, and both `LogPane::draw` and `LogPane::scroll_by` (run on every scroll event)
   then `wrap()` every line of it just to get a total wrapped height — O(whole log) per frame and per
   wheel tick, which grows unbounded over a session and is worst under `RUST_LOG=debug`. Fix direction:
   borrow instead of cloning, cache wrapped line counts per (line, width) and only wrap newly appended
@@ -108,8 +108,8 @@
   remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
   cleaned map.
 ### Features
-- [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `draw_tab_bar` draws in
-  row 0, `ui/src/view.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
+- [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
+  row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
   exactly as wide as it renders today (the `scroll_title` result — no padding, no layout change) and
   underline (`Effect::Underline`, applied once — combining an effect twice toggles it off) the
@@ -123,8 +123,8 @@
   Unknown duration → no underline, clicks no-op. Check whether a click on that title already does
   something and keep it reachable. No helpers beyond what this feature itself calls.
 - [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
-  `STATUS_BAR_WIDTH` (24, `ui/src/view.rs`). Today `status_line_layout` reserves the fixed bar and
-  hands every spare column to the title field (`name_field_width`), which `pad`s a short title with
+  `BAR_WIDTH` (24, `ui/src/view/status_line.rs`). Today `StatusLine::layout` reserves the fixed bar and
+  hands every spare column to the title field (`name_w`), which `pad`s a short title with
   blanks — those blank columns are the "available space on the left". New split: the title field
   gets only what the title needs (its display width, capped by what's left), and the scrubber takes
   the rest, up to a max of 80 columns; the right-hand block (`{totaltime}  {bpm} {shuffle}`) stays
@@ -138,7 +138,7 @@
   `totaltime.width()` in; guard the seek math against a 0-width bar.
 - [ ] Draw a two-row mirrored ("thick") waveform overview of the entire playing track — the whole
   song's amplitude envelope left to right, like SoundCloud's, not a live oscilloscope — in the top
-  bar (`draw_tab_bar` in `ui/src/view.rs`), in the empty stretch between the tabs/transport cluster
+  bar (`TabBar::draw` in `ui/src/view/tab_bar.rs`), in the empty stretch between the tabs/transport cluster
   on the left and the right-aligned now-playing title, built from `▁▂▃▄▅▆▇█`. Thickness comes from
   inverting the palette on the second row: the upper row prints level `a` (1–8) normally, so the bar
   rises from that row's bottom edge; the lower row prints the complementary glyph `8 - a` with
@@ -175,8 +175,8 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Playlist hotkey rework — two parts, both built on the existing `hotkey_capture`/
-  `bind_captured_key`/`clear_captured_hotkey` path (`ui/src/view.rs`) and `Session::bind_hotkey`
+- [ ] Playlist hotkey rework — two parts, both built on the existing `HotkeyUi::capture`/
+  `bind_captured_key`/`clear_captured_hotkey` path (`ui/src/view/hotkeys.rs`) and `Session::bind_hotkey`
   (`core/src/app.rs`). Purpose: mid track-sorting (often from the Queue or another pane, not the
   Playlists screen) get a quick reminder of which key is on which playlist, move a key to a
   different playlist, or add a playlist, without leaving the current view.
@@ -221,9 +221,9 @@
   `awk`, build + clippy clean), then add the second instance.
 - [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
   — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
-  `draw_help`/`help_lines`/`build_help_lines`/`jump_help` and `draw_hotkey_menu`/`hotkey_rows`/
-  `open_hotkey_capture` and their `on_event` branches (`ui/src/view.rs`) rather than keeping either
-  alongside. Floating = the bordered box over the current view that the playlist hotkey rework
+  `HelpModal`/`help_lines`/`build_help_lines`/`on_help_event` (`ui/src/view/help.rs`) and
+  `HotkeyUi`'s menu half (`menu`/`draw_menu`/`menu_rows` and the menu arm of `on_hotkey_ui_event`,
+  `ui/src/view/hotkeys.rs`) rather than keeping either alongside. Floating = the bordered box over the current view that the playlist hotkey rework
   introduces; reuse it.
   Content: one table of items, each `{command, description, shortcut}`, grouped into titled
   sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
@@ -274,11 +274,11 @@
   with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
   `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
 - [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
-  (`TABS` in `ui/src/view.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
+  (`TABS` in `ui/src/view/tab_bar.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
   (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
   **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
   main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
-  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`screen_pane`),
+  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`PaneLayout::fullscreen`),
   and **floating** (a bordered box over the current view, not fullscreen — the same floating
   presentation the playlist hotkey rework above introduces for its second Playlists instance; one
   implementation, and that item's extracted window type is the model for the other windows).
@@ -297,8 +297,8 @@
   sized to a fraction of the screen, one at a time on top) rather than mouse drag/resize. Keep at
   least one window tabbed so the main area is never empty. Persist each window's mode (and open/
   closed state for non-tabbed ones) in `state.toml` next to volume and hotkeys (`save_state`,
-  `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. Best done
-  after the `view.rs` split below (its `panes.rs` seam is exactly this code).
+  `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. The
+  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`).
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
@@ -309,7 +309,7 @@
   Liked Songs), else do nothing. Select only — don't start playback.
 - [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
   playing track.
-  Suspected fix: all four end in `self.run(Command::Seek(±5000))` (`ui/src/view.rs` ~line 4159 for
+  Suspected fix: all four end in `self.run(Command::Seek(±5000))` (`MedleyView::on_event`, `ui/src/view.rs`, for
   Left/Right; `,`/`.` via `keybindings.rs`'s `BuiltinAction::SeekForward/SeekBack`) — in `run`, after a
   successful `Command::Seek`, find the playing track's index in the current screen's list (the
   position-aware lookup from the duplicate-marker bug above; `visible_track_ids` for identity
@@ -331,9 +331,9 @@
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
-- [ ] Make the bottom status row (the last screen row: `{prev} {playpause} {next}  {title}
-  {curtime} {scrubber} {totaltime}  {bpm} {shuffle}`, drawn at the end of `draw` and hit-tested in
-  `on_event` through `status_line_layout`, `ui/src/view.rs`) a self-contained widget that can be
+- [ ] Let the bottom status row (the last screen row: `{prev} {playpause} {next}  {title}
+  {curtime} {scrubber} {totaltime}  {bpm} {shuffle}` — the `StatusLine` widget in
+  `ui/src/view/status_line.rs`, drawn at the end of `draw` and hit-tested in `on_event`) be
   switched on or off from the Settings UI (a checkbox there, persisted like the other settings —
   not config-file-only). Its role is the compatibility-mode player interface — the plain fallback
   that works on any terminal/font, while the richer player UI lives in the top bar (title
@@ -341,12 +341,9 @@
   `progress_bar` draws e.g. `=` for the played part and `-` for the rest (keep `-` for unknown
   duration; settle the exact characters in a real-terminal screenshot), removing the ambiguous-width
   glyphs the stale-rightmost-column bug above suspects. The playback control glyphs (`PREV_ICON`/
-  `player_action_glyph`/`NEXT_ICON`) stay as they are for now. Widget: move the row's state-free
-  pieces (`StatusLineLayout`/`StatusLineWidths`/`status_line_layout`, `progress_bar`, its draw
-  block and its click branch) behind one type with a draw-into-rect and a handle-click entry point
-  sharing one layout call. When off, the row isn't reserved at all: `BOTTOM_BAR_ROWS` stops being a
+  `player_action_glyph`/`NEXT_ICON`) stay as they are for now. When off, the row isn't reserved at all: `BOTTOM_BAR_ROWS` stops being a
   constant 2 and becomes 1 (hint/command line only), feeding `split`, `required_size`/
-  `last_main_rect`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
+  `PaneLayout::main_rect`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
   assume the status row exists (check the warnings button, the row-count readout and the command
   line, which sit on the hint row above it). Toggling applies immediately, without a restart.
 - [ ] Building on the status-row widget above: let it be placed either up top next to the
@@ -377,24 +374,6 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] Split `ui/src/view.rs` (~4,700 lines: one `MedleyView` struct with ~180 lines of fields, a
-  ~1,900-line `impl MedleyView`, a ~1,200-line `impl View` holding all of `draw`/`on_event`, and ~65
-  free functions) into modules under `ui/src/view/`. Suggested seams, following the file's own
-  `// ----` section markers and free-function clusters: `rows.rs` (`Row`/`Cell`/`Column`,
-  `tracks_to_rows`, `render_cell`, `column_layout`, `draw_row_list`/`draw_list_body`, `list_title`),
-  `status_line.rs` (`StatusLineLayout`/`StatusLineWidths`, `status_line_layout`, transport glyphs,
-  `progress_bar`, plus the draw and mouse hit-test halves that must stay in sync — make them share one
-  layout call instead of mirroring it), `panes.rs` (`Pane` layout/`split`, `draw_pane`, log scroll/pin,
-  Queue/History docked panes), `settings.rs` (`SettingsEntry` and its draw/edit handling),
-  `hotkeys.rs` (hotkey menu, capture modal, `bind_captured_key`), `playlists.rs` (`TopRow`,
-  `RememberedPlaylist`, open playlist/remote navigation), `filter.rs` (`FilterCache`/`FilterRank`,
-  local filter), `mouse.rs` (`handle_mouse`, `click_row`, double-click), `input.rs` (`Editing`,
-  command line, `commit_edit`, key dispatch). Do it as pure moves first (per AGENTS.md: `sed`/`awk`,
-  not retyping; one module per commit, build + clippy clean each time), keeping `MedleyView` one
-  struct with `impl` blocks spread across the modules; only afterwards group its fields into
-  per-concern sub-structs (`LogState`, `HotkeyUi`, `PlaylistNav`, …). Delete any `#[cfg(test)]` blocks
-  encountered and trim multi-line doc comments to one line while moving. Best done before the
-  architecture review below, so that review works on navigable files.
 - [ ] Run a code and architecture review: make sure the program uses messages and reactive patterns
   to communicate between, and render, independent parts of the app (no part reaching into another's
   state or recomputing/polling per frame what an event should drive), and fix what doesn't. Then write

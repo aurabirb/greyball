@@ -146,7 +146,6 @@ impl MedleyView {
         match screen {
             NOW_PLAYING => {
                 if s.playing_context_len() == 0 {
-                    // Nothing has ever been played this session — nothing to show a tracklist of yet.
                     vec![plain_row("nothing played yet — press Enter on a track to start playing")]
                 } else {
                     track_rows(s.playing_context_window(offset, limit))
