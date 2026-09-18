@@ -3557,15 +3557,15 @@ impl View for MedleyView {
             // menu, so a bare `f`/`F` outside it produced no visible
             // feedback at all.
             Editing::None => self.queue_feedback.clone().or(membership_feedback.map(|m| format!("  {m}"))).unwrap_or_else(|| {
-                let (menu_key, shuffle_key) = self.with_session(|s| {
+                let (help_key, shuffle_key) = self.with_session(|s| {
                     (
-                        s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHotkeyMenu)),
+                        s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)),
                         s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::ToggleShuffle)),
                     )
                 });
-                let menu_key = menu_key.map(String::from).unwrap_or_default();
+                let help_key = help_key.map(String::from).unwrap_or_default();
                 let shuffle_key = shuffle_key.map(String::from).unwrap_or_default();
-                format!("  [{menu_key}] shortcuts  [{shuffle_key}] shuffle")
+                format!("  [{help_key}] help  [{shuffle_key}] shuffle")
             }),
         };
         printer.print((0, bottom), &pad(&line, printer.size.x));
