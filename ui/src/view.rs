@@ -4432,17 +4432,25 @@ fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str,
     )
 }
 
+/// Strips U+FE0E/U+FE0F variation selectors — zero-width in terminals, but
+/// counted inconsistently by some width tables, so drop them before any
+/// display-width computation rather than trust every source to agree.
+fn strip_variation_selectors(s: &str) -> String {
+    s.chars().filter(|&c| c != '\u{FE0E}' && c != '\u{FE0F}').collect()
+}
+
 /// `truncate`, but marks a cut with a trailing `…` (reserving 1 display
 /// column for it) instead of silently dropping the rest — the Now Playing
 /// title bar's truncation convention for a long context name.
 fn truncate_ellipsis(s: &str, width: usize) -> String {
+    let s = strip_variation_selectors(s);
     if s.width() <= width {
-        return s.to_string();
+        return s;
     }
     if width == 0 {
         return String::new();
     }
-    let mut out = truncate(s, width - 1);
+    let mut out = truncate(&s, width - 1);
     out.push('…');
     out
 }
@@ -4453,7 +4461,7 @@ fn truncate_ellipsis(s: &str, width: usize) -> String {
 fn truncate(s: &str, width: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
-    for c in s.chars() {
+    for c in strip_variation_selectors(s).chars() {
         let cw = c.width().unwrap_or(0);
         if w + cw > width {
             break;
