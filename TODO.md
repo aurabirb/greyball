@@ -56,6 +56,14 @@
   from being assigned a hotkey at all, so a hotkey *can* currently be bound to Liked Songs and toggling
   it would call `remove_from_playlist` against it like any other playlist — add an explicit guard so a
   playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
+- [ ] Track rendering isn't consistent across lists: the same track should render identically (tags,
+  hotkeys/playlist column, liked state, current marker) and update at the same moment on every tab
+  and docked pane. Seen: pressing a playlist hotkey while in the Queue doesn't update the playlist
+  column there. Every list already goes through `tracks_to_rows` (`ui/src/view.rs`), so the likely
+  cause is the stale `ViewCache` membership data from the hotkey-toggle bug above rather than a
+  Queue-specific path — fix that first, then audit each screen's `rows()` branch (Now Playing, Search,
+  Playlists, Queue, History, filtered lists, docked panes) for any per-screen difference in what a
+  row shows or when it refreshes, and remove it.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
