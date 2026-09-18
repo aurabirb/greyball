@@ -231,6 +231,28 @@ impl MediaCache {
         Ok(source_dir.join(filename))
     }
 
+    /// One-off adoption of a cache file written before the human-readable
+    /// naming index existed: `dir/<source>/<sanitize(uri)>`, the old naming
+    /// scheme, with no index entry pointing at it. If such a file exists and
+    /// `(source, uri)` isn't already indexed, sniffs its extension, assigns
+    /// it a proper name via `dest` (same as any other first-time write), and
+    /// renames the file in place — no re-fetch, no re-encode. `Ok(None)`
+    /// covers both "already indexed" and "no legacy file found" — the
+    /// migration binary that calls this doesn't need to tell them apart.
+    pub fn migrate_legacy(&self, source: &SourceId, uri: &str) -> io::Result<Option<PathBuf>> {
+        if self.filename(source, uri).is_some() {
+            return Ok(None);
+        }
+        let legacy = self.dir.join(sanitize(source.as_str())).join(sanitize(uri));
+        if !legacy.exists() {
+            return Ok(None);
+        }
+        let ext = sniff_ext_path(&legacy);
+        let dest = self.dest(source, uri, ext)?;
+        std::fs::rename(&legacy, &dest)?;
+        Ok(Some(dest))
+    }
+
     /// Local path to `(source, uri)`'s cached audio, if already populated.
     /// Never touches the network or decodes anything.
     pub fn cached_path(&self, source: &SourceId, uri: &str) -> Option<PathBuf> {
