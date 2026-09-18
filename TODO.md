@@ -20,12 +20,6 @@
   AP socket through a local proxy. When one shows up in `medley.log`, confirm playback carried on
   ("reconnecting in the background" → "session connected", no `Stopped` in between), then delete this.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
-- [ ] UI stutter when first opening the Playlists screen on a large library, reported specifically
-  when `:log` isn't already open. The hotkeys column's membership table (`Session::
-  hotkey_memberships`, `core/src/app.rs`) is rebuilt on `PlaylistsChanged` and at most once a second
-  while a hotkey-bound remote playlist is still loading, so it no longer drives per-frame
-  `ensure_remote_playlist_tracks` fetches — unverified on the reporter's large-library machine
-  whether the stutter is gone. If it still reproduces, profile `draw()` there before guessing further.
 - [ ] Remote playlist hotkey toggles (`ViewCache::toggle_remote_membership`, `core/src/view_cache.rs`)
   have only been exercised against a throwaway fake source, never a real Spotify playlist. On first
   real use, confirm in `medley.log` that one press sends exactly one add/remove, the letter goes
