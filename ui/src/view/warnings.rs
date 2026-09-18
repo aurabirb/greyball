@@ -6,7 +6,8 @@ use cursive::theme::ColorStyle;
 
 use core::{CoreEvent, PluginHealth, SetupKind, SourceId};
 
-use super::{Editing, MedleyView};
+use super::MedleyView;
+use super::input::Editing;
 use super::scroll::{CursorWindow, modal_list_h};
 use super::text::pad;
 

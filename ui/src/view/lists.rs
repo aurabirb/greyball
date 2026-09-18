@@ -4,7 +4,8 @@ use cursive::event::EventResult;
 
 use core::{Command, Session, TrackId};
 
-use super::{Editing, Focus, HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE, SEARCH};
+use super::{Focus, HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE, SEARCH};
+use super::input::Editing;
 use super::panes::list_screen_for_pane;
 use super::playlists::TopRow;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};

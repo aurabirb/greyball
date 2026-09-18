@@ -4,7 +4,8 @@ use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, Sou
 
 use crate::command;
 
-use super::{MedleyView, PLAYLISTS, popup};
+use super::{MedleyView, PLAYLISTS};
+use super::input::popup;
 
 /// One row of the Playlists screen's top-level list.
 pub(super) enum TopRow {

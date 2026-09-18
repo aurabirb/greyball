@@ -5,7 +5,8 @@ use core::{BrowseNode, PlaylistId, Session, SourceId};
 
 use crate::row::RowItem;
 
-use super::{Editing, HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE};
+use super::{HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE};
+use super::input::Editing;
 
 /// `MedleyView::filter_cache`'s contents.
 pub(super) struct FilterCache {
