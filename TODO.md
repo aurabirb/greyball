@@ -137,5 +137,11 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
+- [ ] Run a code and architecture review: make sure the program uses messages and reactive patterns
+  to communicate between, and render, independent parts of the app (no part reaching into another's
+  state or recomputing/polling per frame what an event should drive), and fix what doesn't. Then write
+  a small (~4-8 KB) set of guides for further agents to follow, covering e.g. the app's architecture
+  invariants and ways of working such as checking for excessive comments or inefficient/verbose
+  implementations before pushing work.
 - [ ] Run an agent to reduce code duplication and DRY violations, along with any
   violations of the user policies.
