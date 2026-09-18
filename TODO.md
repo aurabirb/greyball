@@ -34,6 +34,19 @@
   (`ui/src/view.rs`) consumes first — seen with `x` (M3U export): the binding succeeds but the key
   never toggles. Refuse such keys in `bind_hotkey` like built-ins, or move those raw keys into
   `BuiltinAction` so the one table covers them.
+- [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
+  resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
+  (`ui/src/view.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
+  its last cell is never written, and `draw_list_body` paints no row text below `rows.len()`; tab
+  bar, hint line and status line may have the same off-by-one against `printer.size.x` — every row
+  `draw` owns should be written edge to edge each frame (or the view cleared first); (2) width
+  disagreement with the terminal — `pad`/`truncate`/`five_col` measure with `unicode-width`, and a
+  glyph macOS Terminal/iTerm renders wider or narrower than that (emoji, variation selectors, CJK,
+  ambiguous-width box/transport glyphs like `━╍⏸`) pushes a line into or short of the last column,
+  leaving leftovers cursive's diffing never rewrites; (3) resize handling — `Event::WindowResize`
+  should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`last_main_rect`
+  must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
+  and wide-glyph titles on screen.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
