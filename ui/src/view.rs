@@ -34,13 +34,18 @@ use scroll::{
     modal_list_h, stepped_cursor,
 };
 use text::{in_span, ms, truncate_ellipsis, wrap};
+use transport::{
+    NEXT_ICON, PREV_ICON, TRANSPORT_GAP, Transport, player_action_glyph, transport_labels, transport_layout,
+};
 
 mod rows;
 mod scroll;
 mod text;
+mod transport;
 
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
+pub use transport::player_state_glyph;
 
 /// The track list `Command::PlayContext` last started playing from; independent of the Playlists screen's state.
 pub(crate) const NOW_PLAYING: usize = 0;
@@ -2132,54 +2137,6 @@ fn tab_bar_collapsed(content_w: usize, state: &PlayerState) -> bool {
     tabs_width(false) + gap + transport_w > content_w
 }
 
-/// One of the top-bar's transport buttons, drawn right after the tabs.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Transport {
-    Prev,
-    PlayPause,
-    Next,
-}
-
-impl Transport {
-    fn command(self) -> Command {
-        match self {
-            Transport::Prev => Command::Previous,
-            Transport::PlayPause => Command::PlayPause,
-            Transport::Next => Command::Next,
-        }
-    }
-}
-
-/// Prev/next glyphs, shared by the top-bar transport strip and the bottom status line.
-const PREV_ICON: &str = "⏮";
-const NEXT_ICON: &str = "⏭";
-
-/// Gap on either side of the top-bar transport cluster.
-const TRANSPORT_GAP: usize = 2;
-
-/// The three transport buttons' text, space-padded like `tab_label`.
-fn transport_labels(state: &PlayerState) -> [(Transport, String); 3] {
-    [
-        (Transport::Prev, format!(" {PREV_ICON} ")),
-        (Transport::PlayPause, format!(" {} ", player_action_glyph(state))),
-        (Transport::Next, format!(" {NEXT_ICON} ")),
-    ]
-}
-
-/// Transport buttons' start column and width, packed left-to-right from `start` with no gap between them.
-fn transport_layout(start: usize, state: &PlayerState) -> Vec<(Transport, usize, usize)> {
-    let mut x = start;
-    transport_labels(state)
-        .into_iter()
-        .map(|(button, label)| {
-            let w = label.width();
-            let s = x;
-            x += w;
-            (button, s, w)
-        })
-        .collect()
-}
-
 /// Which transport button occupies column `x` of a tab bar `width` columns wide.
 fn transport_at_x(x: usize, width: usize, state: &PlayerState) -> Option<Transport> {
     let collapsed = tab_bar_collapsed(width, state);
@@ -3267,33 +3224,6 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     let filled = ((pos as f64 / dur as f64) * width as f64).round() as usize;
     let filled = filled.min(width);
     format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
-}
-
-/// `▶`/`⏸`/`⏹` for the given playback state.
-pub fn player_state_icon(state: &PlayerState) -> &'static str {
-    match state {
-        PlayerState::Playing => "▶",
-        PlayerState::Paused => "⏸",
-        PlayerState::Stopped => "⏹",
-    }
-}
-
-/// The play/pause *button*'s icon: the action a press would take, not the state it's in.
-fn player_action_icon(state: &PlayerState) -> &'static str {
-    match state {
-        PlayerState::Playing => "⏸",
-        PlayerState::Paused | PlayerState::Stopped => "▶",
-    }
-}
-
-/// `player_action_icon` with `player_state_glyph`'s leading-space padding.
-fn player_action_glyph(state: &PlayerState) -> String {
-    format!(" {}", player_action_icon(state))
-}
-
-/// `player_state_icon`, with an extra leading space.
-pub fn player_state_glyph(state: &PlayerState) -> String {
-    format!(" {}", player_state_icon(state))
 }
 
 /// Bracketed BPM-scan status tag shown next to the status line's scrubber.
