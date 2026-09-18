@@ -65,7 +65,12 @@
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
   slow interval) on an actual triggering event instead of polling for one.
+- [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
+  it plays — only the one occurrence actually being played (by position in the context, not by track
+  identity) should be marked.
 ### Features
+- [ ] The seek keys (`,` `.` and Left/Right) should also refocus the list view on the currently
+  playing track.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
