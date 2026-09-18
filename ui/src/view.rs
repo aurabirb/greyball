@@ -3331,10 +3331,23 @@ impl View for MedleyView {
         // back into cursive.) Settings pane content needs `Session::cfg`, so
         // it's gathered in the same pass rather than locking again per pane.
         let want_settings = panes.iter().any(|(p, _)| *p == Pane::Settings);
-        let (detail, rows, total, st, np, bpm_tag, shuffle, settings, warn_count, pane_rows, membership_feedback) =
-            self.with_session(|s| {
+        let (
+            detail,
+            rows,
+            total,
+            st,
+            np,
+            bpm_tag,
+            shuffle,
+            settings,
+            warn_count,
+            pane_rows,
+            membership_feedback,
+            main_context_name,
+        ) = self.with_session(|s| {
                 let (detail, rows) = self.rows(s, self.screen, offset, list_h);
                 let total = self.list_len(s, self.screen);
+                let main_context_name = self.context_name(s, self.screen).filter(|_| self.screen == NOW_PLAYING);
                 let now_playing = s.now_playing();
                 let np = now_playing
                     .as_ref()
@@ -3357,7 +3370,11 @@ impl View for MedleyView {
                     .iter()
                     .map(|&(pane, _, screen, offset, pane_h)| {
                         let (detail, rows) = self.rows(s, screen, offset, pane_h);
-                        let title = format!("{}{detail}", screen_name(screen));
+                        // "Now Playing" is already the tab label above it, so its own name stands in for the screen name instead of appending to it.
+                        let title = match self.context_name(s, screen).filter(|_| screen == NOW_PLAYING) {
+                            Some(name) => name,
+                            None => format!("{}{detail}", screen_name(screen)),
+                        };
                         (pane, title, rows, self.list_len(s, screen))
                     })
                     .collect();
@@ -3373,6 +3390,7 @@ impl View for MedleyView {
                     warn_count,
                     pane_rows,
                     s.membership_feedback(),
+                    main_context_name,
                 )
             });
 
@@ -3447,7 +3465,10 @@ impl View for MedleyView {
         };
         draw_tab_bar(printer, self.screen, &np, marquee_offset, &st.state);
         let main_title = {
-            let title = format!("{}{detail}", screen_name(self.screen));
+            let title = match main_context_name {
+                Some(name) => name,
+                None => format!("{}{detail}", screen_name(self.screen)),
+            };
             if self.focus == Focus::Main { format!("[{title}]") } else { title }
         };
         draw_row_list(&printer.windowed(main_rect), &main_title, &rows, offset, sel, total);

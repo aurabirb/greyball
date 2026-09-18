@@ -111,6 +111,10 @@
   playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
+- [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
+  CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
+  e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
+  slow interval) on an actual triggering event instead of polling for one.
 ### Features
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
