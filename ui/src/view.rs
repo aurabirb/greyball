@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use core::{
     BrowseNode, Command, HotkeyTarget, LogBuf, PaneLayoutConfig, PaneMode, PlaylistId, Session, Side,
-    SourceId, TrackId,
+    SourceId,
 };
 
 use crate::{SessionHandle, keybindings};
@@ -24,20 +24,21 @@ use crate::command::Pane;
 use crate::keybindings::Action;
 
 use filter::FilterCache;
-use hotkeys::HOTKEY_LIST_TOP;
+use help::HelpModal;
+use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
 use log::draw_pane;
 use panes::{list_screen_for_pane, split};
-use playlist_picker::PLAYLIST_PICKER_LIST_TOP;
+use playlist_picker::PlaylistPicker;
 use playlists::RememberedPlaylist;
 use rows::{Row, draw_row_list};
-use scroll::{LIST_JUMP_STEP, PAGE_SCROLL_STEP, WHEEL_STEP, bound_offset, modal_list_h};
+use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
 use settings::{draw_settings_pane, settings_entries};
 use status_line::{STATUS_BAR_WIDTH, StatusLineWidths, bpm_status_tag, progress_bar, status_line_layout};
 use tab_bar::{draw_tab_bar, tab_at_x, transport_at_x};
 use text::{in_span, ms};
 use transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
-use warnings::{WARNINGS_LIST_TOP, defocuses_warnings, warnings_label};
+use warnings::{WarningsModal, defocuses_warnings, warnings_label};
 
 mod filter;
 mod help;
@@ -98,9 +99,8 @@ enum Focus {
 pub struct MedleyView {
     session: SessionHandle,
     screen: usize,
-    cursor: [usize; N_SCREENS],
-    /// First visible row per screen, persisted so the cursor moves freely within the window before it scrolls.
-    list_offset: [usize; N_SCREENS],
+    /// Each screen's cursor and scroll window; a wheel scroll moves only the window, `clamp_scroll` re-follows.
+    lists: [ListState; N_SCREENS],
     /// The main list's rect as of the last layout pass (matches `draw`'s `main_rect`).
     last_main_rect: Rect,
     /// Whole-terminal size as of the last layout pass.
@@ -137,10 +137,8 @@ pub struct MedleyView {
     log_scroll: usize,
     /// `Some(n)` while the Log pane is scrolled away from the tail (`log_scroll != 0`).
     log_pin: Option<usize>,
-    /// Selected row within the Settings pane's entry list.
-    settings_cursor: usize,
-    /// Scroll window into the Settings pane's list — see `warnings_offset`.
-    settings_offset: usize,
+    /// The Settings pane's entry list.
+    settings: ListState,
     /// Which pane currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     /// The Vis pane's background worker + last computed frame.
@@ -148,35 +146,12 @@ pub struct MedleyView {
     /// `PaneMode::Screen`'s pane, shown fullscreen in place of the normal 3 screens.
     screen_pane: Option<Pane>,
     /// The plugin-warnings modal.
-    warnings_open: bool,
-    /// Selected row within the warnings modal.
-    warnings_cursor: usize,
-    /// Scroll window into the warnings modal's list.
-    warnings_offset: usize,
+    warnings: Option<WarningsModal>,
     /// (when, screen, row index) of the last left-click on a list row, for double-click detection.
     last_click: Option<(Instant, usize, usize)>,
-    /// The "Hotkeys" management modal (backtick, off the Playlists screen).
-    hotkey_menu_open: bool,
-    /// Selected row within the hotkey-menu modal.
-    hotkey_menu_cursor: usize,
-    /// Scroll window into the hotkey-menu modal's list.
-    hotkey_menu_offset: usize,
-    /// The "press a key to bind" sub-popup.
-    hotkey_capture: Option<HotkeyTarget>,
-    /// Last bind/unbind result, shown until the next keypress or the modal closes.
-    hotkey_feedback: Option<String>,
-    /// The help/shortcuts screen (`?` or `:help`).
-    help_open: bool,
-    /// Rows scrolled down from the top of the help screen's content.
-    help_scroll: usize,
-    /// The "Add to Playlist" picker (`+`, a track selected).
-    playlist_picker_open: bool,
-    /// Selected row within the playlist picker.
-    playlist_picker_cursor: usize,
-    /// Scroll window into the playlist picker's list — see `warnings_offset`.
-    playlist_picker_offset: usize,
-    /// The track being added, captured when the picker opens so it stays fixed if the list scrolls.
-    playlist_picker_track: Option<TrackId>,
+    hotkeys: HotkeyUi,
+    help: Option<HelpModal>,
+    playlist_picker: Option<PlaylistPicker>,
     /// (last now-playing text seen, when its marquee scroll started); a `Mutex` only because `draw` takes `&self`.
     tab_marquee: std::sync::Mutex<(String, Instant)>,
 }
@@ -189,8 +164,7 @@ impl MedleyView {
         Self {
             session,
             screen,
-            cursor: [0; N_SCREENS],
-            list_offset: [0; N_SCREENS],
+            lists: [ListState::default(); N_SCREENS],
             last_main_rect: Rect::from_size((0, 0), (0, 0)),
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
@@ -210,26 +184,15 @@ impl MedleyView {
             last_query: None,
             log_scroll: 0,
             log_pin: None,
-            settings_cursor: 0,
-            settings_offset: 0,
+            settings: ListState::default(),
             focus: Focus::Main,
             vis,
             screen_pane: None,
-            warnings_open: false,
-            warnings_cursor: 0,
-            warnings_offset: 0,
+            warnings: None,
             last_click: None,
-            hotkey_menu_open: false,
-            hotkey_menu_cursor: 0,
-            hotkey_menu_offset: 0,
-            hotkey_capture: None,
-            hotkey_feedback: None,
-            help_open: false,
-            help_scroll: 0,
-            playlist_picker_open: false,
-            playlist_picker_cursor: 0,
-            playlist_picker_offset: 0,
-            playlist_picker_track: None,
+            hotkeys: HotkeyUi::default(),
+            help: None,
+            playlist_picker: None,
             tab_marquee: std::sync::Mutex::new((String::new(), Instant::now())),
         }
     }
@@ -266,21 +229,6 @@ impl MedleyView {
     fn fallback_focus(&self) -> Focus {
         Focus::Main
     }
-
-    /// Draws `lines` as a scrollable cursor list starting at row `list_top`.
-    fn draw_rows(&self, printer: &Printer, lines: &[String], cursor: usize, offset: usize, list_top: usize) {
-        let h = modal_list_h(printer.size.y, list_top);
-        for (i, line) in lines.iter().enumerate().skip(offset).take(h) {
-            let y = list_top + (i - offset);
-            let line = pad(line, printer.size.x);
-            if i == cursor {
-                printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
-            } else {
-                printer.print((0, y), &line);
-            }
-        }
-    }
-
     // `session` is a non-reentrant `Mutex`: always lock via `with_session`, never twice in one statement.
     fn with_session<R>(&self, f: impl FnOnce(&Session) -> R) -> R {
         let guard = self.session.lock().unwrap();
@@ -298,24 +246,19 @@ impl View for MedleyView {
             self.draw_screen_pane(pane, printer);
             return;
         }
-        if self.warnings_open {
-            self.draw_warnings(printer);
+        if let Some(modal) = &self.warnings {
+            self.draw_warnings(modal, printer);
             return;
         }
-        if self.hotkey_menu_open {
-            self.draw_hotkey_menu(printer);
+        if self.draw_hotkey_ui(printer) {
             return;
         }
-        if self.hotkey_capture.is_some() {
-            self.draw_playlist_hotkey_modal(printer);
+        if let Some(picker) = &self.playlist_picker {
+            picker.draw(printer, &self.with_session(|s| s.playlists()));
             return;
         }
-        if self.playlist_picker_open {
-            self.draw_playlist_picker(printer);
-            return;
-        }
-        if self.help_open {
-            self.draw_help(printer);
+        if let Some(help) = &self.help {
+            self.draw_help(help, printer);
             return;
         }
 
@@ -323,9 +266,9 @@ impl View for MedleyView {
 
         // Resolved before the list so `rows` is only ever asked for the visible window.
         let list_h = self.list_h();
-        let sel = self.cursor[self.screen];
+        let sel = self.lists[self.screen].cursor;
         // Persisted, not recomputed from `sel` — see `list_offset`'s doc.
-        let offset = self.list_offset[self.screen];
+        let offset = self.lists[self.screen].offset;
 
         // A docked Queue/History pane needs the same triple the main content does, for its own rect/screen/cursor.
         let list_panes: Vec<(Pane, Rect, usize, usize, usize)> = panes
@@ -333,7 +276,7 @@ impl View for MedleyView {
             .filter_map(|&(pane, rect)| {
                 let screen = list_screen_for_pane(pane)?;
                 let pane_h = rect.height().saturating_sub(1);
-                Some((pane, rect, screen, self.list_offset[screen], pane_h))
+                Some((pane, rect, screen, self.lists[screen].offset, pane_h))
             })
             .collect();
 
@@ -378,7 +321,7 @@ impl View for MedleyView {
                 if let Some(scan) = &s.scan {
                     let view_screen = self.active_screen();
                     let ids = self.visible_track_ids(s, view_screen);
-                    let highlighted = self.cursor[view_screen];
+                    let highlighted = self.lists[view_screen].cursor;
                     scan.follow_view(ids, highlighted);
                 }
                 let pane_rows: Vec<(Pane, String, Vec<Row>, usize)> = list_panes
@@ -420,14 +363,14 @@ impl View for MedleyView {
                     &printer.windowed(rect),
                     &title,
                     rows,
-                    self.list_offset[screen],
-                    self.cursor[screen],
+                    self.lists[screen].offset,
+                    self.lists[screen].cursor,
                     *total,
                 );
                 continue;
             }
             if pane == Pane::Settings {
-                draw_settings_pane(&printer.windowed(rect), &settings, self.settings_offset, self.settings_cursor, focused);
+                draw_settings_pane(&printer.windowed(rect), &settings, self.settings.offset, self.settings.cursor, focused);
                 continue;
             }
             let (lines, scroll) = match pane {
@@ -487,7 +430,7 @@ impl View for MedleyView {
                 .queue_feedback
                 .clone()
                 .or(membership_feedback.map(|m| format!("  {m}")))
-                .or(self.hotkey_feedback.clone().map(|m| format!("  {m}")))
+                .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
                     if self.screen == PLAYLISTS
@@ -568,31 +511,17 @@ impl View for MedleyView {
         self.clamp_focus();
         let screen_size_changed = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
-        if self.warnings_open {
-            let h = self.warnings_list_h(constraint.y);
-            if screen_size_changed {
-                self.follow_warnings_offset();
-            } else {
-                let n = self.with_session(|s| s.plugin_statuses().len());
-                self.warnings_offset = bound_offset(self.warnings_offset, n, h);
+        if self.warnings.is_some() {
+            let statuses = self.with_session(|s| s.plugin_statuses());
+            if let Some(modal) = &mut self.warnings {
+                modal.relayout(screen_size_changed, constraint, &statuses);
             }
         }
-        if self.hotkey_menu_open {
-            let h = modal_list_h(constraint.y, HOTKEY_LIST_TOP);
-            if screen_size_changed {
-                self.follow_hotkey_menu_offset();
-            } else {
-                let n = self.hotkey_rows().len();
-                self.hotkey_menu_offset = bound_offset(self.hotkey_menu_offset, n, h);
-            }
-        }
-        if self.playlist_picker_open {
-            let h = modal_list_h(constraint.y, PLAYLIST_PICKER_LIST_TOP);
-            if screen_size_changed {
-                self.follow_playlist_picker_offset();
-            } else {
-                let n = self.with_session(|s| s.playlists().len());
-                self.playlist_picker_offset = bound_offset(self.playlist_picker_offset, n, h);
+        self.hotkeys.relayout(screen_size_changed, constraint);
+        if self.playlist_picker.is_some() {
+            let n = self.with_session(|s| s.playlists().len());
+            if let Some(picker) = &mut self.playlist_picker {
+                picker.relayout(screen_size_changed, constraint, n);
             }
         }
         let (main_rect, panes) = split(constraint, &self.open_panes, self.pane_cfg);
@@ -605,21 +534,13 @@ impl View for MedleyView {
         self.last_main_rect = main_rect;
         self.last_pane_rects = panes;
         let list_h = self.list_h();
-        if main_h_changed {
-            self.clamp_scroll_for(self.screen, list_h);
-        } else {
-            self.clamp_offset_bounds(self.screen, list_h);
-        }
+        self.relayout_list(self.screen, main_h_changed, list_h);
         for i in 0..self.last_pane_rects.len() {
             let (pane, rect) = self.last_pane_rects[i];
             if let Some(screen) = list_screen_for_pane(pane) {
                 let h = rect.height().saturating_sub(1);
                 let changed = old_pane_heights.iter().find(|(p, _)| *p == pane).map(|&(_, oh)| oh) != Some(h);
-                if changed {
-                    self.clamp_scroll_for(screen, h);
-                } else {
-                    self.clamp_offset_bounds(screen, h);
-                }
+                self.relayout_list(screen, changed, h);
             }
         }
         constraint
@@ -639,7 +560,7 @@ impl View for MedleyView {
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
         if !is_mouse_followup {
             self.queue_feedback = None;
-            self.hotkey_feedback = None;
+            self.hotkeys.feedback = None;
             self.with_session(|s| s.clear_membership_feedback());
         }
         // Active text field: capture everything, except a click elsewhere or a digit as Search's first keystroke.
@@ -717,221 +638,17 @@ impl View for MedleyView {
             };
         }
 
-        // The warnings modal: fullscreen, own nav (mirrors `screen_pane` above).
-        if self.warnings_open {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.warnings_open = false;
-                    self.focus = self.fallback_focus();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Up) | Event::Char('k') => {
-                    self.jump_warnings(true, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Down) | Event::Char('j') => {
-                    self.jump_warnings(false, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageUp) | Event::Char('K') => {
-                    self.jump_warnings(true, LIST_JUMP_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageDown) | Event::Char('J') => {
-                    self.jump_warnings(false, LIST_JUMP_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelUp, .. } => {
-                    self.jump_warnings(true, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelDown, .. } => {
-                    self.jump_warnings(false, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Enter) => {
-                    self.activate_selected_warning();
-                    EventResult::consumed()
-                }
-                Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } => {
-                    let list_h = self.warnings_list_h(self.last_screen_size.y);
-                    if let Some(local) = position.checked_sub(offset)
-                        && local.y >= WARNINGS_LIST_TOP
-                        && local.y < WARNINGS_LIST_TOP + list_h
-                    {
-                        let idx = self.warnings_offset + (local.y - WARNINGS_LIST_TOP);
-                        let n = self.with_session(|s| s.plugin_statuses().len());
-                        if idx < n {
-                            self.warnings_cursor = idx;
-                            self.activate_selected_warning();
-                        }
-                    }
-                    EventResult::consumed()
-                }
-                _ => EventResult::consumed(),
-            };
+        if self.warnings.is_some() {
+            return self.on_warnings_event(&event);
         }
-
-        // The "Add to Playlist" picker (`+` on a selected track).
-        if self.playlist_picker_open {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.playlist_picker_open = false;
-                    self.playlist_picker_track = None;
-                    self.focus = self.fallback_focus();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Up) | Event::Char('k') => {
-                    self.jump_playlist_picker(true, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Down) | Event::Char('j') => {
-                    self.jump_playlist_picker(false, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageUp) | Event::Char('K') => {
-                    self.jump_playlist_picker(true, LIST_JUMP_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageDown) | Event::Char('J') => {
-                    self.jump_playlist_picker(false, LIST_JUMP_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelUp, .. } => {
-                    self.jump_playlist_picker(true, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelDown, .. } => {
-                    self.jump_playlist_picker(false, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Enter) => self.commit_playlist_picker(),
-                Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } => {
-                    if let Some(local) = position.checked_sub(offset)
-                        && local.y >= PLAYLIST_PICKER_LIST_TOP
-                    {
-                        let idx = self.playlist_picker_offset + (local.y - PLAYLIST_PICKER_LIST_TOP);
-                        let n = self.with_session(|s| s.playlists().len());
-                        if idx < n {
-                            self.playlist_picker_cursor = idx;
-                            return self.commit_playlist_picker();
-                        }
-                    }
-                    EventResult::consumed()
-                }
-                _ => EventResult::consumed(),
-            };
+        if self.playlist_picker.is_some() {
+            return self.on_playlist_picker_event(&event);
         }
-
-        // The "press a key to bind" sub-popup.
-        if self.hotkey_capture.is_some() {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.hotkey_capture = None;
-                    EventResult::consumed()
-                }
-                // Same clear gesture as the hotkey menu's row list (`clear_selected_hotkey`).
-                Event::Key(Key::Backspace) => self.clear_captured_hotkey(),
-                ev => match key_name(&ev) {
-                    Some(k) if k.chars().count() == 1 => self.bind_captured_key(k.chars().next().unwrap()),
-                    _ => EventResult::consumed(),
-                },
-            };
+        if let Some(result) = self.on_hotkey_ui_event(&event) {
+            return result;
         }
-
-        // The hotkey-menu modal: fullscreen, own nav (mirrors `warnings_open` above).
-        if self.hotkey_menu_open {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.hotkey_menu_open = false;
-                    self.focus = self.fallback_focus();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Up) | Event::Char('k') => {
-                    self.jump_hotkey_menu(true, 1);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Down) | Event::Char('j') => {
-                    self.jump_hotkey_menu(false, 1);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageUp) | Event::Char('K') => {
-                    self.jump_hotkey_menu(true, LIST_JUMP_STEP);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageDown) | Event::Char('J') => {
-                    self.jump_hotkey_menu(false, LIST_JUMP_STEP);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelUp, .. } => {
-                    self.jump_hotkey_menu(true, WHEEL_STEP);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelDown, .. } => {
-                    self.jump_hotkey_menu(false, WHEEL_STEP);
-                    self.hotkey_feedback = None;
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Enter) => {
-                    self.open_hotkey_capture();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Backspace) => self.clear_selected_hotkey(),
-                Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } => {
-                    if let Some(local) = position.checked_sub(offset)
-                        && local.y >= HOTKEY_LIST_TOP
-                    {
-                        let idx = self.hotkey_menu_offset + (local.y - HOTKEY_LIST_TOP);
-                        if idx < self.hotkey_rows().len() {
-                            self.hotkey_menu_cursor = idx;
-                            self.hotkey_feedback = None;
-                        }
-                    }
-                    EventResult::consumed()
-                }
-                _ => EventResult::consumed(),
-            };
-        }
-
-        // The help/shortcuts modal: fullscreen, own nav (mirrors `warnings_open`/`hotkey_menu_open` above).
-        if self.help_open {
-            return match event {
-                Event::Key(Key::Esc) => {
-                    self.help_open = false;
-                    self.focus = self.fallback_focus();
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Up) | Event::Char('k') => {
-                    self.jump_help(true, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Down) | Event::Char('j') => {
-                    self.jump_help(false, 1);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageUp) | Event::Char('K') => {
-                    self.jump_help(true, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Key(Key::PageDown) | Event::Char('J') => {
-                    self.jump_help(false, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelUp, .. } => {
-                    self.jump_help(true, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                Event::Mouse { event: MouseEvent::WheelDown, .. } => {
-                    self.jump_help(false, WHEEL_STEP);
-                    EventResult::consumed()
-                }
-                _ => EventResult::consumed(),
-            };
+        if self.help.is_some() {
+            return self.on_help_event(&event);
         }
 
         // The tab bar lives on the fixed top row of the whole screen, never `last_main_rect`.
@@ -959,7 +676,7 @@ impl View for MedleyView {
             && local.x < self.last_screen_size.x
             && local.y == self.last_screen_size.y.saturating_sub(2)
         {
-            self.open_warnings();
+            self.warnings = Some(WarningsModal::default());
             return EventResult::consumed();
         }
 
@@ -1057,13 +774,13 @@ impl View for MedleyView {
                 EventResult::consumed()
             }
             Event::Key(Key::Up) | Event::Char('k') if self.focus == Focus::Main => {
-                let c = &mut self.cursor[self.screen];
+                let c = &mut self.lists[self.screen].cursor;
                 *c = c.saturating_sub(1);
                 EventResult::consumed()
             }
             Event::Key(Key::Down) | Event::Char('j') if self.focus == Focus::Main => {
                 let s = self.screen;
-                self.cursor[s] = self.cursor[s].saturating_add(1);
+                self.lists[s].cursor = self.lists[s].cursor.saturating_add(1);
                 self.clamp_cursor(len);
                 EventResult::consumed()
             }
@@ -1092,7 +809,7 @@ impl View for MedleyView {
                 self.open_remote = None;
                 // Explicitly backing out to the list means "forget this", unlike switching screens.
                 self.remembered_playlist = None;
-                self.cursor[PLAYLISTS] = 0;
+                self.lists[PLAYLISTS].cursor = 0;
                 self.filter_query = None; // going back — the filtered list no longer applies
                 EventResult::consumed()
             }
@@ -1101,7 +818,7 @@ impl View for MedleyView {
                 if let Focus::Pane(pane) = self.focus {
                     match list_screen_for_pane(pane) {
                         Some(screen) => {
-                            let c = &mut self.cursor[screen];
+                            let c = &mut self.lists[screen].cursor;
                             *c = c.saturating_sub(1);
                         }
                         None => self.scroll_pane(pane, true, 1),
@@ -1134,7 +851,7 @@ impl View for MedleyView {
                 _ => self.jump_list(false, LIST_JUMP_STEP),
             },
             Event::Key(Key::Enter) if self.focus == Focus::Warnings => {
-                self.open_warnings();
+                self.warnings = Some(WarningsModal::default());
                 EventResult::consumed()
             }
             Event::Key(Key::Enter) | Event::Char(' ') if self.focus == Focus::Pane(Pane::Settings) => {
@@ -1151,7 +868,7 @@ impl View for MedleyView {
             // With a playlist selected on the Playlists screen, backtick binds that playlist instead of opening the menu.
             Event::Char('`') if self.with_session(|s| self.selected_hotkey_target(s)).is_some() => {
                 if let Some(target) = self.with_session(|s| self.selected_hotkey_target(s)) {
-                    self.open_playlist_hotkey_modal(target);
+                    self.hotkeys.capture = Some(target);
                 }
                 EventResult::consumed()
             }
@@ -1160,7 +877,7 @@ impl View for MedleyView {
                 let sel = self.with_session(|s| self.selected_track(s, active));
                 match keybindings::map("Enter", sel, &self.hotkeys_map()) {
                     Action::PlayFromContext(_) => {
-                        self.play_track_at(active, self.cursor[active])
+                        self.play_track_at(active, self.lists[active].cursor)
                     }
                     action => self.handle_action(action),
                 }

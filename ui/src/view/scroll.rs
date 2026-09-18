@@ -1,8 +1,11 @@
-use cursive::Printer;
+use cursive::{Printer, Rect, Vec2};
+use cursive::event::{Event, Key, MouseButton, MouseEvent};
 use cursive::theme::ColorStyle;
 
+use super::text::pad;
+
 /// Cursor stepping shared by every index-into-a-list screen/modal.
-pub(super) fn stepped_cursor(cur: usize, len: usize, up: bool, step: usize) -> usize {
+fn stepped_cursor(cur: usize, len: usize, up: bool, step: usize) -> usize {
     if up {
         cur.saturating_sub(step)
     } else if len == 0 {
@@ -12,28 +15,122 @@ pub(super) fn stepped_cursor(cur: usize, len: usize, up: bool, step: usize) -> u
     }
 }
 
-/// Visible row count for a fullscreen modal list starting at `list_top`, given the whole-screen height.
-pub(super) fn modal_list_h(screen_h: usize, list_top: usize) -> usize {
-    screen_h.saturating_sub(list_top).saturating_sub(2)
+/// A list's selected row plus the first visible row of the window that follows it.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ListState {
+    pub(super) cursor: usize,
+    pub(super) offset: usize,
 }
 
-/// One screen/modal's cursor + the viewport offset that follows it.
-pub(super) struct CursorWindow<'a> {
-    pub(super) cursor: &'a mut usize,
-    pub(super) offset: &'a mut usize,
+/// What an event meant to a `ListState`, for its owner to act on.
+pub(super) enum ListEvent {
+    Close,
+    Activate,
+    Clicked,
+    Moved,
+    Unhandled,
 }
 
-impl CursorWindow<'_> {
+impl ListState {
     /// Resync `offset` to `cursor` without moving `cursor` itself.
     pub(super) fn follow(&mut self, view_h: usize) {
-        *self.offset = follow_cursor_offset(*self.cursor, *self.offset, view_h);
+        self.offset = follow_cursor_offset(self.cursor, self.offset, view_h);
     }
 
     /// Move `step` rows up or down through `len` rows of content shown in a `view_h`-row viewport.
     pub(super) fn jump(&mut self, up: bool, step: usize, len: usize, view_h: usize) {
-        *self.cursor = stepped_cursor(*self.cursor, len, up, step);
+        self.cursor = stepped_cursor(self.cursor, len, up, step);
         self.follow(view_h);
     }
+
+    /// Layout-pass upkeep: re-follow the cursor after a resize, else only keep the window in range.
+    pub(super) fn relayout(&mut self, resized: bool, len: usize, view_h: usize) {
+        if resized {
+            self.follow(view_h);
+        } else {
+            self.offset = bound_offset(self.offset, len, view_h);
+        }
+    }
+
+    /// The row index shown at `pos`, if `pos` is inside `rect` and on a real row.
+    fn row_at(&self, pos: Vec2, rect: Rect, len: usize) -> Option<usize> {
+        if !rect.contains(pos) {
+            return None;
+        }
+        let idx = self.offset + (pos.y - rect.top());
+        (idx < len).then_some(idx)
+    }
+
+    /// Draws the visible window of `lines` into `printer`, highlighting the cursor row.
+    pub(super) fn draw(&self, printer: &Printer, lines: &[String]) {
+        for (i, line) in lines.iter().enumerate().skip(self.offset).take(printer.size.y) {
+            let y = i - self.offset;
+            let line = pad(line, printer.size.x);
+            if i == self.cursor {
+                printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
+            } else {
+                printer.print((0, y), &line);
+            }
+        }
+    }
+
+    /// Nav keys/wheel move the cursor, a left click on a row in `rect` selects it; the rest is reported back.
+    pub(super) fn on_event(&mut self, event: &Event, len: usize, rect: Rect) -> ListEvent {
+        if let Some(nav) = Nav::of(event) {
+            let (up, step) = nav.step(LIST_JUMP_STEP);
+            self.jump(up, step, len, rect.height());
+            return ListEvent::Moved;
+        }
+        match event {
+            Event::Key(Key::Esc) => ListEvent::Close,
+            Event::Key(Key::Enter) => ListEvent::Activate,
+            Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } => {
+                match position.checked_sub(*offset).and_then(|pos| self.row_at(pos, rect, len)) {
+                    Some(idx) => {
+                        self.cursor = idx;
+                        ListEvent::Clicked
+                    }
+                    None => ListEvent::Unhandled,
+                }
+            }
+            _ => ListEvent::Unhandled,
+        }
+    }
+}
+
+/// A scroll gesture shared by every list, pane and modal; the `bool` is "up".
+pub(super) enum Nav {
+    Line(bool),
+    Page(bool),
+    Wheel(bool),
+}
+
+impl Nav {
+    pub(super) fn of(event: &Event) -> Option<Self> {
+        match event {
+            Event::Key(Key::Up) | Event::Char('k') => Some(Nav::Line(true)),
+            Event::Key(Key::Down) | Event::Char('j') => Some(Nav::Line(false)),
+            Event::Key(Key::PageUp) | Event::Char('K') => Some(Nav::Page(true)),
+            Event::Key(Key::PageDown) | Event::Char('J') => Some(Nav::Page(false)),
+            Event::Mouse { event: MouseEvent::WheelUp, .. } => Some(Nav::Wheel(true)),
+            Event::Mouse { event: MouseEvent::WheelDown, .. } => Some(Nav::Wheel(false)),
+            _ => None,
+        }
+    }
+
+    /// `(up, rows)` for this gesture, a page being `page` rows.
+    pub(super) fn step(self, page: usize) -> (bool, usize) {
+        match self {
+            Nav::Line(up) => (up, 1),
+            Nav::Page(up) => (up, page),
+            Nav::Wheel(up) => (up, WHEEL_STEP),
+        }
+    }
+}
+
+/// The list area of a fullscreen modal whose rows start at `list_top`; the last two rows stay free for its footer.
+pub(super) fn modal_list_rect(size: Vec2, list_top: usize) -> Rect {
+    Rect::from_size((0, list_top), (size.x, size.y.saturating_sub(list_top).saturating_sub(2)))
 }
 
 /// Rows per `PageUp`/`PageDown`/Shift-J/Shift-K press on a raw-scroll-offset pane.
@@ -45,8 +142,8 @@ pub(super) const LIST_JUMP_STEP: usize = 10;
 /// Rows per mouse-wheel tick on a list/pane's single-row nav.
 pub(super) const WHEEL_STEP: usize = 3;
 
-/// `clamp_scroll_for`'s cursor-follow arithmetic.
-pub(super) fn follow_cursor_offset(cursor: usize, offset: usize, list_h: usize) -> usize {
+/// The window offset that keeps `cursor` visible in a `list_h`-row viewport.
+fn follow_cursor_offset(cursor: usize, offset: usize, list_h: usize) -> usize {
     if cursor < offset {
         cursor
     } else if list_h > 0 && cursor >= offset + list_h {
@@ -56,7 +153,7 @@ pub(super) fn follow_cursor_offset(cursor: usize, offset: usize, list_h: usize) 
     }
 }
 
-/// `clamp_offset_bounds`'s arithmetic.
+/// `offset` kept within the scrollable range of `len` rows.
 pub(super) fn bound_offset(offset: usize, len: usize, list_h: usize) -> usize {
     offset.min(len.saturating_sub(list_h))
 }

@@ -9,7 +9,7 @@ use super::input::Editing;
 use super::panes::list_screen_for_pane;
 use super::playlists::TopRow;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
-use super::scroll::{CursorWindow, bound_offset, follow_cursor_offset};
+
 use super::tab_bar::screen_name;
 
 impl MedleyView {
@@ -39,7 +39,7 @@ impl MedleyView {
     /// The track selected on `screen`.
     pub(super) fn selected_track(&self, s: &Session, screen: usize) -> Option<TrackId> {
         let ids = self.visible_track_ids(s, screen);
-        ids.get(self.cursor[screen]).copied()
+        ids.get(self.lists[screen].cursor).copied()
     }
 
     /// Which screen index keyboard nav/selection currently targets.
@@ -217,7 +217,7 @@ impl MedleyView {
     }
 
     pub(super) fn clamp_cursor(&mut self, len: usize) {
-        let c = &mut self.cursor[self.screen];
+        let c = &mut self.lists[self.screen].cursor;
         if len == 0 {
             *c = 0;
         } else if *c >= len {
@@ -247,16 +247,15 @@ impl MedleyView {
                 .unwrap_or(0),
             _ => self.list_h(),
         };
-        CursorWindow { cursor: &mut self.cursor[screen], offset: &mut self.list_offset[screen] }
-            .jump(up, step, len, view_h);
+        self.lists[screen].jump(up, step, len, view_h);
         EventResult::consumed()
     }
 
     /// `clamp_cursor`, generalized to an explicit `screen` and folding in the forward step + length lookup.
     pub(super) fn bump_pane_cursor(&mut self, screen: usize, step: usize) {
-        self.cursor[screen] = self.cursor[screen].saturating_add(step);
+        self.lists[screen].cursor = self.lists[screen].cursor.saturating_add(step);
         let len = self.with_session(|s| self.visible_track_ids(s, screen).len());
-        let c = &mut self.cursor[screen];
+        let c = &mut self.lists[screen].cursor;
         if len == 0 {
             *c = 0;
         } else if *c >= len {
@@ -269,26 +268,21 @@ impl MedleyView {
         self.last_main_rect.height().saturating_sub(LIST_TITLE_ROWS)
     }
 
-    /// Keep `list_offset[screen]` a valid window around `cursor[screen]`.
+    /// Keep each visible list's window around its cursor.
     pub(super) fn clamp_scroll(&mut self) {
-        self.clamp_scroll_for(self.screen, self.list_h());
+        self.lists[self.screen].follow(self.list_h());
         // A focused docked list-pane has its own cursor and scroll window, sized to its own rect.
         if let Focus::Pane(pane) = self.focus
             && let Some(screen) = list_screen_for_pane(pane)
             && let Some(&(_, rect)) = self.last_pane_rects.iter().find(|(p, _)| *p == pane)
         {
-            self.clamp_scroll_for(screen, rect.height().saturating_sub(1));
+            self.lists[screen].follow(rect.height().saturating_sub(1));
         }
     }
 
-    pub(super) fn clamp_scroll_for(&mut self, screen: usize, list_h: usize) {
-        self.list_offset[screen] =
-            follow_cursor_offset(self.cursor[screen], self.list_offset[screen], list_h);
-    }
-
-    /// Bounds-only safety clamp for `list_offset[screen]`.
-    pub(super) fn clamp_offset_bounds(&mut self, screen: usize, list_h: usize) {
+    /// Layout-pass upkeep for `screen`'s list window, shown `list_h` rows tall.
+    pub(super) fn relayout_list(&mut self, screen: usize, resized: bool, list_h: usize) {
         let len = self.with_session(|s| self.list_len(s, screen));
-        self.list_offset[screen] = bound_offset(self.list_offset[screen], len, list_h);
+        self.lists[screen].relayout(resized, len, list_h);
     }
 }

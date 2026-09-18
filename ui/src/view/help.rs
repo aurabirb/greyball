@@ -1,4 +1,5 @@
-use cursive::Printer;
+use cursive::{Printer, Vec2};
+use cursive::event::{Event, EventResult, Key};
 use cursive::theme::ColorStyle;
 
 use core::HotkeyTarget;
@@ -7,11 +8,50 @@ use crate::{command, keybindings};
 
 use super::MedleyView;
 use super::playlists::top_row_name;
-use super::scroll::bound_offset;
+use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset};
 use super::text::pad;
 
-/// Row the help screen's content starts on.
-const HELP_LIST_TOP: usize = 1;
+/// Row the help screen's content starts on (row 0 = title).
+const LIST_TOP: usize = 1;
+
+/// The help/shortcuts screen (`?` or `:help`), a scrollable text page; exists only while open.
+#[derive(Default)]
+pub(super) struct HelpModal {
+    scroll: usize,
+}
+
+impl HelpModal {
+    /// Content rows between the title and the footer.
+    fn view_h(size: Vec2) -> usize {
+        size.y.saturating_sub(1).saturating_sub(LIST_TOP)
+    }
+
+    /// Scrolls on nav keys/wheel; `true` when `event` closes the screen.
+    fn on_event(&mut self, event: &Event, len: usize, size: Vec2) -> bool {
+        if let Some(nav) = Nav::of(event) {
+            let (up, step) = nav.step(PAGE_SCROLL_STEP);
+            let scroll = if up { self.scroll.saturating_sub(step) } else { self.scroll.saturating_add(step) };
+            self.scroll = bound_offset(scroll, len, Self::view_h(size));
+        }
+        *event == Event::Key(Key::Esc)
+    }
+
+    fn draw(&self, printer: &Printer, lines: &[String]) {
+        printer.with_color(ColorStyle::title_primary(), |p| {
+            p.print((0, 0), &pad("Help / Shortcuts", p.size.x));
+        });
+
+        let h = Self::view_h(printer.size);
+        let scroll = bound_offset(self.scroll, lines.len(), h);
+        for (i, line) in lines.iter().skip(scroll).take(h).enumerate() {
+            printer.print((0, LIST_TOP + i), line);
+        }
+
+        printer.with_color(ColorStyle::highlight_inactive(), |p| {
+            p.print((0, p.size.y.saturating_sub(1)), &pad("  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll", p.size.x));
+        });
+    }
+}
 
 /// Content for the help/shortcuts screen.
 fn build_help_lines(
@@ -83,38 +123,17 @@ impl MedleyView {
         build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
     }
 
-    /// Fullscreen help/shortcuts modal (`?` or `:help`).
-    pub(super) fn draw_help(&self, printer: &Printer) {
-        let lines = self.help_lines();
-
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad("Help / Shortcuts", p.size.x));
-        });
-
-        let bottom = printer.size.y.saturating_sub(1);
-        let h = bottom.saturating_sub(HELP_LIST_TOP);
-        let max_scroll = lines.len().saturating_sub(h);
-        let scroll = self.help_scroll.min(max_scroll);
-        for (i, line) in lines.iter().skip(scroll).take(h).enumerate() {
-            printer.print((0, HELP_LIST_TOP + i), line);
-        }
-
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            p.print((0, bottom), &pad("  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll", p.size.x));
-        });
+    pub(super) fn draw_help(&self, help: &HelpModal, printer: &Printer) {
+        help.draw(printer, &self.help_lines());
     }
 
-    /// Move `help_scroll` by `step` rows, clamped to the scrollable range.
-    pub(super) fn jump_help(&mut self, up: bool, step: usize) {
-        self.help_scroll =
-            if up { self.help_scroll.saturating_sub(step) } else { self.help_scroll.saturating_add(step) };
+    pub(super) fn on_help_event(&mut self, event: &Event) -> EventResult {
         let len = self.help_lines().len();
-        let h = self.last_screen_size.y.saturating_sub(1).saturating_sub(HELP_LIST_TOP);
-        self.help_scroll = bound_offset(self.help_scroll, len, h);
-    }
-
-    pub(super) fn open_help(&mut self) {
-        self.help_open = true;
-        self.help_scroll = 0;
+        let size = self.last_screen_size;
+        if self.help.as_mut().is_some_and(|help| help.on_event(event, len, size)) {
+            self.help = None;
+            self.focus = self.fallback_focus();
+        }
+        EventResult::consumed()
     }
 }

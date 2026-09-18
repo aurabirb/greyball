@@ -145,7 +145,7 @@ impl MedleyView {
             Pane::Settings => {
                 let pane_cfg = self.pane_cfg;
                 let entries = self.with_session(|s| settings_entries(s, pane_cfg));
-                draw_settings_pane(&content, &entries, self.settings_offset, self.settings_cursor, true);
+                draw_settings_pane(&content, &entries, self.settings.offset, self.settings.cursor, true);
             }
             // `toggle_pane` never routes these two here.
             Pane::Queue | Pane::History => unreachable!("Queue/History never become screen_pane"),

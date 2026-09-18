@@ -1,14 +1,14 @@
 use std::thread;
 
-use cursive::Printer;
-use cursive::event::{Event, Key};
+use cursive::{Printer, Rect, Vec2};
+use cursive::event::{Event, EventResult, Key};
 use cursive::theme::ColorStyle;
 
 use core::{CoreEvent, PluginHealth, SetupKind, SourceId};
 
 use super::MedleyView;
 use super::input::Editing;
-use super::scroll::{CursorWindow, modal_list_h};
+use super::scroll::{ListEvent, ListState, modal_list_rect};
 use super::text::pad;
 
 /// Row the warnings modal's plugin list starts on (row 0 = title, row 1 = blank spacer).
@@ -27,31 +27,40 @@ pub(super) fn defocuses_warnings(event: &Event) -> bool {
     !matches!(event, Event::Key(Key::Enter))
 }
 
-impl MedleyView {
-    /// "{id}: {msg}" for every plugin currently reporting a non-`Ok` health.
-    fn warnings_messages(&self) -> Vec<String> {
-        self.with_session(|s| {
-            s.plugin_statuses()
-                .into_iter()
-                .filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}")))
-                .collect()
-        })
+/// The plugin-warnings modal: a navigable plugin list above their messages; exists only while open.
+#[derive(Default)]
+pub(super) struct WarningsModal {
+    list: ListState,
+}
+
+impl WarningsModal {
+    /// "{id}: {msg}" for every plugin reporting a non-`Ok` health.
+    fn messages(statuses: &[(SourceId, PluginHealth)]) -> Vec<String> {
+        statuses.iter().filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}"))).collect()
     }
 
-    /// Rows the bottom messages section reserves.
-    fn warnings_messages_h(&self) -> usize {
-        let n = self.warnings_messages().len();
-        if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) }
+    /// The navigable list's area — what the bottom messages section leaves of the modal's list rows.
+    fn list_rect(size: Vec2, statuses: &[(SourceId, PluginHealth)]) -> Rect {
+        let n = Self::messages(statuses).len();
+        let messages_h = if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) };
+        let rows = modal_list_rect(size, WARNINGS_LIST_TOP);
+        Rect::from_size(rows.top_left(), (size.x, rows.height().saturating_sub(messages_h)))
     }
 
-    /// Visible plugin rows in the warnings modal's navigable list, given the whole-screen height.
-    pub(super) fn warnings_list_h(&self, screen_h: usize) -> usize {
-        modal_list_h(screen_h, WARNINGS_LIST_TOP).saturating_sub(self.warnings_messages_h())
+    pub(super) fn selected(&self) -> usize {
+        self.list.cursor
     }
 
-    /// Fullscreen plugin-warnings modal.
-    pub(super) fn draw_warnings(&self, printer: &Printer) {
-        let statuses = self.with_session(|s| s.plugin_statuses());
+    pub(super) fn relayout(&mut self, resized: bool, size: Vec2, statuses: &[(SourceId, PluginHealth)]) {
+        self.list.relayout(resized, statuses.len(), Self::list_rect(size, statuses).height());
+    }
+
+    pub(super) fn on_event(&mut self, event: &Event, size: Vec2, statuses: &[(SourceId, PluginHealth)]) -> ListEvent {
+        self.list.on_event(event, statuses.len(), Self::list_rect(size, statuses))
+    }
+
+    /// `setup` is the `(prompt, typed text)` of a plugin setup value being collected, if any.
+    pub(super) fn draw(&self, printer: &Printer, statuses: &[(SourceId, PluginHealth)], setup: Option<(&str, &str)>) {
         printer.with_color(ColorStyle::title_primary(), |p| {
             p.print((0, 0), &pad("Plugin warnings", p.size.x));
         });
@@ -59,70 +68,66 @@ impl MedleyView {
         if statuses.is_empty() {
             printer.print((0, WARNINGS_LIST_TOP), "(no plugins registered)");
         }
-        let list_h = self.warnings_list_h(printer.size.y);
-        for (i, (id, health)) in statuses.iter().enumerate().skip(self.warnings_offset).take(list_h) {
-            let y = WARNINGS_LIST_TOP + (i - self.warnings_offset);
-            let icon = match health {
-                PluginHealth::Ok => "✓",
-                PluginHealth::Warn(_) => "⚠",
-                PluginHealth::Fail(_) => "✗",
-            };
-            let line = pad(&format!("{icon} {id}"), printer.size.x);
-            if i == self.warnings_cursor {
-                printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
-            } else {
-                printer.print((0, y), &line);
-            }
+        let rect = Self::list_rect(printer.size, statuses);
+        let lines: Vec<String> = statuses
+            .iter()
+            .map(|(id, health)| {
+                let icon = match health {
+                    PluginHealth::Ok => "✓",
+                    PluginHealth::Warn(_) => "⚠",
+                    PluginHealth::Fail(_) => "✗",
+                };
+                format!("{icon} {id}")
+            })
+            .collect();
+        self.list.draw(&printer.windowed(rect), &lines);
+
+        let messages_top = rect.bottom() + 2;
+        for (j, msg) in Self::messages(statuses).iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
+            printer.print((0, messages_top + j), &pad(msg, printer.size.x));
         }
 
-        let messages = self.warnings_messages();
-        if !messages.is_empty() {
-            let messages_top = WARNINGS_LIST_TOP + list_h + 1;
-            for (j, msg) in messages.iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
-                printer.print((0, messages_top + j), &pad(msg, printer.size.x));
+        let bottom = printer.size.y.saturating_sub(1);
+        match setup {
+            Some((prompt, typed)) => {
+                printer.with_color(ColorStyle::highlight_inactive(), |p| {
+                    p.print((0, bottom.saturating_sub(1)), &pad(prompt, p.size.x));
+                });
+                printer.print((0, bottom), &pad(&format!("> {typed}  [Esc] cancel"), printer.size.x));
             }
-        }
-
-        if let Editing::PluginSetup(id) = &self.editing {
-            let prompt = self
-                .with_session(|s| s.plugin(id))
-                .map(|p| match p.setup_kind() {
-                    SetupKind::TextInput { prompt } => prompt,
-                    SetupKind::Action => String::new(),
-                })
-                .unwrap_or_default();
-            let y1 = printer.size.y.saturating_sub(2);
-            let y2 = printer.size.y.saturating_sub(1);
-            printer.with_color(ColorStyle::highlight_inactive(), |p| {
-                p.print((0, y1), &pad(&prompt, p.size.x));
-            });
-            printer.print((0, y2), &pad(&format!("> {}  [Esc] cancel", self.buffer), printer.size.x));
-        } else {
-            let bottom = printer.size.y.saturating_sub(1);
-            printer.with_color(ColorStyle::highlight_inactive(), |p| {
+            None => printer.with_color(ColorStyle::highlight_inactive(), |p| {
                 p.print((0, bottom), &pad("  [Enter] run setup   [Esc] close", p.size.x));
-            });
+            }),
         }
     }
+}
 
-    /// Move `warnings_cursor` by `step` rows, keeping `warnings_offset` following it via `CursorWindow`.
-    pub(super) fn jump_warnings(&mut self, up: bool, step: usize) {
-        let n = self.with_session(|s| s.plugin_statuses().len());
-        let h = self.warnings_list_h(self.last_screen_size.y);
-        CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }
-            .jump(up, step, n, h);
+impl MedleyView {
+    pub(super) fn draw_warnings(&self, modal: &WarningsModal, printer: &Printer) {
+        let statuses = self.with_session(|s| s.plugin_statuses());
+        let prompt = match &self.editing {
+            Editing::PluginSetup(id) => Some(match self.with_session(|s| s.plugin(id)).map(|p| p.setup_kind()) {
+                Some(SetupKind::TextInput { prompt }) => prompt,
+                Some(SetupKind::Action) | None => String::new(),
+            }),
+            _ => None,
+        };
+        modal.draw(printer, &statuses, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
     }
 
-    /// Resync `warnings_offset` to `warnings_cursor` without moving the cursor.
-    pub(super) fn follow_warnings_offset(&mut self) {
-        let h = self.warnings_list_h(self.last_screen_size.y);
-        CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }.follow(h);
-    }
-
-    pub(super) fn open_warnings(&mut self) {
-        self.warnings_open = true;
-        self.warnings_cursor = 0;
-        self.warnings_offset = 0;
+    pub(super) fn on_warnings_event(&mut self, event: &Event) -> EventResult {
+        let statuses = self.with_session(|s| s.plugin_statuses());
+        let size = self.last_screen_size;
+        let Some(modal) = &mut self.warnings else { return EventResult::Ignored };
+        match modal.on_event(event, size, &statuses) {
+            ListEvent::Close => {
+                self.warnings = None;
+                self.focus = self.fallback_focus();
+            }
+            ListEvent::Activate | ListEvent::Clicked => self.activate_selected_warning(),
+            ListEvent::Moved | ListEvent::Unhandled => {}
+        }
+        EventResult::consumed()
     }
 
     /// Number of plugins currently reporting a non-`Ok` health.
@@ -131,10 +136,9 @@ impl MedleyView {
     }
 
     /// `Enter` (or a click) on the selected warnings-modal row.
-    pub(super) fn activate_selected_warning(&mut self) {
-        let Some((id, _)) =
-            self.with_session(|s| s.plugin_statuses().into_iter().nth(self.warnings_cursor))
-        else {
+    fn activate_selected_warning(&mut self) {
+        let Some(selected) = self.warnings.as_ref().map(WarningsModal::selected) else { return };
+        let Some((id, _)) = self.with_session(|s| s.plugin_statuses().into_iter().nth(selected)) else {
             return;
         };
         let Some(plugin) = self.with_session(|s| s.plugin(&id)) else {

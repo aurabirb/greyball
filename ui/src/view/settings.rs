@@ -7,7 +7,6 @@ use crate::command::Pane;
 
 use super::MedleyView;
 use super::panes::pane_title;
-use super::scroll::CursorWindow;
 use super::text::pad;
 
 /// One row of the Settings pane: plain info text, or a togglable bool.
@@ -83,12 +82,12 @@ impl MedleyView {
         let pane_cfg = self.pane_cfg;
         let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
         let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
-        CursorWindow { cursor: &mut self.settings_cursor, offset: &mut self.settings_offset }.jump(up, step, n, h);
+        self.settings.jump(up, step, n, h);
     }
 
     /// Enter/Space on the Settings pane's selected row.
     pub(super) fn toggle_selected_setting(&mut self) {
-        let cursor = self.settings_cursor;
+        let cursor = self.settings.cursor;
         let pane_cfg = self.pane_cfg;
         let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
             return;

@@ -125,7 +125,7 @@ impl MedleyView {
     /// Reset the current screen's cursor/scroll to the top.
     pub(super) fn reset_filter_selection(&mut self) {
         let screen = self.screen;
-        self.cursor[screen] = 0;
-        self.list_offset[screen] = 0;
+        self.lists[screen].cursor = 0;
+        self.lists[screen].offset = 0;
     }
 }

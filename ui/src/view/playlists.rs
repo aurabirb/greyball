@@ -101,7 +101,7 @@ impl MedleyView {
         if self.open_remote.is_some() {
             return None;
         }
-        match self.top_rows(s).get(self.cursor[PLAYLISTS]) {
+        match self.top_rows(s).get(self.lists[PLAYLISTS].cursor) {
             Some(TopRow::Local(id)) => Some(*id),
             _ => None,
         }
@@ -118,7 +118,7 @@ impl MedleyView {
         if let Some((sid, _, node)) = &self.open_remote {
             return Some(HotkeyTarget::Remote(sid.clone(), node.clone()));
         }
-        self.top_rows(s).into_iter().nth(self.cursor[PLAYLISTS]).map(|r| r.target())
+        self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor).map(|r| r.target())
     }
 
     /// `:open <url-or-path>`'s remote-link case.
@@ -137,7 +137,7 @@ impl MedleyView {
                 self.screen = PLAYLISTS;
                 self.open_playlist = None;
                 self.open_remote = Some((sid, name, node));
-                self.cursor[PLAYLISTS] = 0;
+                self.lists[PLAYLISTS].cursor = 0;
                 self.filter_query = None; // a different list now — stale filter would be confusing
                 self.clamp_scroll(); // new list under an old (now meaningless) cursor
                 EventResult::consumed()
@@ -162,19 +162,19 @@ impl MedleyView {
     pub(super) fn activate(&mut self) -> EventResult {
         if self.screen == PLAYLISTS && self.open_playlist.is_none() && self.open_remote.is_none() {
             let row = self.with_session(|s| {
-                self.top_rows(s).into_iter().nth(self.cursor[PLAYLISTS])
+                self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor)
             });
             match row {
                 Some(TopRow::Local(id)) => {
                     self.open_playlist = Some(id);
-                    self.cursor[PLAYLISTS] = 0;
+                    self.lists[PLAYLISTS].cursor = 0;
                     self.filter_query = None;
                     self.clamp_scroll(); // opened a new list — old window is meaningless
                     return EventResult::consumed();
                 }
                 Some(TopRow::Remote(sid, name, node)) => {
                     self.open_remote = Some((sid, name, node));
-                    self.cursor[PLAYLISTS] = 0;
+                    self.lists[PLAYLISTS].cursor = 0;
                     self.filter_query = None;
                     self.clamp_scroll();
                     return EventResult::consumed();

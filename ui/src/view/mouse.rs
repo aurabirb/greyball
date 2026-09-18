@@ -25,7 +25,7 @@ fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: 
 impl MedleyView {
     /// Selects row `idx` of `screen`'s list.
     fn click_row(&mut self, screen: usize, idx: usize) -> EventResult {
-        self.cursor[screen] = idx;
+        self.lists[screen].cursor = idx;
         self.clamp_scroll();
         let now = Instant::now();
         if is_double_click(self.last_click, now, screen, idx) {
@@ -54,7 +54,7 @@ impl MedleyView {
         match event {
             // Scrolls the *window* only.
             MouseEvent::WheelUp => {
-                let off = &mut self.list_offset[screen];
+                let off = &mut self.lists[screen].offset;
                 *off = off.saturating_sub(WHEEL_STEP);
                 Some(EventResult::consumed())
             }
@@ -62,7 +62,7 @@ impl MedleyView {
                 let list_h = self.list_h();
                 let len = self.with_session(|s| self.list_len(s, screen));
                 let max_off = len.saturating_sub(list_h);
-                let off = &mut self.list_offset[screen];
+                let off = &mut self.lists[screen].offset;
                 *off = (*off + WHEEL_STEP).min(max_off);
                 Some(EventResult::consumed())
             }
@@ -72,7 +72,7 @@ impl MedleyView {
                 if row < LIST_TITLE_ROWS || row >= LIST_TITLE_ROWS + self.list_h() {
                     return Some(EventResult::consumed());
                 }
-                let idx = self.list_offset[screen] + (row - LIST_TITLE_ROWS);
+                let idx = self.lists[screen].offset + (row - LIST_TITLE_ROWS);
                 let len = self.with_session(|s| self.list_len(s, screen));
                 if idx < len {
                     return Some(self.click_row(screen, idx));
@@ -118,20 +118,20 @@ impl MedleyView {
         let mut result = EventResult::consumed();
         match event {
             MouseEvent::WheelUp => {
-                let off = &mut self.list_offset[screen];
+                let off = &mut self.lists[screen].offset;
                 *off = off.saturating_sub(WHEEL_STEP);
             }
             MouseEvent::WheelDown => {
                 let len = self.with_session(|s| self.list_len(s, screen));
                 let max_off = len.saturating_sub(pane_h);
-                let off = &mut self.list_offset[screen];
+                let off = &mut self.lists[screen].offset;
                 *off = (*off + WHEEL_STEP).min(max_off);
             }
             // Row 0 of `rect` is the title; the list body is rows 1..=pane_h.
             MouseEvent::Press(MouseButton::Left) => {
                 let row = local.y - ry;
                 if row != 0 && row <= pane_h {
-                    let idx = self.list_offset[screen] + (row - 1);
+                    let idx = self.lists[screen].offset + (row - 1);
                     let len = self.with_session(|s| self.list_len(s, screen));
                     if idx < len {
                         result = self.click_row(screen, idx);
