@@ -6,10 +6,9 @@ use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 
 use crate::command::Pane;
 
-use super::{HIST, MedleyView, QUEUE, draw_pane, draw_settings_pane, settings_entries};
-use super::log::log_pin_after_scroll;
-use super::scroll::bound_offset;
-use super::text::{pad, wrap};
+use super::{HIST, MedleyView, QUEUE};
+use super::settings::settings_entries;
+use super::text::pad;
 
 pub(super) fn list_screen_for_pane(pane: Pane) -> Option<usize> {
     match pane {
@@ -138,14 +137,11 @@ impl MedleyView {
         let content = printer.windowed(Rect::from_size((0, 0), Vec2::new(printer.size.x, h)));
         match pane {
             Pane::Vis => self.vis.draw(&content, true),
-            Pane::Log => {
-                let (lines, scroll) = self.log_render_lines();
-                draw_pane(pane, &content, &lines, scroll, true);
-            }
+            Pane::Log => self.log.draw(&content, true),
             Pane::Settings => {
                 let pane_cfg = self.pane_cfg;
                 let entries = self.with_session(|s| settings_entries(s, pane_cfg));
-                draw_settings_pane(&content, &entries, self.settings.offset, self.settings.cursor, true);
+                self.settings.draw(&content, &entries, true);
             }
             // `toggle_pane` never routes these two here.
             Pane::Queue | Pane::History => unreachable!("Queue/History never become screen_pane"),
@@ -191,29 +187,19 @@ impl MedleyView {
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }
 
-    /// Line-scroll for Log/Vis only.
+    /// Scrolls a non-list pane: Settings moves its row cursor, Log its view; Vis is live.
     pub(super) fn scroll_pane(&mut self, pane: Pane, up: bool, step: usize) {
-        if pane == Pane::Settings {
-            self.jump_settings(up, step);
-            return;
+        match pane {
+            Pane::Settings => self.jump_settings(up, step),
+            Pane::Log => {
+                let dims = self.pane_content_dims(pane);
+                self.log.scroll_by(up, step, dims);
+            }
+            Pane::Vis | Pane::Queue | Pane::History => {}
         }
-        let s = match pane {
-            Pane::Log => &mut self.log_scroll,
-            Pane::Settings => unreachable!("handled above"),
-            Pane::Vis => return, // nothing to scroll, it's live
-            Pane::Queue | Pane::History => return,
-        };
-        if up {
-            *s += step;
-        } else {
-            *s = s.saturating_sub(step);
-        }
-        // Pin (or release) the Log pane's view against `log`'s current length.
-        self.log_pin = log_pin_after_scroll(self.log_scroll, self.log_pin, self.log.snapshot().len());
-        self.clamp_pane_scroll(pane);
     }
 
-    /// The (width, content-row-count) `draw_pane` actually renders `pane` into right now.
+    /// The (width, content rows) `pane` is rendered into right now, under its title row.
     pub(super) fn pane_content_dims(&self, pane: Pane) -> Option<(usize, usize)> {
         if self.screen_pane == Some(pane) {
             Some((self.last_screen_size.x, self.last_screen_size.y.saturating_sub(2)))
@@ -223,16 +209,5 @@ impl MedleyView {
                 .find(|&&(p, _)| p == pane)
                 .map(|&(_, rect)| (rect.width(), rect.height().saturating_sub(1)))
         }
-    }
-
-    /// Keep `log_scroll` inside the actual scrollable range for `pane`'s current content and on-screen size.
-    fn clamp_pane_scroll(&mut self, pane: Pane) {
-        let Some((width, h)) = self.pane_content_dims(pane) else { return };
-        let lines = match pane {
-            Pane::Log => self.log_render_lines().0,
-            Pane::Settings | Pane::Vis | Pane::Queue | Pane::History => return,
-        };
-        let wrapped_len: usize = lines.iter().map(|l| wrap(l, width).len()).sum();
-        self.log_scroll = bound_offset(self.log_scroll, wrapped_len, h);
     }
 }

@@ -27,13 +27,13 @@ use filter::FilterCache;
 use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
-use log::draw_pane;
+use log::LogPane;
 use panes::{list_screen_for_pane, split};
 use playlist_picker::PlaylistPicker;
 use playlists::RememberedPlaylist;
 use rows::{Row, draw_row_list};
 use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
-use settings::{draw_settings_pane, settings_entries};
+use settings::{SettingsPane, settings_entries};
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
@@ -126,16 +126,10 @@ pub struct MedleyView {
     pane_mode_overrides: HashMap<Pane, PaneMode>,
     /// Each embedded pane's rect as of the last layout pass, mirroring `last_main_rect`.
     last_pane_rects: Vec<(Pane, Rect)>,
-    /// Recent log lines, shared with `app`'s logger. Read-only here.
-    log: Arc<LogBuf>,
+    log: LogPane,
     /// Text of the last committed `Command::Search`, so an empty result list can say "no results for X".
     last_query: Option<String>,
-    /// UI-local: how many (wrapped) rows up from the live tail the embedded Log pane is scrolled.
-    log_scroll: usize,
-    /// `Some(n)` while the Log pane is scrolled away from the tail (`log_scroll != 0`).
-    log_pin: Option<usize>,
-    /// The Settings pane's entry list.
-    settings: ListState,
+    settings: SettingsPane,
     /// Which pane currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     /// The Vis pane's background worker + last computed frame.
@@ -176,11 +170,9 @@ impl MedleyView {
             pane_cfg,
             pane_mode_overrides: HashMap::new(),
             last_pane_rects: Vec::new(),
-            log,
+            log: LogPane::new(log),
             last_query: None,
-            log_scroll: 0,
-            log_pin: None,
-            settings: ListState::default(),
+            settings: SettingsPane::default(),
             focus: Focus::Main,
             vis,
             screen_pane: None,
@@ -340,7 +332,7 @@ impl View for MedleyView {
             if let Some(screen) = list_screen_for_pane(pane) {
                 let (_, title, rows, total) =
                     pane_rows.iter().find(|(p, ..)| *p == pane).expect("resolved above");
-                // `[...]` is the focus marker every pane title uses (see `draw_pane`).
+                // `[...]` is the focus marker every pane title uses.
                 let title = if focused { format!("[{title}]") } else { title.clone() };
                 draw_row_list(
                     &printer.windowed(rect),
@@ -353,14 +345,10 @@ impl View for MedleyView {
                 continue;
             }
             if pane == Pane::Settings {
-                draw_settings_pane(&printer.windowed(rect), &settings, self.settings.offset, self.settings.cursor, focused);
+                self.settings.draw(&printer.windowed(rect), &settings, focused);
                 continue;
             }
-            let (lines, scroll) = match pane {
-                Pane::Log => self.log_render_lines(),
-                Pane::Settings | Pane::Vis | Pane::Queue | Pane::History => unreachable!("handled above"),
-            };
-            draw_pane(pane, &printer.windowed(rect), &lines, scroll, focused);
+            self.log.draw(&printer.windowed(rect), focused);
         }
         if !panes.is_empty() {
             // One-cell separator between main content and the pane block.

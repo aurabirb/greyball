@@ -1,4 +1,4 @@
-use cursive::Printer;
+use cursive::{Printer, Rect};
 use cursive::theme::ColorStyle;
 
 use core::{PaneLayoutConfig, ScanMode, Session, TOGGLABLE_SOURCES};
@@ -7,6 +7,7 @@ use crate::command::Pane;
 
 use super::MedleyView;
 use super::panes::pane_title;
+use super::scroll::ListState;
 use super::text::pad;
 
 /// One row of the Settings pane: plain info text, or a togglable bool.
@@ -54,25 +55,24 @@ pub(super) fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<S
     v
 }
 
-/// Settings pane's title + rows, with a highlight on `cursor`.
-pub(super) fn draw_settings_pane(printer: &Printer, entries: &[SettingsEntry], offset: usize, cursor: usize, focused: bool) {
-    let mut title = pane_title(Pane::Settings).to_string();
-    if focused {
-        title = format!("[{title}]");
-    }
-    printer.with_color(ColorStyle::title_secondary(), |p| {
-        p.print((0, 0), &pad(&title, p.size.x));
-    });
-    let width = printer.size.x;
-    let h = printer.size.y.saturating_sub(1);
-    for (i, entry) in entries.iter().enumerate().skip(offset).take(h) {
-        let y = 1 + (i - offset);
-        let line = pad(&settings_entry_line(entry), width);
-        if i == cursor {
-            printer.with_color(ColorStyle::highlight(), |p| p.print((0, y), &line));
-        } else {
-            printer.print((0, y), &line);
+/// The Settings pane: `settings_entries` as a cursor list under a title row.
+#[derive(Default)]
+pub(super) struct SettingsPane {
+    list: ListState,
+}
+
+impl SettingsPane {
+    pub(super) fn draw(&self, printer: &Printer, entries: &[SettingsEntry], focused: bool) {
+        let mut title = pane_title(Pane::Settings).to_string();
+        if focused {
+            title = format!("[{title}]");
         }
+        printer.with_color(ColorStyle::title_secondary(), |p| {
+            p.print((0, 0), &pad(&title, p.size.x));
+        });
+        let lines: Vec<String> = entries.iter().map(settings_entry_line).collect();
+        let body = Rect::from_size((0, 1), (printer.size.x, printer.size.y.saturating_sub(1)));
+        self.list.draw(&printer.windowed(body), &lines);
     }
 }
 
@@ -82,12 +82,12 @@ impl MedleyView {
         let pane_cfg = self.pane_cfg;
         let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
         let h = self.pane_content_dims(Pane::Settings).map_or(0, |(_, h)| h);
-        self.settings.jump(up, step, n, h);
+        self.settings.list.jump(up, step, n, h);
     }
 
     /// Enter/Space on the Settings pane's selected row.
     pub(super) fn toggle_selected_setting(&mut self) {
-        let cursor = self.settings.cursor;
+        let cursor = self.settings.list.cursor;
         let pane_cfg = self.pane_cfg;
         let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
             return;

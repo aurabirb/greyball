@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 use core::PlayerState;
 
 use super::{HIST, NOW_PLAYING, PLAYLISTS, QUEUE, SEARCH};
-use super::text::scroll_title;
+use super::text::{in_span, scroll_title};
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
 /// The main content's row-0 tabs, `(screen, bare name)`, in both display and hotkey order.
@@ -135,10 +135,9 @@ impl TabBar<'_> {
     /// What a left click at column `x` of a `total_w`-wide bar landed on.
     pub(super) fn click(&self, x: usize, total_w: usize) -> Option<TabBarHit> {
         let layout = self.layout(total_w);
-        let in_span = |start: usize, w: usize| x >= start && x < start + w;
-        if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(s, w)) {
+        if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Transport(button));
         }
-        layout.tabs.iter().find(|&&(_, s, w)| in_span(s, w)).map(|&(i, ..)| TabBarHit::Tab(TABS[i].0))
+        layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))).map(|&(i, ..)| TabBarHit::Tab(TABS[i].0))
     }
 }
