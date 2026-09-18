@@ -108,22 +108,20 @@
   remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
   cleaned map.
 ### Features
-- [ ] Make the status line's "artist - title" text the scrubber and drop the separate `━╍` bar.
-  Draw: leave the title exactly as wide as it renders today (its own text width, truncated to
-  `name_w` from `status_line_layout`, `ui/src/view.rs`, when long) — no padding it out to fill the
-  field — and underline (`Effect::Underline`, applied once — combining an effect twice toggles it
-  off) the first `title_width * position / duration` cells of it, splitting by display width on
-  grapheme boundaries so a wide glyph is either fully underlined or not; give the played part a
-  slightly brighter/bold style too if underline alone is faint. Click: add the rendered title's
-  span `(start, title_width)` to `StatusLineLayout` in place of `scrubber` and reuse the existing
-  click math (`frac = (x - span.0) / span.1` → `Command::Seek(target - position)`); a click in the
-  field's empty space past the title's end does nothing; treat Hold/drag along the title as
-  continuous seeking. Keep `curtime`/`totaltime` as text. Draw and hit-test must share one
-  `status_line_layout` result. Unknown duration → no underline, clicks no-op (the zero-duration item
-  above supplies the metadata fallback — do that first or together). Check whether a click on the
-  title already does something and keep it reachable. Write the "underline a proportion of this
-  text" helper so a track row can reuse it later (progress on the now-playing row in lists), but
-  don't wire that up here.
+- [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `draw_tab_bar` draws in
+  row 0, `ui/src/view.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
+  bottom status line keeps its `━╍` bar, times and click handling as they are. Draw: leave the title
+  exactly as wide as it renders today (the `scroll_title` result — no padding, no layout change) and
+  underline (`Effect::Underline`, applied once — combining an effect twice toggles it off) the
+  first `text_width * position / duration` cells of the visible text, splitting by display width on
+  grapheme boundaries so a wide glyph is either fully underlined or not. The underline is positional
+  over the visible text, so it stays put while a too-long title scrolls underneath it. Click: a left
+  press on row 0 inside the drawn title's span `(start, text_width)` runs
+  `Command::Seek(target - position)` with `frac = (x - start) / text_width`, the same math as the
+  status line's scrubber branch in `on_event`; compute the span from one function shared by
+  `draw_tab_bar` and the hit-test (like `transport_layout`/`transport_at_x`) so they can't drift.
+  Unknown duration → no underline, clicks no-op. Check whether a click on that title already does
+  something and keep it reachable. No helpers beyond what this feature itself calls.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
