@@ -212,6 +212,31 @@
   help screen and the hint texts that mention either); delete the Playlists-screen backtick override
   in `on_event` and the standalone `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`, which
   (1) and (2) replace.
+- [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
+  (`TABS` in `ui/src/view.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
+  (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
+  **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
+  main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
+  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`screen_pane`),
+  and **floating** (a bordered box over the current view, not fullscreen — share the popup
+  drawing/hit-testing with the playlist hotkey popup above rather than building a second one).
+  Today the two families are separate mechanisms: tab screens are fixed numbered screens that can
+  only be tabs, panes have only `Screen`/`Embedded` (`pane_mode`/`pane_mode_overrides`, `:panes
+  <pane> <screen|embedded>`, `toggle_pane`), and Queue/History exist twice — as a tab and as a pane
+  bridged by `list_screen_for_pane`. Unify them: one window identity per thing, one four-value mode
+  per window (extend `core::config::PaneMode`; no `Screen`/`Embedded` leftovers or aliases), one
+  renderer per window that draws into whatever rect its mode hands it, with the tab bar
+  (`tab_layout`/`draw_tab_bar`/tab click hit-test, number-key screen switching) built from
+  whichever windows are currently tabbed instead of the fixed `TABS` array, and `focus_order`/
+  `Focus` covering docked and floating windows. Toggle: a key (and `:panes <window> <mode>`) that
+  cycles the focused window's mode tabbed → docked → screen → floating, applied immediately (not
+  "next time it's toggled" as `pane_mode_overrides` is now), plus a way to target a window that
+  isn't focused/visible. Floating windows need a size/position rule — start simple (centered,
+  sized to a fraction of the screen, one at a time on top) rather than mouse drag/resize. Keep at
+  least one window tabbed so the main area is never empty. Persist each window's mode (and open/
+  closed state for non-tabbed ones) in `state.toml` next to volume and hotkeys (`save_state`,
+  `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. Best done
+  after the `view.rs` split below (its `panes.rs` seam is exactly this code).
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
