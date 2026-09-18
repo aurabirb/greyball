@@ -95,6 +95,16 @@
   membership incl. pending, current marker) used by every list, redrawn because a message/event
   said that state changed (membership settled, like toggled, playback moved) — never by each screen
   recomputing or polling it per frame.
+- [ ] Clicking the status line's scrubber doesn't seek to the clicked timestamp. The click branch
+  exists (`on_event` in `ui/src/view.rs`, the `in_span(local.x, layout.scrubber)` →
+  `Command::Seek(target - position)` case), so find why it isn't reached or has no effect: an earlier
+  mouse branch (warnings button, hint-line readout, pane/list handling) consuming the press first;
+  the hit-test's `status_line_layout` inputs drifting from the ones `draw` uses (the play/pause
+  glyph/action, bpm/shuffle tag widths) so the span is off; the `local.y == last row` check; or
+  `Command::Seek`'s relative delta computed from a stale `position_ms`. `git log -S` over 2026-09-18's
+  `ui/src/view.rs` commits (`19958a2`, `ace6d9d`, `64a5579`) is the quickest way to find the change.
+  Fix it so draw and hit-test share one `status_line_layout` call/result instead of mirroring it, and
+  make dragging along the scrubber seek too if that's cheap.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
