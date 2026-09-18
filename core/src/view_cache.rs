@@ -350,6 +350,16 @@ impl ViewCache {
         .unwrap_or_default()
     }
 
+    /// Is `source`'s top-level playlist-folder list still loading? `true` before anything lands.
+    pub fn remote_playlists_loading(&self, source: &SourceId) -> bool {
+        self.remote_playlists.lock().unwrap().get(source).map(|e| e.partial).unwrap_or(true)
+    }
+
+    /// Is more of `(source, node)` still loading? `true` before anything has landed.
+    pub fn remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode) -> bool {
+        self.remote_playlist_cached(source, node, |e| e.partial).unwrap_or(true)
+    }
+
     /// Shared by the `remote_playlist_*` accessors above: look up the cache
     /// entry for `(source, node)` and, if present, run `f` over it.
     fn remote_playlist_cached<T>(

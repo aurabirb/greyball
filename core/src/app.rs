@@ -1221,6 +1221,16 @@ impl Session {
         self.view.remote_playlist_len(source, node, self.remote_ctx())
     }
 
+    /// Is `source`'s top-level playlist-folder list still landing?
+    pub fn remote_playlists_loading(&self, source: &SourceId) -> bool {
+        self.view.remote_playlists_loading(source)
+    }
+
+    /// Is more of this remote playlist still landing? (see `ViewCache::remote_playlist_loading`)
+    pub fn remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode) -> bool {
+        self.view.remote_playlist_loading(source, node)
+    }
+
     /// A window of a remote playlist's ingested tracks (`offset..offset+limit`)
     /// — only that slice is cloned out of the cache, never the whole thing.
     pub fn remote_playlist_window(

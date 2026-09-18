@@ -421,9 +421,7 @@ pub struct MedleyView {
     /// `main_rect`) — `clamp_scroll` and mouse hit-testing need it, but only
     /// `required_size` (given the constraint size) can compute it.
     last_main_rect: Rect,
-    /// 1 while the main list draws a title row, 0 when it has none (its
-    /// title would only repeat the tab name — see `list_title`); how much
-    /// of `last_main_rect` isn't list body.
+    /// How much of `last_main_rect` isn't list body: 1 with a title row, 0 without.
     main_title_h: usize,
     /// Whole-terminal size as of the last layout pass — the fullscreen
     /// modals (warnings/hotkey-menu/playlist-picker) render over the entire
@@ -1460,12 +1458,20 @@ impl MedleyView {
         self.top_rows(s).into_iter().nth(self.cursor[PLAYLISTS]).map(|r| r.target())
     }
 
-    /// `screen`'s list title row, or `None` when it would only repeat the
-    /// tab's own name (which the tab bar right above it already shows) —
-    /// the single source of every list title, main content and docked pane
-    /// alike. Carries only what the tab name doesn't: an open playlist or
-    /// remote folder, the playing context, the committed search query, the
-    /// active local filter.
+    /// What the main list's rows are, for the hint line's count readout.
+    fn row_unit(&self, count: usize) -> &'static str {
+        let playlists = norm_screen(self.screen) == PLAYLISTS
+            && self.open_playlist.is_none()
+            && self.open_remote.is_none();
+        match (playlists, count == 1) {
+            (true, true) => "playlist",
+            (true, false) => "playlists",
+            (false, true) => "track",
+            (false, false) => "tracks",
+        }
+    }
+
+    /// `screen`'s list title, or `None` where it would only repeat the tab name above it.
     fn list_title(&self, s: &Session, screen: usize) -> Option<String> {
         let screen = norm_screen(screen);
         if let Some(query) = self.active_filter().filter(|q| !q.is_empty() && self.filterable_screen(screen)) {
@@ -1475,7 +1481,11 @@ impl MedleyView {
         }
         match screen {
             NOW_PLAYING => s.playing_context_name(),
-            SEARCH => self.last_query.clone(),
+            SEARCH => match (self.last_query.clone(), self.editing == Editing::Search) {
+                (Some(q), true) => Some(format!("{q}  (Esc to cancel)")),
+                (None, true) => Some("(Esc to cancel)".to_string()),
+                (q, false) => q,
+            },
             PLAYLISTS => {
                 if let Some(id) = self.open_playlist {
                     s.playlists()
@@ -1492,9 +1502,7 @@ impl MedleyView {
         }
     }
 
-    /// `offset`/`limit` bound what actually gets resolved into `Row`s — only
-    /// the visible window, not the whole underlying list, however big it's
-    /// grown (Spotify Liked Songs can run into the thousands).
+    /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
     fn rows(&self, s: &Session, screen: usize, offset: usize, limit: usize) -> Vec<Row> {
         let screen = norm_screen(screen);
         if let Some(matched) = self.filtered_tracks(s, screen) {
@@ -1652,10 +1660,7 @@ impl MedleyView {
         }
     }
 
-    /// Visible list rows, from the last layout pass. `last_main_rect`
-    /// already excludes the top/bottom chrome bars (see `split`), so its
-    /// full height is available list content, minus the title row on a
-    /// screen that has one (`main_title_h`).
+    /// Visible list rows as of the last layout pass — `last_main_rect` minus its title row.
     fn list_h(&self) -> usize {
         self.last_main_rect.height().saturating_sub(self.main_title_h)
     }
@@ -2009,8 +2014,7 @@ impl MedleyView {
                 *off = (*off + WHEEL_STEP).min(max_off);
                 Some(EventResult::consumed())
             }
-            // `rect`'s own row 0 is the list's title row where it has one
-            // (see `draw_row_list`) — not clickable as a list row.
+            // Row 0 is the list's title row where it has one, not a clickable list row.
             MouseEvent::Press(MouseButton::Left) => {
                 let row = local.y - ry;
                 if row < self.main_title_h || row >= self.main_title_h + self.list_h() {
@@ -2839,12 +2843,7 @@ fn draw_row_list(printer: &Printer, title: Option<&str>, rows: &[Row], offset: u
     draw_list_body(&body, rows, offset, sel, total);
 }
 
-/// Fills every row of `printer` with `rows` (the caller's already-resolved
-/// visible window) plus a scrollbar gutter — no title row of its own.
-/// `draw_row_list` prints one separately and passes a printer windowed past
-/// it; the main content's own row 0 is the global tab bar (`draw_tab_bar`),
-/// drawn on the whole-screen printer rather than `main_rect`, so `draw`
-/// passes `main_rect` here directly.
+/// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
 fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
@@ -2892,12 +2891,8 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
     draw_scrollbar(printer, content_w, list_h, offset, total);
 }
 
-/// Each column's `(start column, width, right-aligned)` within a `width`-wide
-/// `five_col` line, in `Row` field order (tags, main, hotkeys, source,
-/// duration) — the layout counterpart to `five_col`'s own text formatting,
-/// so the two can never drift apart. Empty when `width` is too narrow for
-/// `five_col` to lay out columns at all (its "just the main column"
-/// fallback).
+/// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order — empty
+/// where `five_col` falls back to the main column alone.
 fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
     let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4;
     if width <= fixed {
@@ -2920,9 +2915,7 @@ fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
 const ROW_MARK_W: usize = 2;
 
-/// Column a row's main (title) text starts at in a `content_w`-wide list —
-/// what a list's own title row is indented by so it lines up with the
-/// titles below it, whatever columns `five_col` currently puts before main.
+/// Column a row's main text starts at — what the title row is indented by to line up with it.
 fn main_col_start(content_w: usize) -> usize {
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
     ROW_MARK_W + layout.get(1).map_or(0, |&(start, ..)| start)
@@ -3301,13 +3294,7 @@ impl View for MedleyView {
 
         let (main_rect, panes) = split(printer.size, &self.open_panes, self.pane_cfg);
 
-        // Computed before the list is resolved (not after, as it used to
-        // be) so `rows` only ever gets asked for the visible window — a
-        // list running into the thousands (Spotify Liked Songs) must not
-        // pay to resolve/format every row on every redraw, only the ones
-        // actually on screen. `main_rect`'s height matches what `printer`
-        // will report once windowed to it below, minus the list's own
-        // title row where it has one (see `draw_row_list`).
+        // Resolved before the list so `rows` is only ever asked for the visible window.
         let list_h = self.list_h();
         let sel = self.cursor[norm_screen(self.screen)];
         // Persisted, not recomputed from `sel` — see `list_offset`'s doc.
@@ -3346,10 +3333,20 @@ impl View for MedleyView {
             pane_rows,
             membership_feedback,
             main_title,
+            list_loading,
         ) = self.with_session(|s| {
                 let rows = self.rows(s, self.screen, offset, list_h);
                 let total = self.list_len(s, self.screen);
                 let main_title = self.list_title(s, self.screen);
+                // A paginated remote list only knows what it has loaded so far.
+                let list_loading = norm_screen(self.screen) == PLAYLISTS
+                    && match &self.open_remote {
+                        Some((sid, _, node)) => s.remote_playlist_loading(sid, node),
+                        None => {
+                            self.open_playlist.is_none()
+                                && s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid))
+                        }
+                    };
                 let now_playing = s.now_playing();
                 let np = now_playing
                     .as_ref()
@@ -3373,9 +3370,7 @@ impl View for MedleyView {
                     .map(|&(pane, _, screen, offset, pane_h)| {
                         let rows = self.rows(s, screen, offset, pane_h);
                         let total = self.list_len(s, screen);
-                        // A docked pane has no tab of its own to name it, so
-                        // it always keeps a title — its list's own where it
-                        // has one, else the screen's name and length.
+                        // A docked pane has no tab naming it, so it always keeps a title.
                         let title = self
                             .list_title(s, screen)
                             .unwrap_or_else(|| format!("{} ({total} tracks)", screen_name(screen)));
@@ -3394,6 +3389,7 @@ impl View for MedleyView {
                     pane_rows,
                     s.membership_feedback(),
                     main_title,
+                    list_loading,
                 )
             });
 
@@ -3406,8 +3402,7 @@ impl View for MedleyView {
             if let Some(screen) = list_screen_for_pane(pane) {
                 let (_, title, rows, total) =
                     pane_rows.iter().find(|(p, ..)| *p == pane).expect("resolved above");
-                // `[...]` here is the focus marker every pane title uses
-                // (see `draw_pane`), not a list title of its own.
+                // `[...]` is the focus marker every pane title uses (see `draw_pane`).
                 let title = if focused { format!("[{title}]") } else { title.clone() };
                 draw_row_list(
                     &printer.windowed(rect),
@@ -3511,6 +3506,23 @@ impl View for MedleyView {
                 }),
         };
         printer.print((0, bottom), &pad(&line, printer.size.x));
+
+        // Cursor position in the main list / its length, right-aligned before the
+        // warnings button — the first thing dropped when the hint text needs the width.
+        let warn_w = if warn_count > 0 {
+            warnings_label(warn_count).chars().count().min(printer.size.x)
+        } else {
+            0
+        };
+        if total > 0 {
+            let more = if list_loading { "+" } else { "" };
+            let unit = self.row_unit(total);
+            let readout = format!("{}/{total}{more} {unit}", sel.min(total - 1) + 1);
+            let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
+            if x >= line.width() + 2 {
+                printer.print((x, bottom), &readout);
+            }
+        }
 
         // status line, pinned to the very last row — see `status_line_layout`
         // for the column math and `on_event`'s mirror of it for click
@@ -3623,8 +3635,7 @@ impl View for MedleyView {
             .collect();
         let main_h_changed = main_rect.height() != self.last_main_rect.height();
         self.last_main_rect = main_rect;
-        // Resolved here, before `list_h`, so row windowing/clamping and
-        // `draw`'s own title row agree on how tall the list body is.
+        // Before `list_h`, so row windowing and `draw`'s title row agree on the body height.
         self.main_title_h = self.with_session(|s| usize::from(self.list_title(s, self.screen).is_some()));
         self.last_pane_rects = panes;
         let list_h = self.list_h();
@@ -4555,20 +4566,15 @@ pub fn player_state_icon(state: &PlayerState) -> &'static str {
     }
 }
 
-/// The play/pause *button*'s icon: the action pressing it would take, not
-/// the state it's in — `⏸` while playing, `▶` while paused. Stopped keeps
-/// `⏹`, the same indicator the rest of the UI uses for it.
+/// The play/pause *button*'s icon: the action a press would take, not the state it's in.
 fn player_action_icon(state: &PlayerState) -> &'static str {
     match state {
         PlayerState::Playing => "⏸",
-        PlayerState::Paused => "▶",
-        PlayerState::Stopped => "⏹",
+        PlayerState::Paused | PlayerState::Stopped => "▶",
     }
 }
 
-/// `player_action_icon` with `player_state_glyph`'s leading-space padding —
-/// what every clickable play/pause button (top-bar cluster, status line)
-/// draws.
+/// `player_action_icon` with `player_state_glyph`'s leading-space padding.
 fn player_action_glyph(state: &PlayerState) -> String {
     format!(" {}", player_action_icon(state))
 }
