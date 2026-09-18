@@ -29,7 +29,7 @@ use librespot_core::SpotifyUri;
 use librespot_metadata::Metadata;
 use librespot_playback::audio_backend;
 use librespot_playback::audio_backend::{Sink, SinkResult};
-use librespot_playback::config::{AudioFormat, PlayerConfig};
+use librespot_playback::config::{AudioFormat, Bitrate, PlayerConfig};
 use librespot_playback::convert::Converter;
 use librespot_playback::decoder::AudioPacket;
 use librespot_playback::mixer::softmixer::SoftMixer;
@@ -493,7 +493,9 @@ async fn run(
             .expect("a librespot audio backend is compiled in")
             .1;
         let player = LsPlayer::new(
-            PlayerConfig::default(),
+            // Max quality; librespot falls back to 160/96 per-track/account
+            // if a 320kbps rendition isn't available, so this never errors.
+            PlayerConfig { bitrate: Bitrate::Bitrate320, ..PlayerConfig::default() },
             session.clone(),
             mixer.get_soft_volume(),
             {
