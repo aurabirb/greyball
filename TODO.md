@@ -56,6 +56,20 @@
   from being assigned a hotkey at all, so a hotkey *can* currently be bound to Liked Songs and toggling
   it would call `remove_from_playlist` against it like any other playlist — add an explicit guard so a
   playlist-hotkey toggle can never remove from a Liked Songs node, regardless of what it's bound to.
+- [ ] A playlist hotkey pressed repeatedly on the same track adds it to the playlist again each time
+  instead of toggling add↔remove (remote playlists included). Likely cause: `Session::
+  toggle_remote_playlist_membership` (`core/src/app.rs`) decides add-vs-remove from `is_member`, read
+  out of `ViewCache`'s `remote_playlist_tracks` — which a successful add/remove never updates (the
+  bug above) and which is empty/partial while the playlist is still paginating — and it ignores
+  in-flight work, so a second press before the first request lands also reads "not a member". Fix
+  direction: keep one membership state per `(source, node, track)` — `Member`/`NotMember` plus
+  `PendingAdd`/`PendingRemove` — that the toggle reads and writes: a press flips it optimistically
+  to the pending state, the background result settles it (or rolls it back with an error) and
+  updates the cached track list, and a press while pending is ignored or queued rather than sent
+  again. `pending_remote_adds` only covers adds and only feeds the open playlist's placeholder row —
+  fold it into this. Show the pending state in the track row: the playlist's letter in the hotkeys
+  column renders italic until the request settles. Check the local (`HotkeyTarget::Local`) path
+  toggles correctly too.
 - [ ] Track rendering isn't consistent across lists: the same track should render identically (tags,
   hotkeys/playlist column, liked state, current marker) and update at the same moment on every tab
   and docked pane. Seen: pressing a playlist hotkey while in the Queue doesn't update the playlist
@@ -63,7 +77,11 @@
   cause is the stale `ViewCache` membership data from the hotkey-toggle bug above rather than a
   Queue-specific path — fix that first, then audit each screen's `rows()` branch (Now Playing, Search,
   Playlists, Queue, History, filtered lists, docked panes) for any per-screen difference in what a
-  row shows or when it refreshes, and remove it.
+  row shows or when it refreshes, and remove it. End state: one reusable track-row widget
+  (React-component style — a pure function of a track's state: identity, tags, liked, playlist
+  membership incl. pending, current marker) used by every list, redrawn because a message/event
+  said that state changed (membership settled, like toggled, playback moved) — never by each screen
+  recomputing or polling it per frame.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
