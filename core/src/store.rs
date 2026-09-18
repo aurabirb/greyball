@@ -30,6 +30,7 @@ struct MemInner {
     by_rendition: HashMap<String, TrackId>,
     by_title_norm: HashMap<String, Vec<TrackId>>,
     remote_playlist_ids: HashMap<String, Vec<TrackId>>,
+    remote_playlist_folders: HashMap<String, Vec<(String, String)>>,
 }
 
 #[derive(Default)]
@@ -156,6 +157,26 @@ impl Store for MemStore {
             .insert(key.to_string(), ids.to_vec());
         Ok(())
     }
+
+    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .remote_playlist_folders
+            .get(source)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()> {
+        self.inner
+            .lock()
+            .unwrap()
+            .remote_playlist_folders
+            .insert(source.to_string(), folders.to_vec());
+        Ok(())
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -174,6 +195,10 @@ const IDX_TITLE: MultimapTableDefinition<&str, &[u8]> = MultimapTableDefinition:
 /// Songs), so a paginated walk can resume displaying instantly from what a
 /// previous session already fetched instead of restarting from scratch.
 const REMOTE_PLAYLIST_IDS: TableDefinition<&str, &[u8]> = TableDefinition::new("remote_playlist_ids");
+/// `SourceId` string -> JSON `Vec<(name, path_id)>`, a source's top-level
+/// playlist-folder list — see `Store::remote_playlist_folders`.
+const REMOTE_PLAYLIST_FOLDERS: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("remote_playlist_folders");
 
 pub struct RedbStore {
     db: Database,
@@ -191,6 +216,7 @@ impl RedbStore {
             w.open_table(IDX_RENDITION).map_err(store_err)?;
             w.open_multimap_table(IDX_TITLE).map_err(store_err)?;
             w.open_table(REMOTE_PLAYLIST_IDS).map_err(store_err)?;
+            w.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
         }
         w.commit().map_err(store_err)?;
         Ok(Self { db })
@@ -455,6 +481,26 @@ impl Store for RedbStore {
         {
             let mut t = w.open_table(REMOTE_PLAYLIST_IDS).map_err(store_err)?;
             t.insert(key, json.as_slice()).map_err(store_err)?;
+        }
+        w.commit().map_err(store_err)?;
+        Ok(())
+    }
+
+    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>> {
+        let r = self.db.begin_read().map_err(store_err)?;
+        let t = r.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
+        match t.get(source).map_err(store_err)? {
+            Some(g) => serde_json::from_slice(g.value()).map_err(store_err),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()> {
+        let json = serde_json::to_vec(folders).map_err(store_err)?;
+        let w = self.db.begin_write().map_err(store_err)?;
+        {
+            let mut t = w.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
+            t.insert(source, json.as_slice()).map_err(store_err)?;
         }
         w.commit().map_err(store_err)?;
         Ok(())

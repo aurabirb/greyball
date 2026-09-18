@@ -231,16 +231,38 @@ impl ViewCache {
             .unwrap_or_default()
     }
 
-    /// Single-flight background `browse(Root)` refresh — no ingestion or
-    /// persistence needed, a folder is just a name + `BrowseNode`.
+    /// Single-flight background `browse(Root)` refresh — no ingestion
+    /// needed, a folder is just a name + `BrowseNode`, but the landed list
+    /// is persisted so a restart shows it immediately (see
+    /// `Store::remote_playlist_folders`).
     fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
         {
             let mut cache = self.remote_playlists.lock().unwrap();
-            let entry = cache.entry(source.clone()).or_default();
-            if entry.browsing || !entry.partial {
-                return;
+            match cache.entry(source.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let entry = e.get_mut();
+                    if entry.browsing || !entry.partial {
+                        return;
+                    }
+                    entry.browsing = true;
+                }
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    // First touch this session — hydrate from whatever a
+                    // previous session persisted instead of starting empty.
+                    let folders = ctx
+                        .store
+                        .remote_playlist_folders(source.as_str())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(name, id)| (name, BrowseNode::Path(id)))
+                        .collect();
+                    v.insert(RemotePlaylistsEntry {
+                        folders,
+                        browsing: true,
+                        partial: true,
+                    });
+                }
             }
-            entry.browsing = true;
         }
 
         let Some(source_handle) = ctx.sources.get(source).cloned() else {
@@ -250,6 +272,7 @@ impl ViewCache {
         let source = source.clone();
         let bus = ctx.bus.clone();
         let cache = self.remote_playlists.clone();
+        let store = ctx.store.clone();
 
         std::thread::spawn(move || {
             // Small list, no scroll position to pace against — load it all.
@@ -262,6 +285,19 @@ impl ViewCache {
                 if let Ok(page) = &result {
                     entry.folders = page.folders.clone();
                     entry.partial = page.partial;
+                }
+            }
+            if let Ok(page) = &result {
+                let folders: Vec<(String, String)> = page
+                    .folders
+                    .iter()
+                    .filter_map(|(name, node)| match node {
+                        BrowseNode::Path(id) => Some((name.clone(), id.clone())),
+                        BrowseNode::Root => None,
+                    })
+                    .collect();
+                if let Err(e) = store.set_remote_playlist_folders(source.as_str(), &folders) {
+                    log::warn!("{source}: failed to persist playlist folders: {e}");
                 }
             }
             if let Err(e) = result {

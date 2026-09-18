@@ -263,4 +263,14 @@ pub trait Store: Send + Sync {
     /// string built from `(SourceId, BrowseNode)`.
     fn remote_playlist_ids(&self, key: &str) -> Result<Vec<TrackId>>;
     fn set_remote_playlist_ids(&self, key: &str, ids: &[TrackId]) -> Result<()>;
+
+    /// A source's top-level playlist-folder list (name, path id), so
+    /// reopening the Playlists screen shows what's already known instead of
+    /// an empty list while `ViewCache::ensure_remote_playlists`'s background
+    /// `browse(Root)` refresh is in flight. `BrowseNode` has no
+    /// `Serialize`/`Deserialize` derive, and a folder is always
+    /// `BrowseNode::Path` in practice, so the id is stored raw and
+    /// reconstructed into `BrowseNode::Path` on read.
+    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>>;
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()>;
 }
