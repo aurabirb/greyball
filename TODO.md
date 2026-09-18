@@ -175,6 +175,43 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
+- [ ] Playlist hotkey rework — two parts, both built on the existing `hotkey_capture`/
+  `bind_captured_key`/`clear_captured_hotkey` path (`ui/src/view.rs`) and `Session::bind_hotkey`
+  (`core/src/app.rs`). Purpose: mid track-sorting (often from the Queue or another pane, not the
+  Playlists screen) get a quick reminder of which key is on which playlist, move a key to a
+  different playlist, or add a playlist, without leaving the current view.
+  (1) Direct assign on the Playlists screen: with a playlist row selected (local or remote —
+  `selected_hotkey_target`), pressing any single-character key that isn't a built-in's effective key
+  (`keybindings::builtin_at`) (re)assigns that key to the selected playlist immediately — no modal,
+  no Enter — the counterpart of how a playlist key pressed on a track toggles membership. A key
+  already on another playlist moves (report the steal in the status line, as `bind_captured_key`
+  does). Keys this screen's raw handlers consume first (`x` export, `:`, Enter, …) stay theirs —
+  see the raw-handler hotkey bug above; don't make them assignable.
+  (2) `` ` `` from anywhere opens a modal popup — a centered box over the current view, not
+  fullscreen (the first non-fullscreen modal here: draw the view underneath as usual, then the box
+  on top; size it to the list, capped to the screen) — listing every playlist `top_rows` yields
+  with its assigned key, like `draw_hotkey_menu`'s `{name} {key}` rows. Adapt whichever is less
+  code: the Playlists widget's row list or `draw_hotkey_menu`/`draw_rows` with its cursor/offset/
+  `jump_hotkey_menu`/`follow_hotkey_menu_offset` plumbing (likely the latter — it's already a
+  "title + cursor list + footer" modal with Backspace-clear). Sort: playlists with an assigned key
+  first, then the rest, each group in its usual order. Preselect: if the context the popup was
+  opened from is a playlist (an open local/remote playlist, or the selected row on the Playlists
+  screen), start the cursor on it; otherwise row 0. Keys inside the popup: Up/Down (and whatever
+  built-in nav keys exist), PgUp/PgDn/Home/End and the mouse wheel scroll as the hotkey menu does
+  today; Backspace clears the selected row's key; Esc (and `` ` `` again) closes; any other
+  single-character key that isn't a built-in's effective key is bound to the selected row at once —
+  no Enter step, no separate "press a key" capture screen — and the popup stays open with the list
+  re-sorted and the cursor following the row it was on. The bottom hint line keeps its current
+  role (hint ↔ bind/steal/refusal feedback), reworded to drop the Enter step. Adding a playlist
+  from inside the popup: offer it only if it falls out cheaply (e.g. a trailing "new playlist…" row
+  that opens the existing `:newplaylist` name prompt and returns to the popup with the new row
+  selected); otherwise leave it out.
+  Consequences to handle in the same change: `` ` `` is `BuiltinAction::OpenHotkeyMenu`'s default
+  key and today opens the fullscreen built-ins remap menu — retarget that built-in to the playlist
+  popup and leave the built-ins menu reachable through `:keys` only (update `command::HELP`, the
+  help screen and the hint texts that mention either); delete the Playlists-screen backtick override
+  in `on_event` and the standalone `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`, which
+  (1) and (2) replace.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
