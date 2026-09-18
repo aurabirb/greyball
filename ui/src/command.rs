@@ -64,8 +64,9 @@ pub enum Parsed {
     SetPaneLayout(PanePatch),
     /// `hist` — switch to the play-history screen.
     History,
-    /// `keys` — open the hotkey menu (same modal as backtick), to remap a
-    /// playlist hotkey or a built-in command's key.
+    /// `keys` — open the hotkey menu (same modal as backtick outside the
+    /// Playlists screen), to remap a built-in command's key. Playlist
+    /// hotkeys are bound from the Playlists screen instead.
     Keys,
     /// `link` — pick the current row as one end of a link; run it again on a
     /// second row to merge them. Needs the selected track, resolved in
@@ -110,7 +111,7 @@ pub const HELP: &[(&str, &str)] = &[
     ),
     (
         "keys",
-        "open the hotkeys menu (remap a playlist hotkey or a built-in command's key)",
+        "open the hotkeys menu (remap a built-in command's key — playlist hotkeys are set from the Playlists screen)",
     ),
     (
         "link",

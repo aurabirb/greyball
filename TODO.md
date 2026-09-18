@@ -13,6 +13,9 @@
 ## TODOs:
 
 ### Bugs
+- [ ] The play/pause symbol shows the *current* state instead of the *action pressing it would take* —
+  it's a button, so while a track is playing it should show the pause symbol (what you'd get by
+  pressing it), and while paused it should show the play symbol. Swap them.
 - [ ] Spotify playback occasionally dies mid-song ("session invalid (dead access-point connection)")
   and reconnects, producing an audible ~1-2s gap while a whole new `Session`/mixer/player is rebuilt
   from scratch (`sources/spotify/src/player.rs`'s reconnect path is a full cold teardown-and-rebuild,
@@ -115,12 +118,19 @@
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
-- [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings).
+- [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
+- [ ] Move the default media-cache directory to `~/Downloads/medley`, and make it adjustable from
+  Settings. Store each entry's path relative to that root directory (not absolute) so moving/renaming
+  the whole library directory is discovered transparently, with nothing pointing at the old path.
 - [ ] Add a single-character spinner somewhere visible to indicate when a network request is in
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
+- [ ] Turn the bottom status/hint row into its own module that can be placed either up top next to the
+  tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
+  switchable via a setting.
+- [ ] Hide the sources column on narrow terminal sizes.
 
 ### Audits / cleanup tasks
 - [ ] Review how plugin/source failures are surfaced to the user and make the channel match the

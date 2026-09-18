@@ -152,7 +152,7 @@ impl BuiltinAction {
             BuiltinAction::Wedge => "wedge selected track to queue front",
             BuiltinAction::Like => "add selected track to Liked Songs",
             BuiltinAction::Unlike => "remove selected track from Liked Songs (confirms first)",
-            BuiltinAction::OpenHotkeyMenu => "open playlist hotkeys menu",
+            BuiltinAction::OpenHotkeyMenu => "open hotkeys menu",
             BuiltinAction::OpenHelp => "open help/shortcuts screen",
         }
     }

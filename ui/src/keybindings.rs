@@ -31,14 +31,15 @@ pub enum Action {
     /// resolves that list into `Command::PlayContext`, since `map` here has
     /// no access to it.
     PlayFromContext(TrackId),
-    /// UI-local: open the "Playlist Hotkeys" management modal (backtick,
-    /// nothing selected required) — lists every local playlist with its
-    /// bound key, if any, and lets the user (re)bind or clear one. The view
-    /// owns the modal's state, since `map` here has no access to the
-    /// playlist list or the live hotkey bindings. The view intercepts
-    /// backtick before it ever reaches `map` when a playlist is selected on
-    /// the Playlists screen, going straight to the "press a key to bind"
-    /// step for it instead — this `Action` is only ever produced otherwise.
+    /// UI-local: open the "Hotkeys" modal (backtick, nothing selected
+    /// required) — lists every built-in action with its bound key, if any,
+    /// and lets the user (re)bind or clear one. The view owns the modal's
+    /// state, since `map` here has no access to the live hotkey bindings.
+    /// Playlist hotkeys aren't handled by this modal at all: the view
+    /// intercepts backtick before it ever reaches `map` when a playlist is
+    /// selected on the Playlists screen, opening a standalone "press a key
+    /// to bind" modal for it instead — this `Action` is only ever produced
+    /// otherwise.
     OpenHotkeyMenu,
     /// UI-local: rotate the shared embedded-pane dock through
     /// right+vertical -> bottom+horizontal -> left+vertical ->
@@ -174,7 +175,7 @@ pub const RAW_KEYS: &[(&str, &str)] = &[
     ("P", "cycle the embedded-pane layout"),
     ("E", "clear the queue"),
     ("Q", "quit"),
-    ("`", "open the playlist hotkeys menu"),
+    ("`", "open the hotkeys menu (or, with a playlist selected, set its hotkey)"),
     ("?", "open this help/shortcuts screen"),
 ];
 

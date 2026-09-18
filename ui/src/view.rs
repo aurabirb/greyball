@@ -322,86 +322,6 @@ fn resolve_remembered_playlist(
     })
 }
 
-/// One row of the hotkey menu (`` ` ``/`:keys`) — a playlist/folder
-/// (`TopRow`) or a built-in app command. Unifying both into one row type
-/// (rather than two parallel lists) is what lets the menu's nav/bind/clear
-/// code stay the single implementation `core::HotkeyTarget` itself already
-/// generalized over — see `HotkeyMenuFilter` for showing just one kind.
-enum HotkeyRow {
-    Playlist(TopRow),
-    Builtin(core::BuiltinAction),
-}
-
-impl HotkeyRow {
-    fn target(&self) -> HotkeyTarget {
-        match self {
-            HotkeyRow::Playlist(row) => row.target(),
-            HotkeyRow::Builtin(action) => HotkeyTarget::Builtin(*action),
-        }
-    }
-}
-
-fn hotkey_row_name(row: &HotkeyRow, playlists: &[Playlist]) -> String {
-    match row {
-        HotkeyRow::Playlist(row) => top_row_name(row, playlists),
-        HotkeyRow::Builtin(action) => action.label().to_string(),
-    }
-}
-
-/// Row index where a blank divider goes between playlists and built-ins
-/// (`None` if one section is empty). Cursor/offset stay in `rows`' own
-/// index space; `hotkey_menu_visual`/`_logical` translate at render time.
-fn hotkey_menu_divider(rows: &[HotkeyRow]) -> Option<usize> {
-    let split = rows.iter().position(|r| matches!(r, HotkeyRow::Builtin(_)))?;
-    (split > 0).then_some(split)
-}
-
-/// A logical `hotkey_rows` index's row on screen, once `divider` pushes
-/// everything after it down by one.
-fn hotkey_menu_visual(divider: Option<usize>, logical: usize) -> usize {
-    match divider {
-        Some(split) if logical >= split => logical + 1,
-        _ => logical,
-    }
-}
-
-/// Inverse of `hotkey_menu_visual` — `None` on the divider row itself.
-fn hotkey_menu_logical(divider: Option<usize>, visual: usize) -> Option<usize> {
-    match divider {
-        Some(split) if visual == split => None,
-        Some(split) if visual > split => Some(visual - 1),
-        _ => Some(visual),
-    }
-}
-
-/// Which rows `:keys`/the hotkey menu shows — cycled with `Tab` while the
-/// menu is open. The underlying table/bind mechanism is the same regardless;
-/// this only narrows what `hotkey_rows` returns.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum HotkeyMenuFilter {
-    #[default]
-    All,
-    Playlists,
-    Builtins,
-}
-
-impl HotkeyMenuFilter {
-    fn next(self) -> Self {
-        match self {
-            HotkeyMenuFilter::All => HotkeyMenuFilter::Playlists,
-            HotkeyMenuFilter::Playlists => HotkeyMenuFilter::Builtins,
-            HotkeyMenuFilter::Builtins => HotkeyMenuFilter::All,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            HotkeyMenuFilter::All => "all",
-            HotkeyMenuFilter::Playlists => "playlists",
-            HotkeyMenuFilter::Builtins => "built-in",
-        }
-    }
-}
 
 /// One column's rendered cell: text plus a color override, from
 /// `render_cell` — `color: None` means draw it in the row's normal color
@@ -607,26 +527,29 @@ pub struct MedleyView {
     /// second click on the *same* row within `DOUBLE_CLICK_WINDOW` can be
     /// recognized as a double-click. See `click_row`.
     last_click: Option<(Instant, usize, usize)>,
-    /// The "Playlist Hotkeys" management modal (backtick, no selection
-    /// required) — a fullscreen overlay like `warnings_open`/`screen_pane`,
-    /// listing every local playlist with its bound key, if any.
+    /// The "Hotkeys" management modal (backtick, off the Playlists screen)
+    /// — a fullscreen overlay like `warnings_open`/`screen_pane`, listing
+    /// every built-in action with its bound key, if any. Playlist hotkeys
+    /// are bound from the Playlists screen instead (see
+    /// `draw_playlist_hotkey_modal`).
     hotkey_menu_open: bool,
     /// Selected row within the hotkey-menu modal.
     hotkey_menu_cursor: usize,
     /// Scroll window into the hotkey-menu modal's list, in visual (on-screen)
     /// row space, not `hotkey_menu_cursor`'s logical `hotkey_rows` space.
     hotkey_menu_offset: usize,
-    /// The "press a key to bind" sub-popup, open on top of the hotkey menu —
-    /// `Some(target)` while waiting for the next raw keypress to become that
-    /// target's new binding; `None` the rest of the time.
+    /// The "press a key to bind" sub-popup — `Some(target)` while waiting for
+    /// the next raw keypress to become that target's new binding; `None` the
+    /// rest of the time. Drawn on top of the hotkey menu when a built-in is
+    /// being bound (`hotkey_menu_open` also true), or standalone (see
+    /// `draw_playlist_hotkey_modal`) when a playlist's hotkey is being set
+    /// from the Playlists screen (`hotkey_menu_open` false).
     hotkey_capture: Option<HotkeyTarget>,
-    /// Last bind/unbind result shown in the hotkey menu's footer (e.g.
-    /// "Bound 'a' to Chill (moved from Focus)") until the next cursor move
-    /// or the modal closes.
+    /// Last bind/unbind result shown in the hotkey menu's footer, or on the
+    /// Playlists screen's own hint line for a standalone `hotkey_capture`
+    /// (e.g. "Bound 'a' to Chill (moved from Focus)") until the next
+    /// keypress or the modal closes.
     hotkey_feedback: Option<String>,
-    /// Which rows the hotkey menu currently shows — `Tab` cycles it while
-    /// the menu is open (see `HotkeyMenuFilter`).
-    hotkey_menu_filter: HotkeyMenuFilter,
     /// The help/shortcuts screen (`?` or `:help`) — a fullscreen overlay
     /// like `warnings_open`/`hotkey_menu_open`, listing `command::HELP` and
     /// the current keybindings.
@@ -697,7 +620,6 @@ impl MedleyView {
             hotkey_menu_offset: 0,
             hotkey_capture: None,
             hotkey_feedback: None,
-            hotkey_menu_filter: HotkeyMenuFilter::default(),
             help_open: false,
             help_scroll: 0,
             playlist_picker_open: false,
@@ -884,59 +806,73 @@ impl MedleyView {
         }
     }
 
-    /// Fullscreen "Playlist Hotkeys" modal (backtick) — same shape as
-    /// `draw_warnings`: row 0 title, row 1 blank, then the row list (from
-    /// `hotkey_rows`, narrowed by `hotkey_menu_filter`) from `HOTKEY_LIST_TOP`,
-    /// each row showing `{name:<name_w} {key}` (`-` if unbound). `name_w`
-    /// is sized off the terminal width rather than a fixed column, and
-    /// `hotkey_menu_divider` blank-separates the playlist/built-in sections.
-    /// While `hotkey_capture` is set, the footer becomes a "press a key"
-    /// prompt instead of the usual hint/feedback line.
+    /// Fullscreen "Hotkeys" modal (backtick, off the Playlists screen) —
+    /// same shape as `draw_warnings`: row 0 title, row 1 blank, then the
+    /// built-in action list from `hotkey_rows` at `HOTKEY_LIST_TOP`, each row
+    /// showing `{name:<name_w} {key}` (`-` if unbound, though every built-in
+    /// always has at least its default). `name_w` is sized off the terminal
+    /// width rather than a fixed column. Playlist hotkeys are set from the
+    /// Playlists screen instead — see `draw_playlist_hotkey_modal`. While
+    /// `hotkey_capture` is set, the footer becomes a "press a key" prompt
+    /// instead of the usual hint/feedback line.
     fn draw_hotkey_menu(&self, printer: &Printer) {
-        let (rows, playlists) = self.with_session(|s| (self.hotkey_rows(s), s.playlists()));
+        let rows = self.hotkey_rows();
         printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad(&format!("Hotkeys ({})", self.hotkey_menu_filter.label()), p.size.x));
+            p.print((0, 0), &pad("Hotkeys", p.size.x));
         });
 
-        if rows.is_empty() {
-            printer.print((0, HOTKEY_LIST_TOP), "(no playlists — :newplaylist <name> to make one)");
-        }
         let name_w = printer.size.x.saturating_sub(3);
-        let divider = hotkey_menu_divider(&rows);
-        let mut lines: Vec<String> = rows
+        let lines: Vec<String> = rows
             .iter()
-            .map(|row| {
+            .map(|&action| {
                 let key = self
-                    .with_session(|s| s.effective_hotkey(&row.target()))
+                    .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(action)))
                     .map(|k| k.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                let name = pad(&truncate_ellipsis(&hotkey_row_name(row, &playlists), name_w), name_w);
+                let name = pad(&truncate_ellipsis(action.label(), name_w), name_w);
                 format!("{name} {key}")
             })
             .collect();
-        if let Some(split) = divider {
-            lines.insert(split, String::new());
-        }
-        let visual_cursor = hotkey_menu_visual(divider, self.hotkey_menu_cursor);
-        self.draw_rows(printer, &lines, visual_cursor, self.hotkey_menu_offset, HOTKEY_LIST_TOP);
+        self.draw_rows(printer, &lines, self.hotkey_menu_cursor, self.hotkey_menu_offset, HOTKEY_LIST_TOP);
 
         let bottom = printer.size.y.saturating_sub(1);
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
             let line = if let Some(target) = &self.hotkey_capture {
                 let name = rows
                     .iter()
-                    .find(|r| &r.target() == target)
-                    .map(|r| hotkey_row_name(r, &playlists))
+                    .find(|&&a| HotkeyTarget::Builtin(a) == *target)
+                    .map(|a| a.label().to_string())
                     .unwrap_or_else(|| "?".to_string());
                 format!("  press a key to bind to {name:?}   [Esc] cancel")
             } else if let Some(msg) = &self.hotkey_feedback {
                 format!("  {msg}")
-            } else if let Some(msg) = self.with_session(|s| s.membership_feedback()) {
-                format!("  {msg}")
             } else {
-                "  select a row and press Enter   [Backspace] clear   [Tab] filter   [Esc] close".to_string()
+                "  select a row and press Enter   [Backspace] clear   [Esc] close".to_string()
             };
             p.print((0, bottom), &pad(&line, p.size.x));
+        });
+    }
+
+    /// Standalone "press a key to bind" modal for a Playlists-screen row —
+    /// backtick's local override of `Action::OpenHotkeyMenu` there (see
+    /// `on_event`), reusing `hotkey_capture`/`bind_captured_key` directly
+    /// rather than going through the built-ins-only hotkey menu at all.
+    fn draw_playlist_hotkey_modal(&self, printer: &Printer) {
+        let target = self.hotkey_capture.clone().expect("only drawn while capturing");
+        let name = self.hotkey_row_name_for(&target);
+        let current = self.with_session(|s| s.playlist_hotkey(&target));
+        printer.with_color(ColorStyle::title_primary(), |p| {
+            p.print((0, 0), &pad("Set Hotkey", p.size.x));
+        });
+        printer.print((0, HOTKEY_LIST_TOP), &format!("press a key to bind to {name:?}"));
+
+        let bottom = printer.size.y.saturating_sub(1);
+        let hint = match current {
+            Some(k) => format!("  currently '{k}'   [Backspace] clear   [Esc] cancel"),
+            None => "  [Esc] cancel".to_string(),
+        };
+        printer.with_color(ColorStyle::highlight_inactive(), |p| {
+            p.print((0, bottom), &pad(&hint, p.size.x));
         });
     }
 
@@ -1231,19 +1167,11 @@ impl MedleyView {
         rows
     }
 
-    /// The hotkey menu's full row list (`self.hotkey_menu_filter` applied):
-    /// `top_rows` (playlists/folders) and/or every `core::BuiltinAction`,
-    /// unified so `draw_hotkey_menu`/binding/clearing share one list either
-    /// way — see `HotkeyRow`.
-    fn hotkey_rows(&self, s: &Session) -> Vec<HotkeyRow> {
-        let mut rows = Vec::new();
-        if self.hotkey_menu_filter != HotkeyMenuFilter::Builtins {
-            rows.extend(self.top_rows(s).into_iter().map(HotkeyRow::Playlist));
-        }
-        if self.hotkey_menu_filter != HotkeyMenuFilter::Playlists {
-            rows.extend(core::BuiltinAction::ALL.iter().map(|&(a, _)| HotkeyRow::Builtin(a)));
-        }
-        rows
+    /// The global hotkey menu's row list — every `core::BuiltinAction`.
+    /// Playlist hotkeys are bound from the Playlists screen instead (see
+    /// `draw_playlist_hotkey_modal`), so this menu no longer lists them.
+    fn hotkey_rows(&self) -> Vec<core::BuiltinAction> {
+        core::BuiltinAction::ALL.iter().map(|&(a, _)| a).collect()
     }
 
     /// Track ids visible on `screen`, in display order. Empty when the
@@ -1628,14 +1556,19 @@ impl MedleyView {
                         .into_iter()
                         .skip(offset)
                         .take(limit)
-                        .map(|row| match row {
-                            TopRow::Local(id) => {
-                                let p = s.playlists().into_iter().find(|p| p.id == id);
-                                let name = p.as_ref().map(|p| p.name.clone()).unwrap_or_default();
-                                let count = p.map(|p| p.items.len()).unwrap_or(0);
-                                plain_row(format!("{name}  ({count} tracks)"))
-                            }
-                            TopRow::Remote(sid, name, _) => plain_row(format!("[{sid}] {name}")),
+                        .map(|row| {
+                            let key = s.playlist_hotkey(&row.target());
+                            let mut r = match &row {
+                                TopRow::Local(id) => {
+                                    let p = s.playlists().into_iter().find(|p| p.id == *id);
+                                    let name = p.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+                                    let count = p.map(|p| p.items.len()).unwrap_or(0);
+                                    plain_row(format!("{name}  ({count} tracks)"))
+                                }
+                                TopRow::Remote(sid, name, _) => plain_row(format!("[{sid}] {name}")),
+                            };
+                            r.hotkeys = Cell::plain(key.map(String::from).unwrap_or_default());
+                            r
                         })
                         .collect();
                     (String::new(), rows)
@@ -1737,7 +1670,7 @@ impl MedleyView {
     /// already excludes the top/bottom chrome bars (see `split`), so its
     /// full height is available list content — no further reservation.
     fn list_h(&self) -> usize {
-        self.last_main_rect.height()
+        self.last_main_rect.height().saturating_sub(1)
     }
 
     /// Keep `list_offset[screen]` a valid window around `cursor[screen]`:
@@ -1805,10 +1738,9 @@ impl MedleyView {
             .jump(up, step, n, h);
     }
 
-    /// Same idea as `jump_warnings`, for the hotkey-menu modal — `cursor`
-    /// stays logical; `offset` is visual (see `follow_hotkey_menu_offset`).
+    /// Same idea as `jump_warnings`, for the hotkey-menu modal.
     fn jump_hotkey_menu(&mut self, up: bool, step: usize) {
-        let n = self.with_session(|s| self.hotkey_rows(s).len());
+        let n = self.hotkey_rows().len();
         self.hotkey_menu_cursor = stepped_cursor(self.hotkey_menu_cursor, n, up, step);
         self.follow_hotkey_menu_offset();
     }
@@ -1828,14 +1760,10 @@ impl MedleyView {
         CursorWindow { cursor: &mut self.warnings_cursor, offset: &mut self.warnings_offset }.follow(h);
     }
 
-    /// Same idea as `follow_warnings_offset`, but `hotkey_menu_offset` is a
-    /// visual row index (the blank divider eats one row of the viewport),
-    /// so the logical cursor is translated to visual before comparing.
+    /// Same idea as `follow_warnings_offset`, for the hotkey menu.
     fn follow_hotkey_menu_offset(&mut self) {
         let h = modal_list_h(self.last_screen_size.y, HOTKEY_LIST_TOP);
-        let divider = self.with_session(|s| hotkey_menu_divider(&self.hotkey_rows(s)));
-        let visual_cursor = hotkey_menu_visual(divider, self.hotkey_menu_cursor);
-        self.hotkey_menu_offset = follow_cursor_offset(visual_cursor, self.hotkey_menu_offset, h);
+        self.hotkey_menu_offset = follow_cursor_offset(self.hotkey_menu_cursor, self.hotkey_menu_offset, h);
     }
 
     /// Same idea as `follow_warnings_offset`, for the "Add to Playlist" picker.
@@ -1919,42 +1847,24 @@ impl MedleyView {
         self.hotkey_menu_offset = 0;
         self.hotkey_capture = None;
         self.hotkey_feedback = None;
-        // Context-aware default: opened from the Playlists screen shows
-        // playlist bindings first (what's actionable there); anywhere else
-        // shows built-ins first. `Tab` still cycles through all three.
-        self.hotkey_menu_filter =
-            if self.screen == PLAYLISTS { HotkeyMenuFilter::Playlists } else { HotkeyMenuFilter::Builtins };
         self.with_session(|s| s.clear_membership_feedback());
     }
 
     /// Enter on the selected hotkey-menu row: opens the "press a key to
-    /// bind" sub-popup for that row (playlist, remote folder, or built-in).
+    /// bind" sub-popup for that built-in action.
     fn open_hotkey_capture(&mut self) {
-        let target =
-            self.with_session(|s| self.hotkey_rows(s).into_iter().nth(self.hotkey_menu_cursor).map(|r| r.target()));
-        if let Some(target) = target {
-            self.open_hotkey_capture_for(target);
-        }
+        let Some(&action) = self.hotkey_rows().get(self.hotkey_menu_cursor) else {
+            return;
+        };
+        self.hotkey_capture = Some(HotkeyTarget::Builtin(action));
+        self.hotkey_feedback = None;
     }
 
-    /// Opens the "press a key to bind" sub-popup for `target` directly,
-    /// opening the hotkey menu behind it (if not open already) and moving
-    /// its cursor to that row — used both by `open_hotkey_capture` above and
-    /// by backtick on a selected playlist row in the Playlists screen, which
-    /// skips the "pick from the list" step since the target is already known.
-    fn open_hotkey_capture_for(&mut self, target: HotkeyTarget) {
-        // Same context-aware filter default as `open_hotkey_menu`, since
-        // backtick on a selected row jumps straight here without going
-        // through it.
-        if !self.hotkey_menu_open {
-            self.hotkey_menu_filter =
-                if self.screen == PLAYLISTS { HotkeyMenuFilter::Playlists } else { HotkeyMenuFilter::Builtins };
-        }
-        self.hotkey_menu_open = true;
-        self.hotkey_menu_cursor = self
-            .with_session(|s| self.hotkey_rows(s).into_iter().position(|r| r.target() == target))
-            .unwrap_or(self.hotkey_menu_cursor);
-        self.follow_hotkey_menu_offset();
+    /// Opens the standalone "press a key to bind" modal for `target` on the
+    /// Playlists screen — backtick's local override of `Action::
+    /// OpenHotkeyMenu` there (see `on_event`), bypassing the hotkey menu
+    /// entirely since it no longer handles playlist targets.
+    fn open_playlist_hotkey_modal(&mut self, target: HotkeyTarget) {
         self.hotkey_capture = Some(target);
         self.hotkey_feedback = None;
     }
@@ -1962,14 +1872,13 @@ impl MedleyView {
     /// This row's display name, looked up fresh — used by `bind_captured_key`
     /// for both the target being bound and whatever it stole a key from.
     fn hotkey_row_name_for(&self, target: &HotkeyTarget) -> String {
-        self.with_session(|s| {
-            let playlists = s.playlists();
-            self.hotkey_rows(s)
-                .into_iter()
-                .find(|r| &r.target() == target)
-                .map(|r| hotkey_row_name(&r, &playlists))
-        })
-        .unwrap_or_default()
+        match target {
+            HotkeyTarget::Builtin(action) => action.label().to_string(),
+            HotkeyTarget::Local(_) | HotkeyTarget::Remote(..) => self.with_session(|s| {
+                let playlists = s.playlists();
+                self.top_rows(s).into_iter().find(|r| &r.target() == target).map(|r| top_row_name(&r, &playlists))
+            }).unwrap_or_default(),
+        }
     }
 
     /// Binds `key` to whichever target `hotkey_capture` names, reports the
@@ -1997,28 +1906,33 @@ impl MedleyView {
     }
 
     /// Backspace on the selected hotkey-menu row: clears that row's binding,
-    /// if it has one — for a built-in, this just reverts it to its default
-    /// key rather than leaving it unreachable.
+    /// if it has one — reverts a built-in to its default key rather than
+    /// leaving it unreachable.
     fn clear_selected_hotkey(&mut self) -> EventResult {
-        let target =
-            self.with_session(|s| self.hotkey_rows(s).into_iter().nth(self.hotkey_menu_cursor).map(|r| r.target()));
-        let Some(target) = target else {
+        let Some(&action) = self.hotkey_rows().get(self.hotkey_menu_cursor) else {
             return EventResult::consumed();
         };
+        self.clear_hotkey(HotkeyTarget::Builtin(action))
+    }
+
+    /// Backspace on the standalone playlist hotkey modal: clears whichever
+    /// target `hotkey_capture` names instead of binding a new key, and
+    /// closes the modal — same gesture/underlying `unbind_hotkey` as
+    /// `clear_selected_hotkey`, just reached from the capture step directly
+    /// since the Playlists screen has no row-list step of its own.
+    fn clear_captured_hotkey(&mut self) -> EventResult {
+        let Some(target) = self.hotkey_capture.take() else {
+            return EventResult::consumed();
+        };
+        self.clear_hotkey(target)
+    }
+
+    /// Shared by `clear_selected_hotkey`/`clear_captured_hotkey`: unbinds
+    /// `target` and reports the result in `hotkey_feedback`.
+    fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
         let key = self.with_session(|s| s.playlist_hotkey(&target));
         self.with_session_mut(|s| s.unbind_hotkey(&target));
         self.hotkey_feedback = key.map(|k| format!("Unbound '{k}'"));
-        EventResult::consumed()
-    }
-
-    /// `Tab` in the hotkey menu: cycles `hotkey_menu_filter` and clamps the
-    /// cursor/scroll for the now-possibly-shorter row list.
-    fn cycle_hotkey_menu_filter(&mut self) -> EventResult {
-        self.hotkey_menu_filter = self.hotkey_menu_filter.next();
-        let n = self.with_session(|s| self.hotkey_rows(s).len());
-        self.hotkey_menu_cursor = self.hotkey_menu_cursor.min(n.saturating_sub(1));
-        self.follow_hotkey_menu_offset();
-        self.hotkey_feedback = None;
         EventResult::consumed()
     }
 
@@ -2108,15 +2022,15 @@ impl MedleyView {
                 *off = (*off + WHEEL_STEP).min(max_off);
                 Some(EventResult::consumed())
             }
-            // `rect` is pure list content now (the tab bar is a separate,
-            // fixed row of the whole screen — see `split`/`on_event`'s own
-            // top-row click check), so every row of `rect` is a list row.
+            // `rect`'s own row 0 is the list's title row (see
+            // `draw_row_list`) — not clickable as a list row — so row 1 is
+            // the first actual list row.
             MouseEvent::Press(MouseButton::Left) => {
                 let row = local.y - ry;
-                if row >= self.list_h() {
+                if row == 0 || row > self.list_h() {
                     return Some(EventResult::consumed());
                 }
-                let idx = self.list_offset[screen] + row;
+                let idx = self.list_offset[screen] + (row - 1);
                 let len = self.with_session(|s| self.list_len(s, screen));
                 if idx < len {
                     return Some(self.click_row(screen, idx));
@@ -3181,26 +3095,21 @@ fn transport_at_x(x: usize, width: usize, state: &PlayerState) -> Option<Transpo
 /// Row 0 of the whole screen — fixed, full width, drawn on the raw
 /// (unwindowed) printer regardless of any open pane (see `split`): the
 /// screen tabs left-aligned from column 0 — default colors, except the
-/// active tab gets a red background with white text — and `detail` (the
-/// active tab's extra context, e.g. a playlist/search-query name, already
-/// fully punctuated by the caller, or empty) right-aligned past them.
+/// active tab gets a red background with white text — and `marquee` (the
+/// now-playing text, scrolled by `marquee_offset` real-time columns when it
+/// doesn't fit) right-aligned past them. The active screen's own title lives
+/// in the list view's first row instead (see `draw_row_list`), not here.
 ///
 /// Too narrow for the tabs' full `"[N] Name"` labels: they collapse to a
 /// single letter each (`tab_label`) instead of being truncated mid-label.
-/// If there's *still* not enough room for `detail` next to the collapsed
-/// tabs, `marquee` (the same now-playing text as the terminal window title,
-/// scrolled by `marquee_offset` real-time columns — see `marquee_offset`)
-/// is shown there instead of the static `detail` string, since a static
-/// truncation would just show a few unreadable characters.
 ///
-/// Between the tabs and `detail`/`marquee` sits a fixed transport-button
-/// strip (`⏮`/play-pause/`⏭` — see `transport_layout`), drawn whenever it
-/// fits past the tabs; dropped silently otherwise (`detail`/the marquee
-/// take priority over the buttons on a very narrow screen).
+/// Between the tabs and `marquee` sits a fixed transport-button strip
+/// (`⏮`/play-pause/`⏭` — see `transport_layout`), drawn whenever it fits
+/// past the tabs; dropped silently otherwise (`marquee` takes priority over
+/// the buttons on a very narrow screen).
 fn draw_tab_bar(
     printer: &Printer,
     active: usize,
-    detail: &str,
     marquee: &str,
     marquee_offset: usize,
     player_state: &PlayerState,
@@ -3241,17 +3150,10 @@ fn draw_tab_bar(
         return;
     }
     let avail = content_w - detail_start;
-    // Only fall back to the marquee once tabs are already collapsed and
-    // `detail` itself wouldn't fit whole (or there's no `detail` to show at
-    // all) — a collapsed tab bar with plenty of room left still shows the
-    // real (static) `detail` text.
-    let text = if collapsed && (detail.is_empty() || detail.width() > avail) {
-        scroll_title(marquee, avail, marquee_offset)
-    } else if !detail.is_empty() {
-        truncate_ellipsis(detail, avail)
-    } else {
+    let text = scroll_title(marquee, avail, marquee_offset);
+    if text.is_empty() {
         return;
-    };
+    }
     let start = content_w - text.width();
     printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
 }
@@ -3381,6 +3283,10 @@ impl View for MedleyView {
             self.draw_hotkey_menu(printer);
             return;
         }
+        if self.hotkey_capture.is_some() {
+            self.draw_playlist_hotkey_modal(printer);
+            return;
+        }
         if self.playlist_picker_open {
             self.draw_playlist_picker(printer);
             return;
@@ -3397,8 +3303,9 @@ impl View for MedleyView {
         // list running into the thousands (Spotify Liked Songs) must not
         // pay to resolve/format every row on every redraw, only the ones
         // actually on screen. `main_rect`'s height matches what `printer`
-        // will report once windowed to it below.
-        let list_h = main_rect.height();
+        // will report once windowed to it below, minus one row for the
+        // list's own title row (see `draw_row_list`).
+        let list_h = main_rect.height().saturating_sub(1);
         let sel = self.cursor[norm_screen(self.screen)];
         // Persisted, not recomputed from `sel` — see `list_offset`'s doc.
         // `required_size` (which runs before every `draw`, with the same
@@ -3538,8 +3445,12 @@ impl View for MedleyView {
             }
             m.1.elapsed().as_secs() as usize
         };
-        draw_tab_bar(printer, self.screen, &detail, &np, marquee_offset, &st.state);
-        draw_list_body(&printer.windowed(main_rect), &rows, offset, sel, total);
+        draw_tab_bar(printer, self.screen, &np, marquee_offset, &st.state);
+        let main_title = {
+            let title = format!("{}{detail}", screen_name(self.screen));
+            if self.focus == Focus::Main { format!("[{title}]") } else { title }
+        };
+        draw_row_list(&printer.windowed(main_rect), &main_title, &rows, offset, sel, total);
 
         // command / hint line (row above the status line) — also the whole
         // screen's fixed bottom band, not `main_rect`.
@@ -3555,14 +3466,30 @@ impl View for MedleyView {
             // the next keypress instead of being tied to one) — previously
             // `membership_feedback` was only ever drawn inside the hotkey
             // menu, so a bare `f`/`F` outside it produced no visible
-            // feedback at all.
-            Editing::None => self.queue_feedback.clone().or(membership_feedback.map(|m| format!("  {m}"))).unwrap_or_else(|| {
-                let help_key = self
-                    .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)))
-                    .map(String::from)
-                    .unwrap_or_default();
-                format!("  [{help_key}] help")
-            }),
+            // feedback at all. `hotkey_feedback` (bind/unbind result from the
+            // Playlists screen's standalone set-hotkey modal — see
+            // `open_playlist_hotkey_modal`) gets the same treatment, since
+            // that modal closes itself before there's anywhere else to show it.
+            Editing::None => self
+                .queue_feedback
+                .clone()
+                .or(membership_feedback.map(|m| format!("  {m}")))
+                .or(self.hotkey_feedback.clone().map(|m| format!("  {m}")))
+                .unwrap_or_else(|| {
+                    // The Playlists screen's own hint replaces the generic
+                    // help hint when a row/open playlist can take a hotkey —
+                    // `[`]`'s local override there (see `on_event`).
+                    if norm_screen(self.screen) == PLAYLISTS
+                        && self.with_session(|s| self.selected_hotkey_target(s)).is_some()
+                    {
+                        return "  [`] set hotkey".to_string();
+                    }
+                    let help_key = self
+                        .with_session(|s| s.effective_hotkey(&HotkeyTarget::Builtin(core::BuiltinAction::OpenHelp)))
+                        .map(String::from)
+                        .unwrap_or_default();
+                    format!("  [{help_key}] help")
+                }),
         };
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
@@ -3656,13 +3583,8 @@ impl View for MedleyView {
             if screen_size_changed {
                 self.follow_hotkey_menu_offset();
             } else {
-                // Offset is visual-space, so bound it against rows + divider.
-                let (n, divider) = self.with_session(|s| {
-                    let rows = self.hotkey_rows(s);
-                    (rows.len(), hotkey_menu_divider(&rows))
-                });
-                let visual_len = n + divider.is_some() as usize;
-                self.hotkey_menu_offset = bound_offset(self.hotkey_menu_offset, visual_len, h);
+                let n = self.hotkey_rows().len();
+                self.hotkey_menu_offset = bound_offset(self.hotkey_menu_offset, n, h);
             }
         }
         if self.playlist_picker_open {
@@ -3728,6 +3650,7 @@ impl View for MedleyView {
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
         if !is_mouse_followup {
             self.queue_feedback = None;
+            self.hotkey_feedback = None;
             self.with_session(|s| s.clear_membership_feedback());
         }
         // Active text field: capture everything, except a click elsewhere
@@ -3934,6 +3857,11 @@ impl View for MedleyView {
                     self.hotkey_capture = None;
                     EventResult::consumed()
                 }
+                // Same clear gesture as the hotkey menu's row list
+                // (`clear_selected_hotkey`) — carried into the capture step
+                // itself since the Playlists screen's standalone modal has
+                // no row-list step of its own to press it on first.
+                Event::Key(Key::Backspace) => self.clear_captured_hotkey(),
                 ev => match key_name(&ev) {
                     Some(k) if k.chars().count() == 1 => self.bind_captured_key(k.chars().next().unwrap()),
                     _ => EventResult::consumed(),
@@ -3985,19 +3913,12 @@ impl View for MedleyView {
                     EventResult::consumed()
                 }
                 Event::Key(Key::Backspace) => self.clear_selected_hotkey(),
-                Event::Key(Key::Tab) => self.cycle_hotkey_menu_filter(),
                 Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } => {
                     if let Some(local) = position.checked_sub(offset)
                         && local.y >= HOTKEY_LIST_TOP
                     {
-                        let (n, divider) = self.with_session(|s| {
-                            let rows = self.hotkey_rows(s);
-                            (rows.len(), hotkey_menu_divider(&rows))
-                        });
-                        let visual_idx = self.hotkey_menu_offset + (local.y - HOTKEY_LIST_TOP);
-                        if let Some(idx) = hotkey_menu_logical(divider, visual_idx)
-                            && idx < n
-                        {
+                        let idx = self.hotkey_menu_offset + (local.y - HOTKEY_LIST_TOP);
+                        if idx < self.hotkey_rows().len() {
                             self.hotkey_menu_cursor = idx;
                             self.hotkey_feedback = None;
                         }
@@ -4298,12 +4219,14 @@ impl View for MedleyView {
                 }
             }
             // With a playlist (local or remote) selected on the Playlists
-            // screen, backtick skips straight to "press a key to bind" for
-            // it instead of opening the reassign/remove menu — that menu is
-            // only for picking an *existing* binding, which isn't needed here.
+            // screen, backtick locally overrides its global `OpenHotkeyMenu`
+            // meaning: the built-ins-only hotkey menu has no use for a
+            // playlist target, so this goes straight to the standalone
+            // "press a key to bind" modal instead (see
+            // `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`).
             Event::Char('`') if self.with_session(|s| self.selected_hotkey_target(s)).is_some() => {
                 if let Some(target) = self.with_session(|s| self.selected_hotkey_target(s)) {
-                    self.open_hotkey_capture_for(target);
+                    self.open_playlist_hotkey_modal(target);
                 }
                 EventResult::consumed()
             }
