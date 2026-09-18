@@ -187,39 +187,46 @@
   already on another playlist moves (report the steal in the status line, as `bind_captured_key`
   does). Keys this screen's raw handlers consume first (`x` export, `:`, Enter, …) stay theirs —
   see the raw-handler hotkey bug above; don't make them assignable.
-  (2) `` ` `` from anywhere opens a modal popup — a centered box over the current view, not
-  fullscreen (the first non-fullscreen modal here: draw the view underneath as usual, then the box
-  on top; size it to the list, capped to the screen) — listing every playlist `top_rows` yields
-  with its assigned key, like `draw_hotkey_menu`'s `{name} {key}` rows. Adapt whichever is less
-  code: the Playlists widget's row list or `draw_hotkey_menu`/`draw_rows` with its cursor/offset/
-  `jump_hotkey_menu`/`follow_hotkey_menu_offset` plumbing (likely the latter — it's already a
-  "title + cursor list + footer" modal with Backspace-clear). Sort: playlists with an assigned key
-  first, then the rest, each group in its usual order. Preselect: if the context the popup was
-  opened from is a playlist (an open local/remote playlist, or the selected row on the Playlists
-  screen), start the cursor on it; otherwise row 0. Keys inside the popup: Up/Down (and whatever
-  built-in nav keys exist), PgUp/PgDn/Home/End and the mouse wheel scroll as the hotkey menu does
-  today; Backspace clears the selected row's key; Esc (and `` ` `` again) closes; any other
-  single-character key that isn't a built-in's effective key is bound to the selected row at once —
-  no Enter step, no separate "press a key" capture screen — and the popup stays open with the list
-  re-sorted and the cursor following the row it was on. The bottom hint line keeps its current
-  role (hint ↔ bind/steal/refusal feedback), reworded to drop the Enter step. Adding a playlist
-  from inside the popup: offer it only if it falls out cheaply (e.g. a trailing "new playlist…" row
-  that opens the existing `:newplaylist` name prompt and returns to the popup with the new row
-  selected); otherwise leave it out.
+  (2) `` ` `` from anywhere opens a second instance of the Playlists window, floating — a bordered
+  box over the current view, not fullscreen (draw the view underneath as usual, then the box on
+  top; the same floating presentation as the per-window mode item below — build it once) — with its
+  own state but the same behavior as the tabbed one: own cursor/scroll, own open local/remote
+  playlist and drill-in/back navigation, own filter, and every Playlists-screen key working in it,
+  including (1)'s direct assign, Backspace clearing the selected playlist's key, `x` export and
+  the existing scrolling keys/wheel. No duplication: extract the Playlists window out of
+  `MedleyView` into its own type — state (`open_playlist`, `open_remote`, `remembered_playlist`,
+  its `cursor`/scroll slot, filter) plus its row building (`top_rows`, `top_row_name`), drawing,
+  key/mouse handling and `selected_hotkey_target` — that draws into whatever rect it's given and
+  reports actions back, and have `MedleyView` hold two instances (tabbed, floating) of that one
+  type; nothing Playlists-specific stays inline in `draw`/`on_event`, and no code path may assume
+  there is only one. Shared data (`Session` playlists, `ViewCache`, hotkeys) stays shared, so an
+  assign/rename/add in one instance shows in the other on the next draw. Differences are instance
+  settings, not forks of the code: the floating instance sorts playlists with an assigned key
+  first, then the rest (each group in its usual order), re-sorting after an assign with the cursor
+  following its row; on open it preselects the playlist the user came from (an open local/remote
+  playlist in the tabbed instance, or the playing context's playlist) at the top level — showing
+  the list with keys, not drilled in — else keeps its previous cursor; Esc at its top level (and
+  `` ` `` again) closes it, keeping its state for next time. The hotkey column must be visible in
+  the list rows (add it to the shared row builder if the Playlists list doesn't show it already).
+  The bottom hint line keeps its current role (hint ↔ bind/steal/refusal feedback) with the Enter
+  step dropped. Adding a playlist mid-work comes for free through whatever the Playlists window
+  already offers (`:newplaylist`); the new row should appear selected in the floating instance.
   Consequences to handle in the same change: `` ` `` is `BuiltinAction::OpenHotkeyMenu`'s default
   key and today opens the fullscreen built-ins remap menu — retarget that built-in to the playlist
   popup and leave the built-ins menu reachable through `:keys` only (update `command::HELP`, the
   help screen and the hint texts that mention either); delete the Playlists-screen backtick override
   in `on_event` and the standalone `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`, which
-  (1) and (2) replace.
+  (1) and (2) replace. Do the extraction as its own pure-move commit(s) first (AGENTS.md: `sed`/
+  `awk`, build + clippy clean), then add the second instance.
 - [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
   (`TABS` in `ui/src/view.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
   (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
   **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
   main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
   **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`screen_pane`),
-  and **floating** (a bordered box over the current view, not fullscreen — share the popup
-  drawing/hit-testing with the playlist hotkey popup above rather than building a second one).
+  and **floating** (a bordered box over the current view, not fullscreen — the same floating
+  presentation the playlist hotkey rework above introduces for its second Playlists instance; one
+  implementation, and that item's extracted window type is the model for the other windows).
   Today the two families are separate mechanisms: tab screens are fixed numbered screens that can
   only be tabs, panes have only `Screen`/`Embedded` (`pane_mode`/`pane_mode_overrides`, `:panes
   <pane> <screen|embedded>`, `toggle_pane`), and Queue/History exist twice — as a tab and as a pane
