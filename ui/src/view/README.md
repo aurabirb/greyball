@@ -1,7 +1,7 @@
 # View component model
 
 `MedleyView` (`../view.rs`) is the only cursive `View` and is only the shell: screen layout (tab bar,
-window rects from `MedleyView::placed`, hint row, status row), focus, the open `Modal`, command dispatch
+window rects from `MedleyView::placed`, the scrubber line), focus, the open `Modal`, command dispatch
 (`run`) and the session locks. Everything that shows content is a window instance or a modal; the
 files here are those components plus `impl MedleyView` blocks grouped by concern.
 
@@ -45,7 +45,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `playlist-keys` is a second Playlists window, the key overview meant to be opened mid-work: it
   starts floating and closed, and differs from the Playlists tab by two instance settings,
   `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order; the
-  window `Windows::keyed_first` finds) and `Startup::status_row`.
+  window `Windows::keyed_first` finds).
   The `SwitchPlaylists` key (backtick) runs `switch_playlists`: when that window is shown it takes focus (the
   open entry remembers the focus it came from, and the key on the focused one returns there, else to the
   Playlists tab, and closes it only when it floats); else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
@@ -81,21 +81,17 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
   Backspace is `Unbind`: a playlist loses its key, a built-in returns to its default, which
   `clear_hotkey` refuses while another binding holds that default. Its idle status row text is the capture prompt, else what the row under the cursor allows or why it has no key.
-- A window with `Startup::status_row` (Help, `playlist-keys`) reserves its last row: `Window::content` is
-  the rect without it, which is what the component lays out, draws and hit-tests in (a click on the row is
-  consumed). `Window::draw` fills the row with the last bind result (`Notice::Status`, styled as a warning
-  when refused, cleared by the next key or blur), else the component's idle hints: a list's `[key] assign   [Backspace] clear` where they apply, then `[M] <next placement>` (the `CyclePlacement` key and `Windows::next_placement`, `close` when it closes) while it has focus. `Notice::Status` goes
-  to the focused window's `Window::set_status` when it has such a row, else to the hint row.
-- Corner slots (`corners.rs`): each surface declares which bottom corners it offers (`screen::Corners`): a window with `Startup::status_row` both (`Startup::corners`), the scrubber `StatusLine` the right one, a modal none (`Modal::CORNERS`); a window docked along the bottom edge (`pane_cfg.side` `Bottom`) offers none. `MedleyView::slots` is the one function that picks, per corner, the scrubber line when it is shown and offers it, else the nearest offering window's status row, and none under a modal. The warnings button is drawn through it (`warnings_widget`, at the right end of the slot's row; on the scrubber line the `StatusLine` gets the width left of it), and its click, draw and place in the Tab cycle all read that one result. A key other than Enter, Tab or Shift-Tab pressed on the focused button first focuses its host window (the slot's window, or for the scrubber line the window occupying the corner), so navigation acts on that window's list. The `:command`/search line (`input_line`) draws in the left slot through `input_rect` when that slot, up to the button, is at least `INPUT_FLOOR` wide, else it takes the whole hint row.
+- Every window reserves its last row as its status row (`Window::content` is the rect without it, which is what the component lays out, draws and hit-tests in; a click on the row is
+  consumed). `Window::draw` fills it with the last bind result (`Notice::Status`, styled as a warning when refused, cleared by the next key or blur), else the flash (`MedleyView::feedback`) when the window has focus, else the component's idle hints: a list's `[key] assign   [Backspace] clear` where they apply, else `[?] help   [`] playlist keys`; a pane's own keys; `[Esc] close` where Esc closes it; then `[M] <next placement>` (the `CyclePlacement` key and `Windows::next_placement`, `close` when it closes) while it has focus. A list also draws its `cursor/total unit` count (`TrackList::count`) at the right end, which the idle hint gives way to and a message does not. The shell lends the row a `StatusCtx` per frame: the focus-only parts, the keys and the cells at the right end the warnings button covers. `Notice::Status` goes to the focused window's `Window::set_status`.
+- Corner slots (`corners.rs`): each surface declares which bottom corners it offers (`screen::Corners`): a window both (`Window::CORNERS`), the scrubber `StatusLine` the right one, a modal none (`Modal::CORNERS`); a window docked along the bottom edge (`pane_cfg.side` `Bottom`) offers none. `MedleyView::slots` is the one function that picks, per corner, the scrubber line when it is shown and offers it, else the nearest offering window's status row, and none under a modal. The warnings button is drawn through it (`warnings_widget`, at the right end of the slot's row; on the scrubber line the `StatusLine` gets the width left of it), and its click, draw and place in the Tab cycle all read that one result. A key other than Enter, Tab or Shift-Tab pressed on the focused button first focuses its host window (the slot's window, or for the scrubber line the window occupying the corner), so navigation acts on that window's list. The `:command`/search line (`input_line`) draws in the left slot through `input_rect` when that slot, up to the button, is at least `INPUT_FLOOR` wide, else it takes the whole bottom line, the scrubber line's row.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
   recomputed from the screen size, cascaded from the centre by the window's rank by id among the open
   floats, so raising one moves none. Layout, draw and the mouse hit-test all read that one `placed()`.
   An open `Screen` window (`fullscreen()`, the newest) takes the place of the active tab as
-  `main_id()`: it covers the tab, the docked windows, the tab bar and the status row, leaving the hint
-  row as its footer, and the floating windows show over it. Whatever falls back to "the main window"
-  (focus, the active list, Enter/Esc fall-through, the cursor readout) therefore never reaches the
+  `main_id()`: it covers the tab, the docked windows, the tab bar and the scrubber line, and the floating windows show over it. Whatever falls back to "the main window"
+  (focus, the active list, Enter/Esc fall-through) therefore never reaches the
   hidden tab. A fullscreen list lets every shell key through, acting on its own selection (`/` filters it, `:`, `q`, playlist keys,
   `+`, `?`); a digit, like anything that `activate`s a tab, closes the fullscreen window and shows
   that tab. A floating or fullscreen window that is no list owns the keyboard: a key it ignores is dropped but for those `Action::is_window_action` names
@@ -121,7 +117,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
     `ToggleSetting(row)`, `Bind`/`Unbind`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
   - `blur()` when the window closes or another takes focus, and `set_status(text, refused)`, a message
-    for the window's own status row (`Startup::status_row`); only Help has state to drop.
+    for the window's own status row; only Help has state to drop.
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
@@ -170,7 +166,7 @@ build closure against its key.
 | `TrackList::top` (ordered top-level rows) | playlists, remote-playlists and hotkeys generations | local and remote playlists, which have a key, `keyed_first` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, liked marks, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
-| `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
+| `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, the help, playlist-keys and placement keys |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
 | `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
 | `HelpPane::fitted` | the `built` key, body height | — (gates re-following the cursor after a re-wrap or resize) |
@@ -238,8 +234,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   search, playlist pages, scan, token refresh, config): a row in the warnings list until restart,
   deduplicated and bounded, counted by `Session::warning_count` — never a popup or a flash.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
-  is shown — `Flash` on the hint row (what a key or command did, `Dispatch::Done` included) or a
-  `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
+  is shown — `Flash` on the focused window's status row (what a key or command did, `Dispatch::Done` included) or a
+  `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The flash has one slot, `MedleyView::feedback`, cleared by the next input event (not a
   mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included.
   A modal's keys, its closing one included, leave it, so a result that lands behind the picker is
   readable after Esc. A window or modal never writes it: it returns an outcome and the shell notifies.

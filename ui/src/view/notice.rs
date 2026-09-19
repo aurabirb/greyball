@@ -2,9 +2,9 @@ use core::{CoreEvent, Dispatch, MembershipOutcome, ScanMode};
 
 /// Where a message is shown; the one place that decides. Background failures never come here: `Session::warn` lists them.
 pub(crate) enum Notice {
-    /// The hint row, until the next input event: what a key did, or why it is blocked right now.
+    /// The focused window's status row, until the next input event: what a key did, or why it is blocked right now.
     Flash(String),
-    /// The focused window's own status row when it has one, else the hint row: a bind's result, or why it was refused.
+    /// The focused window's own status row until its next key: a bind's result, or why it was refused.
     Status { text: String, refused: bool },
     /// A dialog the user dismisses: a plugin's report, or the failure of something the user asked for.
     Popup(String),

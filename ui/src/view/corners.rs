@@ -10,7 +10,7 @@ use super::modal::Modal;
 use super::panes::BOTTOM_BAR_ROWS;
 use super::status_line::StatusLine;
 use super::warnings::warnings_rect;
-use super::window::WindowId;
+use super::window::{Window, WindowId};
 use super::{MedleyView, Placed};
 
 /// The narrowest slot a command line is drawn in; a docked pane can be about 30 columns.
@@ -85,8 +85,7 @@ impl MedleyView {
             .iter()
             .filter(|placed| !self.docked_at_bottom(placed.id))
             .filter_map(|placed| {
-                let window = &self.windows[placed.id];
-                let row = window.status_rect().filter(|_| window.corners().offers(corner))?;
+                let row = self.windows[placed.id].status_rect().filter(|_| Window::CORNERS.offers(corner))?;
                 Some(Slot { row, scrubber: false, host: placed.id })
             })
             .min_by_key(|slot| reach(slot.row))
@@ -103,11 +102,14 @@ impl MedleyView {
         Self::warnings_widget(&self.slots(&self.placed()), self.warn_count())
     }
 
-    /// Where the input line draws: the left slot's row up to the button, when that is wide enough; else `None`, and the line spans the whole bottom line.
-    pub(super) fn input_rect(slots: &Slots, widget: Option<&Widget>) -> Option<Rect> {
-        let row = slots.at(Corner::Left)?.row;
-        let beside = widget.filter(|widget| widget.rect.top() == row.top() && widget.rect.left() >= row.left());
-        let width = beside.map_or(row.width(), |widget| widget.rect.left() - row.left());
-        Some(Rect::from_size(row.top_left(), (width, 1))).filter(|rect| rect.width() >= INPUT_FLOOR)
+    /// Where the input line draws: the left slot's row up to the button when that is wide enough, else the whole bottom line.
+    pub(super) fn input_rect(&self, slots: &Slots, widget: Option<&Widget>) -> Rect {
+        let clipped = |row: Rect| {
+            let beside = widget.filter(|widget| widget.rect.top() == row.top() && widget.rect.left() >= row.left());
+            Rect::from_size(row.top_left(), (beside.map_or(row.width(), |widget| widget.rect.left() - row.left()), 1))
+        };
+        let size = self.last_screen_size;
+        let slot = slots.at(Corner::Left).map(|slot| clipped(slot.row)).filter(|rect| rect.width() >= INPUT_FLOOR);
+        slot.unwrap_or_else(|| clipped(Rect::from_size((0, size.y.saturating_sub(1)), (size.x, 1))))
     }
 }

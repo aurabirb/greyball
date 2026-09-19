@@ -185,27 +185,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Corner slots: replace the global bottom hint/command row with a shared "corner slot" mechanism,
-  in one remaining step. The slot function is `MedleyView::slots` (`ui/src/view/corners.rs`); the
-  warnings button and the `:command`/search input line (`input_rect`, `INPUT_FLOOR`) already draw through it. Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
-  the shell hint text, the command/search line, flash feedback, the cursor/total readout and,
-  right-aligned, the red warnings button (`warnings_label`, `Focus::Warnings`, the
-  focus order, the click hit-test in `on_event`); the per-window status row is now a generic window
-  feature (`Startup::status_row`, `Window::content()`).
-  - Availability: every surface that could host a slot says which of its two bottom corners (left,
-    right) it offers — a small per-surface declaration next to `Startup::status_row`, not
-    hard-coded in the shell. Defaults: a window with a status row offers both; the bottom scrubber
-    status line (`StatusLine`) offers the RIGHT slot only; modal windows (picker, warnings modal,
-    confirm dialogs — anything drawn over the whole screen) offer NOTHING, so a widget never
-    appears under or over a modal. A surface with no status row offers nothing. A window docked along the bottom edge (dock side `Bottom`) offers neither bottom corner, so the nearest-slot function skips it (`MedleyView::docked_at_bottom`).
-  - Remaining step: delete the global row: hint text and flashes (`Notice::Status`) move into the focused
-    window's own status row (guess to verify); the cursor/total count stops being a shell feature —
-    each list window draws its own `cursor/total unit` in its own status row if it wants one (today
-    only the main list has it, so docked and floating lists gain a count) and the shell's readout
-    code and its `Chrome`/frame plumbing are deleted; windows without a status row get one enabled
-    or a fallback, `BOTTOM_BAR_ROWS` drops by one (it feeds `split`,
-    `required_size`, `list_h()` and the mouse row maths) so the list gains the row. Judge each step
-    in real-terminal screenshots (tab, docked window, floats covering the corner, narrow terminal).
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title

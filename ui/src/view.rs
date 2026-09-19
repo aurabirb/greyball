@@ -8,8 +8,6 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use unicode_width::UnicodeWidthStr;
-
 use core::{Command, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
@@ -20,14 +18,14 @@ use corners::Widget;
 use frame::Chrome;
 use input::Editing;
 use memo::Memo;
-use modal::{Modal, modal_body};
+use modal::Modal;
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
 use track_list::TrackList;
 use warnings::warnings_label;
-use window::{Ctx, WindowFrame, WindowId, WindowOutcome, Windows};
+use window::{Ctx, StatusCtx, WindowId, WindowOutcome, Windows};
 
 mod corners;
 mod frame;
@@ -84,7 +82,7 @@ pub struct MedleyView {
     last_screen_size: Vec2,
     editing: Editing,
     buffer: String,
-    /// The hint row's one transient message, cleared by the next input event.
+    /// The focused window's status row's one transient message, cleared by the next input event.
     feedback: Option<String>,
     /// Dock side and stacking, shared by every docked window.
     pane_cfg: PaneLayoutConfig,
@@ -223,7 +221,7 @@ impl MedleyView {
         self.windows.placement(id).over_view()
     }
 
-    /// The newest open fullscreen window, which covers the tab, the docked windows and every fixed row but the hint row.
+    /// The newest open fullscreen window, which covers the tab, the docked windows and every fixed row.
     fn fullscreen(&self) -> Option<WindowId> {
         self.open_in(Placement::Screen).last()
     }
@@ -233,7 +231,7 @@ impl MedleyView {
         let size = self.last_screen_size;
         let plain = |(id, rect)| Placed { id, rect, frame: rect };
         let (main_rect, docked) = match self.fullscreen() {
-            Some(_) => (modal_body(Rect::from_size((0, 0), size), false), Vec::new()),
+            Some(_) => (Rect::from_size((0, 0), size), Vec::new()),
             None => split(size, &self.open_in(Placement::Docked).collect::<Vec<_>>(), self.pane_cfg),
         };
         // A float's cascade slot is its rank by id among the open ones, so raising one moves none.
@@ -395,7 +393,10 @@ impl View for MedleyView {
         // One lock for the whole frame: every session-derived value comes out here, then rendering runs without it.
         let placed = self.placed();
         let frame = self.frame(&placed);
-        // A fullscreen window leaves only the hint row, as its footer.
+        let chrome = &frame.chrome;
+        let slots = self.slots(&placed);
+        let widget = Self::warnings_widget(&slots, chrome.warn_count);
+        // A fullscreen window covers the tab bar, the scrubber line and the docked windows.
         let covered = self.fullscreen().is_some();
         if !covered && self.open_in(Placement::Docked).next().is_some() {
             draw_separator(self.pane_cfg.side, printer, self.windows[self.main_id()].rect());
@@ -407,56 +408,31 @@ impl View for MedleyView {
             if self.windows.placement(placed.id) == Placement::Floating {
                 draw_float_frame(printer, placed.frame);
             }
-            let place = frame.chrome.place_key.filter(|_| self.focus == Focus::Window(placed.id)).map(|key| {
+            let place = chrome.place_key.filter(|_| self.focus == Focus::Window(placed.id)).map(|key| {
                 let target = self.windows.next_placement(placed.id).map_or("close", Placement::word);
                 format!("[{key}] {target}")
             });
-            window.draw(printer, marked, window_frame, self.windows.placement(placed.id), place);
+            let status = StatusCtx {
+                flash: self.feedback.as_deref().filter(|_| self.focused_id() == placed.id),
+                place,
+                help_key: chrome.help_key,
+                keys_key: chrome.keys_key,
+                reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect.width()),
+            };
+            window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);
         }
 
-        let chrome = &frame.chrome;
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
         if !covered {
             TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &frame.status.state }
                 .draw(printer, &frame.status.now_playing, marquee_offset);
-        }
-
-        // command / hint line (row above the status line).
-        let main = match &frame.windows[0] {
-            WindowFrame::List(list) => Some(list),
-            _ => None,
-        };
-        let bottom = printer.size.y.saturating_sub(if covered { 1 } else { 2 });
-        let slots = self.slots(&placed);
-        let widget = Self::warnings_widget(&slots, chrome.warn_count);
-        let input = self.input_line();
-        let input_rect = Self::input_rect(&slots, widget.as_ref()).filter(|_| input.is_some());
-        let line = match (&input, input_rect) {
-            (Some(input), None) => input.clone(),
-            _ => self.hint_line(chrome),
-        };
-        // Cursor position in the main list / its length, right-aligned.
-        let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
-        let style = if covered { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
-        printer.with_color(style, |printer| {
-            printer.print((0, bottom), &pad(&line, printer.size.x));
-            if let Some(list) = main.filter(|list| list.total > 0) {
-                let more = if list.loading { "+" } else { "" };
-                let readout = format!("{}/{}{more} {}", cursor.min(list.total - 1) + 1, list.total, list.unit);
-                let x = printer.size.x.saturating_sub(readout.width() + 1);
-                if x >= line.width() + 2 {
-                    printer.print((x, bottom), &readout);
-                }
-            }
-        });
-
-        if let (Some(input), Some(rect)) = (&input, input_rect) {
-            printer.windowed(rect).with_color(ColorStyle::primary(), |p| p.print((0, 0), &pad(input, p.size.x)));
-        }
-        if !covered {
             let y = printer.size.y.saturating_sub(1);
             let width = Widget::status_width(widget.as_ref(), printer.size.x);
             frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);
+        }
+        if let Some(input) = self.input_line() {
+            let rect = self.input_rect(&slots, widget.as_ref());
+            printer.windowed(rect).with_color(ColorStyle::primary(), |p| p.print((0, 0), &pad(&input, p.size.x)));
         }
         if let Some(widget) = widget {
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
@@ -520,7 +496,7 @@ impl MedleyView {
             return EventResult::consumed();
         }
 
-        // Fixed rows of the whole screen: the tab bar on top, the hint row and the status line at the bottom.
+        // Fixed rows of the whole screen: the tab bar on top, the status line at the bottom.
         if fullscreen.is_none()
             && let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(local) = position.checked_sub(*offset)

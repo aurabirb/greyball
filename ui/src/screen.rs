@@ -134,21 +134,12 @@ pub struct Startup {
     pub home: Home,
     /// A Playlists list puts the playlists that have a key first.
     pub keyed_first: bool,
-    /// The window reserves its last row for its own hints and the last bind result.
-    pub status_row: bool,
     /// The startup tab this window is the companion of: it opens and cycles in the tab's place, and never joins the tab bar.
     pub companion_of: Option<&'static str>,
 }
 
-impl Startup {
-    /// A window with a status row offers both bottom corners in it; one without offers none.
-    pub const fn corners(&self) -> Corners {
-        if self.status_row { Corners::BOTH } else { Corners::NONE }
-    }
-}
-
 const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {
-    Startup { name, kind, home, keyed_first: false, status_row: false, companion_of: None }
+    Startup { name, kind, home, keyed_first: false, companion_of: None }
 }
 
 const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str) -> Startup {
@@ -172,6 +163,6 @@ pub const WINDOWS: [Startup; 14] = [
     companion("results", Kind::List(ListKind::Search), Home::Pane, "search"),
     companion("queue", Kind::List(ListKind::Queue), Home::Pane, "queue-tab"),
     companion("history", Kind::List(ListKind::History), Home::Pane, "history-tab"),
-    Startup { keyed_first: true, status_row: true, ..companion("playlist-keys", Kind::List(ListKind::Playlists), Home::Float, "playlists") },
-    Startup { status_row: true, ..startup(HELP, Kind::Help, Home::Float) },
+    Startup { keyed_first: true, ..companion("playlist-keys", Kind::List(ListKind::Playlists), Home::Float, "playlists") },
+    startup(HELP, Kind::Help, Home::Float),
 ];

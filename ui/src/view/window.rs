@@ -13,7 +13,9 @@ use crate::vis::Vis;
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
-use super::text::pad;
+use unicode_width::UnicodeWidthStr;
+
+use super::text::{pad, pad_right_aligned};
 use super::settings::{SettingsEntry, SettingsPane};
 use super::track_list::{ListFrame, TrackList};
 
@@ -75,10 +77,21 @@ enum Body {
     Help(HelpPane),
 }
 
-/// A window's own last row: the last bind result and whether it was a refusal, else the component's hints.
+/// A window's own last row: the last bind result and whether it was a refusal, else the flash, else the component's hints.
 #[derive(Default)]
 struct StatusRow {
     message: Option<(String, bool)>,
+}
+
+/// What the shell lends a window's status row for one frame; the focus-only parts are `None` in an unfocused window.
+pub(super) struct StatusCtx<'a> {
+    pub(super) flash: Option<&'a str>,
+    /// The placement key's hint.
+    pub(super) place: Option<String>,
+    pub(super) help_key: Option<char>,
+    pub(super) keys_key: Option<char>,
+    /// Cells at the row's right end the shell draws over.
+    pub(super) reserved: usize,
 }
 
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
@@ -86,8 +99,7 @@ pub(super) struct Window {
     pub(super) kind: Kind,
     body: Body,
     rect: Rect,
-    status: Option<StatusRow>,
-    corners: Corners,
+    status: StatusRow,
 }
 
 impl Window {
@@ -109,20 +121,18 @@ impl Window {
         self.rect
     }
 
-    pub(super) fn corners(&self) -> Corners {
-        self.corners
-    }
+    /// Every window has a status row: both bottom corners are offered in it.
+    pub(super) const CORNERS: Corners = Corners::BOTH;
 
-    /// The status row in screen coordinates, when the window has one with room to draw.
+    /// The status row in screen coordinates, when the window has room to draw it.
     pub(super) fn status_rect(&self) -> Option<Rect> {
-        let y = self.rect.height().checked_sub(1).filter(|&y| y > 0 && self.status.is_some())?;
+        let y = self.rect.height().checked_sub(1).filter(|&y| y > 0)?;
         Some(Rect::from_size((self.rect.left(), self.rect.top() + y), (self.rect.width(), 1)))
     }
 
     /// `rect()` without the status row: the rect the component lays out, draws and hit-tests in.
     fn content(&self) -> Rect {
-        let rows = usize::from(self.status.is_some());
-        Rect::from_size(self.rect.top_left(), (self.rect.width(), self.rect.height().saturating_sub(rows)))
+        Rect::from_size(self.rect.top_left(), (self.rect.width(), self.rect.height().saturating_sub(1)))
     }
 
     /// Takes the rect this layout pass gave the window and keeps its scroll state inside it.
@@ -142,16 +152,12 @@ impl Window {
         if let Body::Help(help) = &mut self.body {
             help.blur();
         }
-        if let Some(row) = &mut self.status {
-            row.message = None;
-        }
+        self.status.message = None;
     }
 
-    /// Puts a message on the window's own status row until its next key; false when it has none.
-    pub(super) fn set_status(&mut self, text: &str, refused: bool) -> bool {
-        let Some(row) = &mut self.status else { return false };
-        row.message = Some((text.to_string(), refused));
-        true
+    /// Puts a message on the window's own status row until its next key.
+    pub(super) fn set_status(&mut self, text: &str, refused: bool) {
+        self.status.message = Some((text.to_string(), refused));
     }
 
     /// Brings a list's scroll window back around its cursor.
@@ -171,17 +177,25 @@ impl Window {
         }
     }
 
-    /// The status row's text when nothing was reported; `placement` is the window's, `place` the placement key's hint.
-    fn idle(&self, frame: &WindowFrame, placement: Placement, place: Option<String>) -> String {
+    /// The status row's text when nothing was reported; `placement` is the window's.
+    fn idle(&self, frame: &WindowFrame, placement: Placement, status: &StatusCtx) -> String {
+        let pane = |keys: &str| {
+            let mut hints: Vec<String> = Some(keys).filter(|keys| !keys.is_empty()).map(String::from).into_iter().collect();
+            hints.extend(placement.closes_on_esc().then(|| "[Esc] close".to_string()));
+            hints.extend(status.place.clone());
+            hints.join("   ")
+        };
         match (&self.body, frame) {
-            (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, place),
+            (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, placement, status),
             (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, placement),
-            _ => String::new(),
+            (Body::Settings(_), _) => pane("[↑/↓ j/k] move   [Enter/Space] toggle"),
+            (Body::Log(_), _) => pane("[↑/↓ j/k PgUp/PgDn J/K] scroll"),
+            _ => pane(""),
         }
     }
 
-    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `placement` the window's, `place` the placement key's hint.
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, placement: Placement, place: Option<String>) {
+    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `placement` the window's.
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, placement: Placement, status: &StatusCtx) {
         let printer = &printer.windowed(self.rect);
         let content = &printer.windowed(Rect::from_size((0, 0), self.content().size()));
         match (&self.body, frame) {
@@ -192,20 +206,30 @@ impl Window {
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
         }
-        if let Some(row) = &self.status
-            && let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0)
-        {
-            let (text, refused) = row.message.clone().unwrap_or_else(|| (self.idle(frame, placement, place), false));
-            let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
-            printer.with_color(style, |p| p.print((0, y), &pad(&text, p.size.x)));
-        }
+        let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0) else { return };
+        let message = self.status.message.clone().or_else(|| status.flash.map(|flash| (flash.to_string(), false)));
+        let idle = message.is_none();
+        let (text, refused) = message.unwrap_or_else(|| (self.idle(frame, placement, status), false));
+        let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
+        let room = printer.size.x.saturating_sub(status.reserved);
+        let count = match (&self.body, frame) {
+            (Body::List(list), WindowFrame::List(frame)) => list.count(frame),
+            _ => None,
+        };
+        // A message keeps its room; the idle hint gives way to the count.
+        let count = count.filter(|count| idle || text.width() + count.width() + 2 <= room);
+        let left = count.as_ref().map_or(room, |count| room.saturating_sub(count.width() + 2));
+        printer.with_color(style, |p| {
+            p.print((0, y), &pad(&text, left));
+            if let Some(count) = &count {
+                p.print((left, y), &pad_right_aligned(&format!("{count} "), room - left));
+            }
+        });
     }
 
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx) -> WindowOutcome {
-        if !matches!(event, Event::Mouse { .. })
-            && let Some(row) = &mut self.status
-        {
-            row.message = None;
+        if !matches!(event, Event::Mouse { .. }) {
+            self.status.message = None;
         }
         if let Event::Mouse { offset, position, .. } = event
             && position.checked_sub(*offset).is_some_and(|pos| self.rect.contains(pos) && !self.content().contains(pos))
@@ -278,8 +302,7 @@ impl Windows {
             Kind::Help => Body::Help(HelpPane::default()),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
-        let status = startup.status_row.then(StatusRow::default);
-        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status, corners: startup.corners() });
+                self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status: StatusRow::default() });
         self.placements.of.push(placement);
         WindowId(self.items.len() - 1)
     }

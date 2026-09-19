@@ -12,12 +12,12 @@ use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, Sou
 
 use crate::keybindings;
 use crate::row::RowItem;
-use crate::screen::ListKind;
+use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
-use super::window::{Ctx, WindowOutcome};
+use super::window::{Ctx, StatusCtx, WindowOutcome};
 
 /// Two clicks on the same row within this long count as a double-click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
@@ -100,10 +100,10 @@ fn rank_filter(matcher: &SkimMatcherV2, text: &str, query: &str) -> Option<Filte
 pub(super) struct ListFrame {
     title: String,
     rows: Vec<Row>,
-    pub(super) total: usize,
+    total: usize,
     /// A paginated remote list only knows what it has loaded so far.
-    pub(super) loading: bool,
-    pub(super) unit: &'static str,
+    loading: bool,
+    unit: &'static str,
     /// A keypress binds the playlist row under the cursor.
     pub(super) assignable: bool,
 }
@@ -483,14 +483,22 @@ impl TrackList {
         })
     }
 
-    /// The status row's text when nothing was reported: what a key does here; `place` is the placement key's hint.
-    pub(super) fn idle(&self, frame: &ListFrame, place: Option<String>) -> String {
+    /// The status row's text when nothing was reported: what a key does here.
+    pub(super) fn idle(&self, frame: &ListFrame, placement: Placement, status: &StatusCtx) -> String {
+        let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
         let mut hints = match frame.assignable {
             true => vec!["[key] assign".to_string(), "[Backspace] clear".into()],
-            false => vec![],
+            false => vec![format!("[{}] help", key(status.help_key)), format!("[{}] playlist keys", key(status.keys_key))],
         };
-        hints.extend(place);
+        hints.extend(placement.closes_on_esc().then(|| "[Esc] close".to_string()));
+        hints.extend(status.place.clone());
         hints.join("   ")
+    }
+
+    /// The cursor's place in the list, `cursor/total unit`; `None` when the list is empty.
+    pub(super) fn count(&self, frame: &ListFrame) -> Option<String> {
+        let more = if frame.loading { "+" } else { "" };
+        (frame.total > 0).then(|| format!("{}/{}{more} {}", self.state.cursor.min(frame.total - 1) + 1, frame.total, frame.unit))
     }
 
     /// `marked` brackets the title, the focus marker docked windows use.

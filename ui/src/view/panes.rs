@@ -14,7 +14,7 @@ use super::window::WindowId;
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
 
-pub(super) const BOTTOM_BAR_ROWS: usize = 2;
+pub(super) const BOTTOM_BAR_ROWS: usize = 1;
 
 /// `Action::CyclePaneLayout`'s rotation, one `(side, stack)` step per press.
 pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
@@ -305,7 +305,7 @@ impl MedleyView {
         true
     }
 
-    /// `Action::CyclePlacement`: the focused window moves on one placement, and the hint row names it.
+    /// `Action::CyclePlacement`: the focused window moves on one placement, and its status row names it.
     pub(super) fn cycle_placement(&mut self) {
         let id = self.focused_id();
         if let Some(companion) = self.windows.companion(id) {
@@ -356,17 +356,6 @@ impl MedleyView {
         self.vis.set_enabled(shown);
         let fps = if shown { crate::vis::FPS } else { crate::BASELINE_FPS };
         EventResult::with_cb(move |siv| siv.set_fps(fps))
-    }
-
-    /// What the footer of a focused fullscreen window that keeps the keys says of them.
-    pub(super) fn screen_hint(&self) -> Option<&'static str> {
-        let id = self.fullscreen().filter(|&id| self.focus == Focus::Window(id))?;
-        match self.windows[id].kind {
-            Kind::Vis => Some("[Esc] close"),
-            Kind::Settings => Some("[Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle"),
-            Kind::Log => Some("[Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll"),
-            Kind::List(_) | Kind::Help => None,
-        }
     }
 }
 
