@@ -249,10 +249,10 @@ fn save_last_played(last: &LastPlayed) {
     }
 }
 
-fn load_media_cache_dir() -> Option<PathBuf> {
+fn load_state_path(key: &str) -> Option<PathBuf> {
     let text = std::fs::read_to_string(state_path()).ok()?;
     let v: toml::Value = text.parse().ok()?;
-    v.get("media_cache_dir")?.as_str().map(PathBuf::from)
+    v.get(key)?.as_str().map(PathBuf::from)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -264,6 +264,7 @@ fn save_state(
     show_hints: Option<bool>,
     auto_update: Option<bool>,
     media_cache_dir: Option<&std::path::Path>,
+    media_cache_move_from: Option<&std::path::Path>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
@@ -285,6 +286,9 @@ fn save_state(
     }
     if let Some(dir) = media_cache_dir {
         text.push_str(&format!("media_cache_dir = {}\n", toml::Value::String(dir.to_string_lossy().into_owned())));
+    }
+    if let Some(dir) = media_cache_move_from {
+        text.push_str(&format!("media_cache_move_from = {}\n", toml::Value::String(dir.to_string_lossy().into_owned())));
     }
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
@@ -440,7 +444,7 @@ fn spawn_plugin_health_timer(session: Arc<Mutex<medley_core::Session>>, bus: Bus
 }
 
 fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut cfg, config_problems) = load_config();
+    let (mut cfg, mut config_problems) = load_config();
     // Diff base for `source_overrides` at shutdown — captured before Settings-toggled overrides apply.
     let config_source_defaults: Vec<(&str, bool)> =
         TOGGLABLE_SOURCES.iter().map(|&n| (n, cfg.source_enabled(n).unwrap_or(false))).collect();
@@ -464,9 +468,16 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         cfg.media_cache_dir = data_dir().join("media-cache");
     }
     let config_media_cache_dir = cfg.media_cache_dir.clone();
-    if let Some(dir) = load_media_cache_dir() {
+    if let Some(dir) = load_state_path("media_cache_dir") {
         cfg.media_cache_dir = dir;
     }
+    if let Some(from) = load_state_path("media_cache_move_from").filter(|from| *from != cfg.media_cache_dir)
+        && let Err(e) = medley_core::move_cache(&from, &cfg.media_cache_dir)
+    {
+        config_problems.push(format!("media cache not moved to {}: {e}; still using {}", cfg.media_cache_dir.display(), from.display()));
+        cfg.media_cache_dir = from;
+    }
+    let running_media_cache_dir = cfg.media_cache_dir.clone();
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
     }
@@ -762,7 +773,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let show_hints = Some(s.cfg.show_hints).filter(|&shown| shown != config_show_hints);
     let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
     let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
-    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, media_cache_dir, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    let media_cache_move_from = Some(running_media_cache_dir.as_path()).filter(|&dir| dir != s.cfg.media_cache_dir);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, media_cache_dir, media_cache_move_from, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

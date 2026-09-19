@@ -371,3 +371,67 @@ impl MediaCache {
         }
     }
 }
+
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (src, dest) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&src)?, &dest)?;
+        } else if kind.is_dir() {
+            copy_tree(&src, &dest)?;
+        } else {
+            std::fs::copy(&src, &dest)?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_dir(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let _ = if entry.file_type().is_ok_and(|k| k.is_dir()) { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+        }
+    }
+}
+
+/// Moves a cache (directory plus its `.redb` index) to `to`, which must hold no cache yet. Renames on one
+/// filesystem, else copies and deletes the old only after the copy fully succeeded; on error the old cache is intact.
+pub fn move_cache(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let (from_idx, to_idx) = (from.with_extension("redb"), to.with_extension("redb"));
+    if to_idx.exists() || std::fs::read_dir(to).is_ok_and(|mut d| d.next().is_some()) {
+        return Err(io::Error::other(format!("{} already holds a cache", to.display())));
+    }
+    std::fs::create_dir_all(to)?;
+    let has_idx = from_idx.exists();
+    if !from.exists() && !has_idx {
+        return Ok(());
+    }
+    if from.metadata()?.dev() == to.metadata()?.dev() {
+        if has_idx {
+            std::fs::rename(&from_idx, &to_idx)?;
+        }
+        if let Err(e) = std::fs::rename(from, to) {
+            if has_idx {
+                let _ = std::fs::rename(&to_idx, &from_idx);
+            }
+            return Err(e);
+        }
+        return Ok(());
+    }
+    let copied = copy_tree(from, to).and_then(|()| if has_idx { std::fs::copy(&from_idx, &to_idx).map(drop) } else { Ok(()) });
+    if let Err(e) = copied {
+        clear_dir(to);
+        let _ = std::fs::remove_file(&to_idx);
+        return Err(e);
+    }
+    std::fs::remove_dir_all(from)?;
+    if has_idx {
+        std::fs::remove_file(&from_idx)?;
+    }
+    Ok(())
+}

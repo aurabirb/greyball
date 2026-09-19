@@ -141,7 +141,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Editing::CacheDir => match self.with_session_mut(|s| s.set_media_cache_dir(&text)) {
-                Ok(dir) => self.notify(Notice::Flash(format!("cache dir {}: restart to use it (old cache not moved)", core::tilde(&dir)))),
+                Ok(dir) => self.notify(Notice::Flash(format!("cache dir {}: restart to move and use it", core::tilde(&dir)))),
                 Err(e) => self.notify(Notice::failed(e)),
             },
             Editing::Filter => {
