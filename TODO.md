@@ -23,6 +23,33 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
+- [ ] Remove the "closed" step from the placement key's cycle (`Windows::next_placement`,
+  `ui/src/view/window.rs`; `cycle_placement`, `ui/src/view/panes.rs`): a startup tab's companion
+  cycles docked → screen → float → docked and never ends in closed, because any non-tabbed window
+  closes on Esc. `M` on the tab still opens its companion docked. The `[M] <next>` status hint stops
+  ever saying "close", and the README's companion cycle text follows.
+- [ ] Rework the status-row hints of every window (`TrackList::idle` in `ui/src/view/track_list.rs`,
+  `HelpPane::idle`, the other windows' idle text; keys come from the effective bindings via the
+  status context, never hard-coded letters):
+  - Playlists top level: no like hint. When the selected playlist has no key show `[any] assign`;
+    when it already has one show `[Backspace] clear` instead of assign. The Playlists TAB shows
+    the switch key (`` [`] `` playlists window, from `SwitchPlaylists`) and no `[M]`; the popout
+    playlist window (`playlist-keys`) follows the same assign/clear rule and keeps its `[M] <next>`
+    placement hint (it has no other way to be placed — confirm with the owner).
+  - Inside a playlist (its track list): `[l] like   [w] queue   [any] assign` — like, the queue key,
+    and the assign hint; no `` [`] `` and no `[M]` here.
+  - Now Playing (the first tab): `[?] help   [p/n] prev/next   [w/e] queue`, using the real keys
+    of Help, Previous/Next and the queue actions (the owner wrote `w/e`; the defaults are
+    Enqueue `q`, Wedge `w`, ClearQueue `E` — show whatever the bindings actually are).
+  - Sweep the remaining windows (Search, History, Queue, Log, Settings, Vis stays blank) so each
+    shows the few keys that matter in it, in this same `[key] action` style, and never a key the
+    user has unbound (omit the hint instead).
+- [ ] Unify like and unlike into one key called "like" that works exactly like a playlist hotkey:
+  it toggles the selected track's membership in Liked Songs (`Session::set_liked` through the same
+  pending/settle path as `ViewCache::set_remote_membership`, with the italic pending dot), so a
+  liked track pressed again is removed. Remove the separate `BuiltinAction::Unlike` (default `L`),
+  its Help row and its own confirm; the unlike direction asks for confirmation the way the
+  playlist-key removal item below describes (one shared confirm path). `Like` stays `l`.
 ### Bugs
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
