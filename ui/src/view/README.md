@@ -100,7 +100,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
   windows, every startup tab tabbed and no companion, with at most one open `screen` window. The default
   layout starts on its first tab.
-- A floating window sits inside the padded box the shell draws around it
+- A floating window sits inside the box the shell draws around it (a border and a blank column each side, the status row directly on the bottom border)
   (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window
   focuses it; focusing a floating window raises it (`focus_window`). Closing the focused window
   (`close_window`) hands focus to what it opened over if that is still shown, else the next shown

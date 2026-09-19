@@ -125,9 +125,9 @@ pub(super) fn float_rect(total: Vec2, slot: usize) -> Rect {
     Rect::from_size(origin + (0, TAB_BAR_ROWS), size)
 }
 
-/// The window's rect in its border box: inside the border, one blank column each side and one blank row below.
+/// The window's rect in its border box: inside the border, one blank column each side.
 pub(super) fn float_body(frame: Rect) -> Rect {
-    Rect::from_size(frame.top_left() + (2, 1), frame.size().saturating_sub((4, 3)))
+    Rect::from_size(frame.top_left() + (2, 1), frame.size().saturating_sub((4, 2)))
 }
 
 /// Clears `frame` and boxes it in the normal text colour.
