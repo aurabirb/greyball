@@ -214,8 +214,10 @@
     shown and offers that side, else the status row of the window occupying that corner, else
     nothing). Move the warnings button to the bottom-right slot through it, keeping its Enter/click
     behaviour and its place in the Tab focus cycle (`Focus::Warnings` stays a stop); leave the old
-    row otherwise untouched. A press on the widget focuses the window the widget is drawn in —
-    the docked window or tab whose status row hosts it — not the global tab or the main window. Verify
+    row otherwise untouched. While the widget has focus, the navigation keys (`j`/`k`, `J`/`K`,
+    PgUp/PgDn, the arrows, Home/End) focus the window that hosts it — the docked window or tab
+    whose status row it is drawn in — and act on that window's list, instead of falling through to
+    the global tab or the main window; Enter still opens the warnings modal. Verify
     with a floating window covering the corner and with a modal open.
   - Step 2: the `:command` (and search) input line draws in the bottom-left slot through the same
     function. Width floor: a slot narrower than a usable command line (a docked pane can be ~30
