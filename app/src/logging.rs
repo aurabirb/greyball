@@ -233,9 +233,8 @@ pub fn init() -> Option<(PathBuf, Arc<LogBuf>)> {
     install_panic_hook();
 
     log::info!(
-        "medley {} ({}) starting — log level {level}",
-        env!("CARGO_PKG_VERSION"),
-        env!("MEDLEY_GIT_HASH"),
+        "medley {} starting — log level {level}",
+        env!("MEDLEY_VERSION"),
     );
     Some((path, buf))
 }
