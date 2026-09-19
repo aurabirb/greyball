@@ -1,11 +1,12 @@
 //! Ingest, link/unlink.
 
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::event::{Bus, CoreEvent};
 use crate::matcher::Matcher;
 use crate::traits::{Result, Store};
-use crate::types::{LinkReason, Rendition, SearchHit, SourceId, Track, TrackId};
+use crate::types::{LinkReason, Playlist, Rendition, SearchHit, SourceId, Track, TrackId};
 
 /// Push `r` unless a rendition with the same `(source, uri)` already exists.
 fn merge_rendition(renditions: &mut Vec<Rendition>, r: Rendition) {
@@ -42,11 +43,35 @@ pub struct Catalog {
     /// not a hot read path (reads bypass `Catalog` entirely and go straight
     /// through `Store`, unaffected by this lock).
     lock: Mutex<()>,
+    /// Bumped by `save_playlist`, the one write path for a user playlist.
+    playlists_gen: AtomicU64,
+    /// Bumped whenever a track id stops existing, since any list may still hold it.
+    removed_gen: AtomicU64,
 }
 
 impl Catalog {
     pub fn new(store: Arc<dyn Store>, bus: Bus) -> Self {
-        Self { store, bus, lock: Mutex::new(()) }
+        Self { store, bus, lock: Mutex::new(()), playlists_gen: AtomicU64::new(0), removed_gen: AtomicU64::new(0) }
+    }
+
+    pub fn save_playlist(&self, playlist: &Playlist) -> Result<()> {
+        self.store.upsert_playlist(playlist)?;
+        self.playlists_gen.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn delete_track(&self, id: TrackId) -> Result<()> {
+        self.store.delete_track(id)?;
+        self.removed_gen.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn removed_gen(&self) -> u64 {
+        self.removed_gen.load(Ordering::Relaxed)
+    }
+
+    pub fn playlists_gen(&self) -> u64 {
+        self.playlists_gen.load(Ordering::Relaxed)
     }
 
     /// Fold a hit into the library. Returns the logical track it belongs to.
@@ -128,7 +153,7 @@ impl Catalog {
         }
         merge_metadata(&mut ta, tb.isrc, tb.duration_ms, tb.album);
 
-        self.store.delete_track(b)?;
+        self.delete_track(b)?;
         self.store.upsert_track(&ta)?;
 
         // fix up playlist references
@@ -139,7 +164,7 @@ impl Catalog {
                         *item = a;
                     }
                 }
-                self.store.upsert_playlist(&p)?;
+                self.save_playlist(&p)?;
             }
         }
 
@@ -157,7 +182,7 @@ impl Catalog {
             .ok_or(crate::traits::Error::NotFound)?;
         track.renditions.retain(|r| r.source != source);
         if track.renditions.is_empty() {
-            self.store.delete_track(t)?;
+            self.delete_track(t)?;
             self.bus.send(CoreEvent::TrackUpdated(t));
         } else {
             self.store.upsert_track(&track)?;

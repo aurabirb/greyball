@@ -22,6 +22,8 @@ use crate::types::{SourceId, Track, TrackId};
 /// `tracks.len()`.
 struct RemotePlaylistTracks {
     tracks: Vec<Track>,
+    /// Bumped by `edit_tracks`, the one way `tracks`' membership or order changes.
+    generation: u64,
     /// A background thread is already folding newly-landed raw hits into
     /// the catalog for this `(source, node)` — guards against starting a
     /// second one while `browse()` keeps handing back more in the
@@ -65,6 +67,7 @@ impl RemotePlaylistTracks {
     fn empty() -> Self {
         Self {
             tracks: Vec::new(),
+            generation: 0,
             ingesting: false,
             browsing: false,
             partial: true,
@@ -73,6 +76,11 @@ impl RemotePlaylistTracks {
             errored: false,
             consecutive_failures: 0,
         }
+    }
+
+    fn edit_tracks(&mut self, edit: impl FnOnce(&mut Vec<Track>)) {
+        edit(&mut self.tracks);
+        self.generation += 1;
     }
 }
 
@@ -122,6 +130,8 @@ fn remote_playlist_cache_key(source: &SourceId, node: &BrowseNode) -> String {
 /// Cache entry behind `ViewCache::remote_playlists`.
 struct RemotePlaylistsEntry {
     folders: Vec<(String, BrowseNode)>,
+    /// Bumped by `set_folders`, the one way `folders` changes.
+    generation: u64,
     /// A background `Source::browse(Root, want)` for this source is in flight.
     browsing: bool,
     /// More may still load — see `BrowsePage::partial`. Freezes on any
@@ -134,9 +144,17 @@ impl Default for RemotePlaylistsEntry {
     fn default() -> Self {
         Self {
             folders: Vec::new(),
+            generation: 0,
             browsing: false,
             partial: true,
         }
+    }
+}
+
+impl RemotePlaylistsEntry {
+    fn set_folders(&mut self, folders: Vec<(String, BrowseNode)>) {
+        self.folders = folders;
+        self.generation += 1;
     }
 }
 
@@ -170,6 +188,8 @@ pub(crate) struct ViewCache {
     /// the store just to render it again.
     results_cache: Vec<Track>,
     results_query: Option<String>,
+    /// Bumped whenever `results`' membership changes.
+    results_gen: u64,
 
     /// A source's top-level playlist folders, loaded in the background —
     /// see `ensure_remote_playlists`.
@@ -194,6 +214,22 @@ impl ViewCache {
         self.results.clear();
         self.results_cache.clear();
         self.results_query = (!query.trim().is_empty()).then(|| query.to_string());
+        self.results_gen += 1;
+    }
+
+    pub fn results_gen(&self) -> u64 {
+        self.results_gen
+    }
+
+    /// A remote playlist's track-list generation; 0 until first touched.
+    pub fn remote_playlist_gen(&self, source: &SourceId, node: &BrowseNode) -> u64 {
+        let cache = self.remote_playlist_tracks.lock().unwrap();
+        cache.get(&(source.clone(), node.clone())).map_or(0, |e| e.generation)
+    }
+
+    /// Moves whenever any source's top-level playlist folders do.
+    pub fn remote_playlists_gen(&self) -> u64 {
+        self.remote_playlists.lock().unwrap().values().map(|e| e.generation).sum()
     }
 
     /// Text of the last search, so an empty result list can say "no results for X".
@@ -229,6 +265,7 @@ impl ViewCache {
             return;
         }
         self.results.push(tid);
+        self.results_gen += 1;
         if let Ok(Some(t)) = store.get_track(tid) {
             self.results_cache.push(t);
         }
@@ -289,11 +326,8 @@ impl ViewCache {
                         .into_iter()
                         .map(|(name, id)| (name, BrowseNode::Path(id)))
                         .collect();
-                    v.insert(RemotePlaylistsEntry {
-                        folders,
-                        browsing: true,
-                        partial: true,
-                    });
+                    let entry = v.insert(RemotePlaylistsEntry { browsing: true, ..Default::default() });
+                    entry.set_folders(folders);
                 }
             }
         }
@@ -316,7 +350,7 @@ impl ViewCache {
                 entry.browsing = false;
                 entry.partial = false;
                 if let Ok(page) = &result {
-                    entry.folders = page.folders.clone();
+                    entry.set_folders(page.folders.clone());
                     entry.partial = page.partial;
                 }
             }
@@ -508,11 +542,13 @@ impl ViewCache {
                 }
                 match (&outcome, cache.get_mut(&key)) {
                     (Ok(was_member), Some(entry)) => {
-                        if *was_member {
-                            entry.tracks.retain(|t| t.id != track.id);
-                        } else {
-                            entry.tracks.push(track.clone());
-                        }
+                        entry.edit_tracks(|tracks| {
+                            if *was_member {
+                                tracks.retain(|t| t.id != track.id);
+                            } else {
+                                tracks.push(track.clone());
+                            }
+                        });
                         entry.persisted_len = entry.tracks.len();
                         Some(entry.tracks.iter().map(|t| t.id).collect())
                     }
@@ -638,6 +674,7 @@ impl ViewCache {
                     let len = tracks.len();
                     let entry = RemotePlaylistTracks {
                         tracks,
+                        generation: 1,
                         ingesting: false,
                         browsing: true,
                         partial: true,
@@ -830,11 +867,13 @@ impl ViewCache {
             let (all_ids, should_persist): (Vec<TrackId>, bool) = {
                 let mut cache = cache.lock().unwrap();
                 let entry = cache.entry(key).or_insert_with(RemotePlaylistTracks::empty);
-                if skip_len == 0 {
-                    entry.tracks = new_tracks;
-                } else {
-                    entry.tracks.extend(new_tracks);
-                }
+                entry.edit_tracks(|tracks| {
+                    if skip_len == 0 {
+                        *tracks = new_tracks;
+                    } else {
+                        tracks.extend(new_tracks);
+                    }
+                });
                 entry.partial = partial;
                 entry.ingesting = false;
                 entry.revalidated = true;

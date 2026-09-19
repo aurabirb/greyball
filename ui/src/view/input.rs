@@ -107,7 +107,6 @@ impl MedleyView {
                             None => self.panes.cfg.mode = mode,
                         }
                     }
-                    self.clamp_focus();
                     return EventResult::consumed();
                 }
                 if parsed == command::Parsed::OpenBrowse {
@@ -241,7 +240,6 @@ impl MedleyView {
                     self.editing = Editing::Search;
                     self.buffer.clear();
                 }
-                self.clamp_scroll();
                 EventResult::consumed()
             }
             Action::OpenHotkeyMenu => {

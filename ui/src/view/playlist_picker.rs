@@ -13,21 +13,21 @@ pub(super) struct PlaylistPicker {
     /// Captured when the picker opens, so it stays fixed if the underlying list scrolls.
     track: TrackId,
     playlists: Vec<Playlist>,
-    /// The `list_revision` that `playlists` was read under.
+    /// The `playlists_gen` that `playlists` was read under.
     built: Memo<u64>,
 }
 
 impl PlaylistPicker {
     pub(super) fn new(track: TrackId, s: &Session) -> Self {
         let built = Memo::default();
-        built.changed(s.list_revision());
+        built.changed(s.playlists_gen());
         Self { list: ListState::default(), track, playlists: s.playlists(), built }
     }
 
     /// Re-reads the playlists once they changed, keeping the cursor on the same playlist and in view.
     pub(super) fn relayout(&mut self, resized: bool, rect: Rect, s: &Session) {
         let view_h = modal_list(rect).height();
-        if self.built.changed(s.list_revision()) {
+        if self.built.changed(s.playlists_gen()) {
             let selected = self.playlists.get(self.list.cursor).map(|p| p.id);
             self.playlists = s.playlists();
             self.list.cursor = selected

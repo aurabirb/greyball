@@ -19,8 +19,7 @@
   hits and `SearchDone` with the search they belong to and drop the ones that are not current.
 - [ ] Confirm Log-pane wheel scrolling is responsive under `RUST_LOG=debug` with a large log; if not,
   check wheel events queuing up behind draws (coalesce consecutive scroll events) and whether the
-  `pane == Pane::Log` branch in `ui/src/view/mouse.rs`'s `handle_pane_mouse` swallows or mis-routes
-  wheel events.
+  Log arm of `Window::on_event` (`ui/src/view/window.rs`) swallows or mis-routes wheel events.
 - [ ] Spotify: a real-world librespot AP death ("Connection to server closed.", upstream
   [#1151](https://github.com/librespot-org/librespot/issues/1151)/
   [#1486](https://github.com/librespot-org/librespot/issues/1486)) hasn't been observed against the
@@ -204,8 +203,8 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Playlist hotkey rework — two parts, both built on the existing `HotkeyUi::capture`/
-  `bind_captured_key`/`clear_captured_hotkey` path (`ui/src/view/hotkeys.rs`) and `Session::bind_hotkey`
+- [ ] Playlist hotkey rework — two parts, both built on the existing `Modal::HotkeyCapture`/
+  `capture_event` → `ModalOutcome::Bind`/`Unbind` path (`ui/src/view/hotkeys.rs`, `modal.rs`) and `Session::bind_hotkey`
   (`core/src/app.rs`). Purpose: mid track-sorting (often from the Queue or another pane, not the
   Playlists screen) get a quick reminder of which key is on which playlist, move a key to a
   different playlist, or add a playlist, without leaving the current view.
@@ -222,13 +221,10 @@
   own state but the same behavior as the tabbed one: own cursor/scroll, own open local/remote
   playlist and drill-in/back navigation, own filter, and every Playlists-screen key working in it,
   including (1)'s direct assign, Backspace clearing the selected playlist's key, `x` export and
-  the existing scrolling keys/wheel. No duplication: extract the Playlists window out of
-  `MedleyView` into its own type — state (`open_playlist`, `open_remote`, `remembered_playlist`,
-  its `cursor`/scroll slot, filter) plus its row building (`top_rows`, `top_row_name`), drawing,
-  key/mouse handling and `selected_hotkey_target` — that draws into whatever rect it's given and
-  reports actions back, and have `MedleyView` hold two instances (tabbed, floating) of that one
-  type; nothing Playlists-specific stays inline in `draw`/`on_event`, and no code path may assume
-  there is only one. Shared data (`Session` playlists, `ViewCache`, hotkeys) stays shared, so an
+  the existing scrolling keys/wheel. No duplication: it is one more `TrackList` of kind Playlists
+  (`ui/src/view/track_list.rs`) under its own `WindowId` in `Windows` (`window.rs`), shown in the
+  floating placement; nothing Playlists-specific goes inline in `MedleyView`, whose `hotkey_target`
+  already asks the focused window first. Shared data (`Session` playlists, `ViewCache`, hotkeys) stays shared, so an
   assign/rename/add in one instance shows in the other on the next draw. Differences are instance
   settings, not forks of the code: the floating instance sorts playlists with an assigned key
   first, then the rest (each group in its usual order), re-sorting after an assign with the cursor
@@ -244,15 +240,12 @@
   key and today opens the fullscreen built-ins remap menu — retarget that built-in to the floating
   Playlists instance; built-in remapping stays reachable through `:keys` (which the merged
   Help/hotkey window below takes over, along with `?`) — update `command::HELP`, the help text and
-  the hint texts that mention either; delete the Playlists-screen backtick override
-  in `on_event` and the standalone `open_playlist_hotkey_modal`/`draw_playlist_hotkey_modal`, which
-  (1) and (2) replace. Do the extraction as its own pure-move commit(s) first (AGENTS.md: `sed`/
-  `awk`, build + clippy clean), then add the second instance.
+  the hint texts that mention either; delete the Playlists-window backtick override
+  in `on_shell_key` and the standalone `Modal::HotkeyCapture`/`draw_capture`, which (1) and (2) replace.
 - [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
   — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
-  `HelpModal`/`help_lines`/`build_help_lines`/`on_help_event` (`ui/src/view/help.rs`) and
-  `HotkeyUi`'s menu half (`menu`/`draw_menu`/`menu_rows` and the menu arm of `on_hotkey_ui_event`,
-  `ui/src/view/hotkeys.rs`) rather than keeping either alongside. Floating = the floating window mode from the per-window mode item; reuse it.
+  `HelpModal`/`help_lines`/`build_help_lines` (`ui/src/view/help.rs`) and `HotkeyMenu`/`menu_rows`
+  (`ui/src/view/hotkeys.rs`) with their `Modal` variants rather than keeping either alongside. Floating = the floating window mode from the per-window mode item; reuse it.
   Content: one table of items, each `{command, description, shortcut}`, grouped into titled
   sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
   then movement/navigation, then player controls, then everything else (panes/windows, playlist
@@ -306,15 +299,16 @@
   (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
   **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
   main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
-  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`PaneLayout::fullscreen`),
+  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`Modal::Pane`),
   and **floating** (a bordered box over the current view, not fullscreen — this item owns that
   presentation; the playlist hotkey rework and the merged Help/hotkey window build on it).
-  Today the two families are separate mechanisms: tab screens are fixed numbered screens that can
-  only be tabs, panes have only `Screen`/`Embedded` (`pane_mode`/`pane_mode_overrides`, `:panes
-  <pane> <screen|embedded>`, `toggle_pane`), and Queue/History exist twice — as a tab and as a pane
-  bridged by `Screen::from_pane`. Unify them: one window identity per thing, one four-value mode
-  per window (extend `core::config::PaneMode`; no `Screen`/`Embedded` leftovers or aliases), one
-  renderer per window that draws into whatever rect its mode hands it, with the tab bar
+  Every window is already a rect-drawn `Window` instance in `Windows` (`ui/src/view/window.rs`,
+  model in `ui/src/view/README.md`), but placement is still derived from two families: a
+  `WindowId::Tab` can only be the active tab, a `WindowId::Pane` has only `Screen`/`Embedded`
+  (`PaneLayout::mode_overrides`, `:panes <pane> <screen|embedded>`, `toggle_pane`), and Queue/History
+  exist as two instances — a tab and a pane. Unify them: one four-value mode per window instance
+  (extend `core::config::PaneMode`; no `Screen`/`Embedded` leftovers or aliases) held next to the
+  instance, deciding whether Queue/History stay two instances or become one, with the tab bar
   (`tab_layout`/`draw_tab_bar`/tab click hit-test, number-key screen switching) built from
   whichever windows are currently tabbed instead of the fixed `Screen::ALL` array, and `focus_order`/
   `Focus` covering docked and floating windows. Toggle: a key (and `:panes <window> <mode>`) that
@@ -325,12 +319,11 @@
   least one window tabbed so the main area is never empty. Persist each window's mode (and open/
   closed state for non-tabbed ones) in `state.toml` next to volume and hotkeys (`save_state`,
   `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. The
-  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`). Do it before the playlist hotkey
-  rework and the merged Help/hotkey window, in three stages, each shippable: (A) one rect-drawn
-  component per window — including extracting the Playlists window into its own instantiable type
-  — with tabs and panes unified under the three modes that exist today (tabbed/docked/screen), no
-  new behavior; (B) the floating mode; (C) the toggle key, `:panes <window> <mode>`, persistence
-  and the Settings display.
+  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`) and `MedleyView::visible`/`layout`. Do
+  it before the playlist hotkey rework and the merged Help/hotkey window, in two stages, each
+  shippable: (B) the floating mode — a rect from the shell, a border, focus and mouse routing through
+  `send`, `Modal`s taking a floating `Rect` instead of `modal_rect`'s whole screen; (C) the toggle
+  key, `:panes <window> <mode>`, persistence and the Settings display.
 - [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
   track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
   pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
@@ -433,70 +426,36 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item below or under Features): (1) per-window
-  modes stage A, whose first steps are the list component and the modal plumbing items below, plus
-  owner-held generations and per-window memos (`Memo`, `ui/src/view/memo.rs`); (2) dispatch
+- [ ] UI architecture work order (each step is an item below or under Features): (1) dispatch
   outcomes + single feedback slot + mailboxes as event payloads (the last two sub-bullets of the
   event-driven item), before the playlist hotkey rework and the merged Help/hotkey window since
-  both consume feedback; (3) stages B and C; (4) those two features, the status-row widget, the
-  title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels
-  lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
-- [ ] Owner-held generations instead of `Session::list_revision`: `list_revision`/`touch_lists()`
-  (`core/src/app.rs`) make every mutation site judge "list change or attribute change", are too
-  coarse (Help and the filter rebuild on every `QueueChanged`/`SearchHit`) and are correct in places
-  only because a `QueueChanged` happens to follow (history appends). Put a `gen: u64` inside each
-  type that already funnels its own mutations — `Queue` (incl. history), `ViewCache`'s search results
-  and remote lists, the playlist save path, hotkeys, plugin commands — bumped next to the write in a
-  private method, and key each cache on the generation of the data it shows (filter/follow: the
-  list on screen; Help: hotkeys + playlist names + plugin commands; picker: playlists). Then delete
-  `list_revision` and the `touch_lists()` call sites; `revision` stays as the catch-all "redraw
-  something". Shape the frame memo per window — key `(generation of the list shown, list id, query,
-  offset, height)` plus a small status memo on a playback generation — so a second Playlists window
-  or a floating window adds no hand-listed key fields. Part of per-window modes stage A.
+  both consume feedback; (2) per-window modes stages B and C; (3) those two features, the status-row
+  widget, the title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis
+  levels lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use
   messages and reactive patterns to communicate between, and render, independent parts of the app (no
   part reaching into another's state or recomputing/polling per frame what an event should drive).
   The component model is in `ui/src/view/README.md`; what breaks it today, in value order:
-  - `Session::playlists()` is a store read transaction plus a clone of every playlist's `items`; per
-    frame it runs in `rows` (Playlists top level), `list_title`/`context_name` (open playlist),
-    the playlist picker's `draw`, `top_rows`, and `help_lines`. Give `Session` a playlist-names cache
-    invalidated by playlist-mutating commands, or a revision counter the view keys a cache on.
+  - `Session::playlists()` is a store read transaction plus a clone of every playlist's `items`. It
+    still runs on every layout pass while a Playlists window sits at its top level
+    (`TrackList::relayout` → `len` → `top_rows`, `ui/src/view/track_list.rs`), and on each rows
+    rebuild. Give `Session` a playlist-names cache keyed on `Catalog::playlists_gen`.
   - Let `on_event` reuse the frame snapshot's (`ui/src/view/frame.rs`) cheap parts instead of
     re-locking (`TabBar` click, `StatusLine::snapshot` on click, `warn_count`).
   - While the Vis pane is open, the `Vis` worker's `session.lock().unwrap().audio_levels()`
     (`ui/src/vis.rs`) contends with the main session lock at 30 Hz; move audio levels behind their
     own lock/atomic instead of sharing the `Session` mutex.
   - Feedback text lives in three places with three lifetimes: `MedleyView::queue_feedback`,
-    `HotkeyUi::feedback`, `Session::membership_feedback` (cleared by the UI through a lock on every
+    `MedleyView::hotkey_feedback`, `Session::membership_feedback` (cleared by the UI through a lock on every
     keypress). Fold into one UI-side `Feedback` slot; deliver the async membership result as a
     `CoreEvent` payload rather than a polled `Mutex<Option<String>>`. Same for
     `take_plugin_command_result` in `app/src/main.rs`.
   - `run` (`input.rs`) infers feedback by matching the `Command` before dispatch and diffing
     `queue_len` after it; have `Session::dispatch` return the outcome (`Dispatch::Queued(n)`,
     `ShuffleSet(bool)`, `ScanMode(..)`) so the UI only formats it.
-- [ ] Finish the list component in `ui/src/view`: the main list and the docked Queue/History panes
-  bypass `ListState::on_event`. `MedleyView::on_event` hand-rolls Up/Down/j/k/J/K/PgUp/PgDn per focus
-  kind (eight near-identical arms) instead of `Nav::of` + one `focused_list() -> (screen, view_h)`;
-  `handle_mouse` and `handle_pane_mouse` (`mouse.rs`) duplicate each other's wheel/click/row math and
-  rect-contains test, differing only in title-row offset; `clamp_cursor` and `bump_pane_cursor`
-  (`lists.rs`) are the same clamp. Make a `TrackList` component (a `ListState`, its screen, one
-  `body_rect`) whose `on_event` returns `ListEvent`, used for main and docked lists alike. That also
-  removes the fixed `lists: PerScreen<ListState>` slot array (`ui/src/screen.rs`) and the single `PlaylistNav` slot that stop two views of one list kind coexisting.
-- [ ] Modal plumbing in `ui/src/view`: the exclusive layers are five separate `MedleyView` fields
-  checked in two hand-ordered `if` chains that disagree (`draw`: warnings, hotkeys, picker, help;
-  `on_event`: warnings, picker, hotkeys, help), each with a `draw_*`/`on_*_event` wrapper repeating
-  "fetch data under lock, call component, on close set `None` + `fallback_focus()`". Replace with one
-  `modal: Option<Modal>` enum (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`,
-  `Pane(Pane)`) with a single `draw`/`on_event` match and a shared `ModalOutcome {Stay, Close,
-  Run(Command)}`; give the modals a shared title/list/footer frame helper (each of `WarningsModal`,
-  `PlaylistPicker`, `HotkeyUi::draw_menu`/`draw_capture`, `HelpModal`, `draw_screen_pane` prints its own
-  title bar and footer hint); take a `Rect` instead of assuming the full screen from column 0.
 - [ ] `commit_edit` (`ui/src/view/input.rs`) handles `command::Parsed` through a ladder of `if parsed ==`
-  checks and duplicates `handle_action` (`Parsed::History` vs `Action::Screen(HIST)`, `Parsed::Keys`
-  vs `Action::OpenHotkeyMenu`, `Parsed::Help` vs `Action::OpenHelp`). Map UI-level `Parsed` variants to
-  `Action` and keep one `match`. "Reset for a new list" (`lists[..].cursor = 0; filter.query = None;
-  clamp_scroll()`) is repeated in `activate` (twice), `open_playlist_uri`, the `Esc` arm of `on_event`,
-  `Action::Screen` and `Parsed::History`; make it one method.
+  checks, several of which only forward to `handle_action` (`Parsed::History`, `Parsed::Keys`,
+  `Parsed::Help`). Map UI-level `Parsed` variants to `Action` and keep one `match`.
 - [ ] `ui/src/lib.rs`'s crate doc describes a stateless three-screen view; rewrite it to point at
   `ui/src/view/README.md`. Then write a small (~4-8 KB) set of guides for further agents covering the
   app's architecture invariants and ways of working such as checking for excessive comments or

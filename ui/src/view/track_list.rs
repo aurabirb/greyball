@@ -168,9 +168,17 @@ impl TrackList {
         }
     }
 
-    /// The generation of the list on screen.
+    /// The generation, held by its owner, of the list on screen, plus that of track ids vanishing from any list.
     pub(super) fn list_gen(&self, s: &Session) -> u64 {
-        s.list_revision()
+        s.removed_tracks_gen() + match (self.kind, &self.open) {
+            (Screen::NowPlaying, _) => s.context_gen(),
+            (Screen::Search, _) => s.results_gen(),
+            (Screen::Queue, _) => s.queue.queue_gen(),
+            (Screen::History, _) => s.queue.history_gen(),
+            (Screen::Playlists, Open::Local(_)) => s.playlists_gen(),
+            (Screen::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
+            (Screen::Playlists, Open::TopLevel) => 0,
+        }
     }
 
     /// Every track already loaded for the list, unwindowed.

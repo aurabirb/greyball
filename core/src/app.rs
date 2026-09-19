@@ -10,6 +10,7 @@ use rand::prelude::*;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
+use crate::hotkeys::Hotkeys;
 use crate::event::{Bus, CoreEvent, PlayerEvent};
 use crate::media_cache::MediaCache;
 use crate::playlist_m3u::{
@@ -413,7 +414,7 @@ pub struct Session {
     /// one key per target) — UI-local, persisted to
     /// `state.toml` by `app` (`load_hotkeys`/`save_state`). See
     /// `bind_hotkey`/`hotkey_for`/`playlist_hotkey`.
-    hotkeys: HashMap<char, HotkeyTarget>,
+    hotkeys: Hotkeys,
 
     /// Search results + remote-playlist browsing caches — see
     /// `view_cache::ViewCache`.
@@ -451,10 +452,10 @@ pub struct Session {
     /// flow) just like `Plugin::setup`.
     plugin_command_result: Arc<Mutex<Option<String>>>,
 
-    /// Bumped by every UI-visible mutation — the frame cache keys on this; see `view/README.md`.
+    /// Bumped by every UI-visible mutation — the catch-all "redraw something"; see `view/README.md`.
     revision: u64,
-    /// Bumped only by a list membership/order/identity/name change — see `view/README.md`.
-    list_revision: u64,
+    /// Bumped by `set_context_tracks`, the one way the Now Playing list's membership changes.
+    context_gen: u64,
 }
 
 impl Session {
@@ -540,7 +541,7 @@ impl Session {
             link_pick: None,
             volume,
             context,
-            hotkeys: HashMap::new(),
+            hotkeys: Hotkeys::default(),
             view: ViewCache::default(),
             membership_feedback: Arc::new(Mutex::new(None)),
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
@@ -548,20 +549,54 @@ impl Session {
             plugin_health: Vec::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
             revision: 0,
-            list_revision: 0,
+            context_gen: 0,
         };
         session.refresh_plugin_health();
         session
     }
 
-    /// Monotonic counter the UI's frame cache keys on — see the field doc.
+    /// Monotonic; moves on any UI-visible change. Each list also has its own generation, held by its owner.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Monotonic counter the UI's filter/follow/Help/picker caches key on — see the field doc.
-    pub fn list_revision(&self) -> u64 {
-        self.list_revision
+    pub fn context_gen(&self) -> u64 {
+        self.context_gen
+    }
+
+    /// Moves whenever a track id stops existing (a link merge, a last rendition unlinked).
+    pub fn removed_tracks_gen(&self) -> u64 {
+        self.catalog.removed_gen()
+    }
+
+    pub fn results_gen(&self) -> u64 {
+        self.view.results_gen()
+    }
+
+    /// User playlists: membership, order and names.
+    pub fn playlists_gen(&self) -> u64 {
+        self.catalog.playlists_gen()
+    }
+
+    pub fn remote_playlist_gen(&self, source: &SourceId, node: &BrowseNode) -> u64 {
+        self.view.remote_playlist_gen(source, node)
+    }
+
+    /// Every source's top-level remote playlist names.
+    pub fn remote_playlists_gen(&self) -> u64 {
+        self.view.remote_playlists_gen()
+    }
+
+    pub fn hotkeys_gen(&self) -> u64 {
+        self.hotkeys.generation()
+    }
+
+    /// The one way the Now Playing list's membership changes.
+    fn set_context_tracks(&mut self, tracks: Vec<TrackId>) {
+        if let Some(ctx) = self.context.as_mut() {
+            ctx.tracks = tracks;
+        }
+        self.context_gen += 1;
     }
 
     /// Bumps `revision` — called by every mutation of UI-visible session state.
@@ -569,17 +604,10 @@ impl Session {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Bumps `list_revision` (and `revision`, so a caller never has to remember both).
-    fn touch_lists(&mut self) {
-        self.list_revision = self.list_revision.wrapping_add(1);
-        self.touch();
-    }
-
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
         self.touch();
         match cmd {
             Command::Search(text) => {
-                self.touch_lists();
                 self.view.begin_search(&text);
                 self.search.run(SearchQuery::text(text));
                 Ok(Dispatch::Ok)
@@ -592,8 +620,8 @@ impl Session {
                 let Some(&id) = tracks.get(index) else {
                     return Ok(Dispatch::Ok);
                 };
-                self.touch_lists();
-                self.context = Some(PlaybackContext { tracks, index, remote, name, shuffle_bag: Vec::new() });
+                self.context = Some(PlaybackContext { tracks: Vec::new(), index, remote, name, shuffle_bag: Vec::new() });
+                self.set_context_tracks(tracks);
                 self.save_now_playing_context();
                 // `play_now` never touches the manual queue's contents
                 // beyond pulling `id` out of it if it happens to already be
@@ -648,9 +676,6 @@ impl Session {
                 // always falls back to the bounded play history, which is
                 // structurally independent of the queue's own contents.
                 let just_playing = self.now_playing;
-                if self.queue.history_len() > 0 {
-                    self.touch_lists();
-                }
                 if let Some(id) = self.queue.previous_from_history() {
                     // Wedge the track we're walking back over onto the
                     // queue's front, so a later `n` resumes forward through
@@ -711,8 +736,8 @@ impl Session {
                 }
                 Some(first) => {
                     self.catalog.link(first, id)?;
-                    self.touch_lists();
-                    Ok(Dispatch::Ok)
+                    self.invalidate_hotkey_memberships();
+                        Ok(Dispatch::Ok)
                 }
             },
             Command::Unlink(id) => {
@@ -727,7 +752,6 @@ impl Session {
                 for s in sources {
                     self.catalog.unlink(id, s)?;
                 }
-                self.touch_lists();
                 Ok(Dispatch::Ok)
             }
             Command::Like(track) => self.set_liked(track, true),
@@ -746,8 +770,7 @@ impl Session {
                 match source.resolve(&uri) {
                     Ok(hit) => {
                         let tid = self.catalog.ingest(hit)?;
-                        self.touch_lists();
-                        self.push_result(tid);
+                                self.push_result(tid);
                         Ok(Dispatch::Ok)
                     }
                     Err(_) => Ok(Dispatch::Modal("not a playable URL".to_string())),
@@ -768,22 +791,18 @@ impl Session {
         }
         match ev {
             CoreEvent::SearchHit(tid) => {
-                self.touch_lists();
                 self.push_result(*tid);
                 Ok(true)
             }
             CoreEvent::TrackUpdated(id) => {
-                // Attribute-only: `revision` (bumped above) refreshes the frame; `list_revision` stays put.
                 self.refresh_cached_track(*id);
                 Ok(true)
             }
             CoreEvent::PlaylistsChanged => {
-                self.touch_lists();
                 self.invalidate_hotkey_memberships();
                 Ok(true)
             }
             CoreEvent::QueueChanged => {
-                self.touch_lists();
                 Ok(true)
             }
             CoreEvent::SearchDone { .. } => Ok(true),
@@ -932,7 +951,7 @@ impl Session {
     /// removing it — a `setup()` that only fixes, say, the player, mustn't
     /// silently drop an already-working source.
     pub fn apply_wiring(&mut self, id: &SourceId, wiring: crate::plugin::Wiring) {
-        self.touch_lists();
+        self.touch();
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
             self.prune_synthetic_hotkeys();
@@ -1402,17 +1421,17 @@ impl Session {
 
     /// All current playlist hotkeys, `(key, target)`.
     pub fn hotkeys(&self) -> Vec<(char, HotkeyTarget)> {
-        self.hotkeys.iter().map(|(&k, p)| (k, p.clone())).collect()
+        self.hotkeys.map().iter().map(|(&k, p)| (k, p.clone())).collect()
     }
 
     /// The target bound to `key`, if any.
     pub fn hotkey_for(&self, key: char) -> Option<HotkeyTarget> {
-        self.hotkeys.get(&key).cloned()
+        self.hotkeys.map().get(&key).cloned()
     }
 
     /// The key bound to `target`, if any.
     pub fn playlist_hotkey(&self, target: &HotkeyTarget) -> Option<char> {
-        self.hotkeys.iter().find(|&(_, p)| p == target).map(|(&k, _)| k)
+        self.hotkeys.map().iter().find(|&(_, p)| p == target).map(|(&k, _)| k)
     }
 
     /// The key that actually activates `target` right now: its explicit
@@ -1436,36 +1455,35 @@ impl Session {
         key: char,
         target: HotkeyTarget,
     ) -> std::result::Result<Option<HotkeyTarget>, BindError> {
-        self.touch_lists();
+        self.touch();
         if let HotkeyTarget::Remote(source, node) = &target
             && self.is_synthetic_playlist(source, node)
         {
             return Err(BindError::SyntheticPlaylist);
         }
-        let stolen = bind_hotkey(&mut self.hotkeys, key, target).map_err(BindError::BuiltinKey)?;
+        let stolen = self.hotkeys.bind(key, target).map_err(BindError::BuiltinKey)?;
         self.invalidate_hotkey_memberships();
         Ok(stolen)
     }
 
     /// Clears `target`'s hotkey, if it has one.
     pub fn unbind_hotkey(&mut self, target: &HotkeyTarget) {
-        self.touch_lists();
+        self.touch();
         self.hotkeys.retain(|_, p| p != target);
         self.invalidate_hotkey_memberships();
     }
 
     /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
-        self.touch_lists();
-        self.hotkeys = hotkeys;
+        self.touch();
+        self.hotkeys.replace(hotkeys);
         self.prune_synthetic_hotkeys();
     }
 
     /// Drops bindings to synthetic nodes; re-run as sources register, since only a wired source can tell.
     fn prune_synthetic_hotkeys(&mut self) {
         let sources = &self.sources;
-        let bound = self.hotkeys.len();
-        self.hotkeys.retain(|key, target| {
+        let pruned = self.hotkeys.retain(|key, target| {
             let synthetic = matches!(target, HotkeyTarget::Remote(sid, node)
                 if sources.get(sid).is_some_and(|s| s.is_synthetic(node)));
             if synthetic {
@@ -1473,7 +1491,7 @@ impl Session {
             }
             !synthetic
         });
-        if self.hotkeys.len() != bound {
+        if pruned {
             self.invalidate_hotkey_memberships();
         }
     }
@@ -1589,7 +1607,6 @@ impl Session {
         self.last_status.volume = self.volume;
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
-            self.touch_lists();
         }
     }
 
@@ -1733,9 +1750,8 @@ impl Session {
             && let Some((source, node)) = ctx.remote.clone()
         {
             let live = self.remote_playlist_track_ids(&source, &node);
-            let ctx = self.context.as_mut().unwrap();
-            if live.len() > ctx.tracks.len() {
-                ctx.tracks = live;
+            if live.len() > self.context.as_ref().unwrap().tracks.len() {
+                self.set_context_tracks(live);
             }
         }
         let ctx = self.context.as_ref().unwrap();
@@ -2179,6 +2195,7 @@ impl Session {
             let mut loading = false;
             let mut table: Vec<HotkeyMembership> = self
                 .hotkeys
+                .map()
                 .iter()
                 .filter_map(|(&key, target)| match target {
                     HotkeyTarget::Local(id) => Some(HotkeyMembership {
@@ -2203,7 +2220,7 @@ impl Session {
 
     /// The one write path for a user playlist, so everything derived from its contents hears about it.
     fn save_playlist(&self, playlist: &Playlist) -> Result<()> {
-        self.store.upsert_playlist(playlist)?;
+        self.catalog.save_playlist(playlist)?;
         self.invalidate_hotkey_memberships();
         self.bus.send(CoreEvent::PlaylistsChanged);
         Ok(())
@@ -2419,41 +2436,6 @@ fn toggle_membership(items: &mut Vec<TrackId>, track: TrackId) {
     } else {
         items.push(track);
     }
-}
-
-/// `Session::bind_hotkey`'s core logic, pulled out so it's unit-testable:
-/// binds `key` to `target` in `hotkeys`, dropping `target`'s previous key
-/// (if different) and stealing `key` from whatever target held it. Returns
-/// the target `key` was stolen from, if any (never `target` itself —
-/// rebinding a target to the key it already has isn't a steal).
-/// Whatever currently answers to `key`: an explicit table entry if one
-/// exists, else — if `key` is a built-in action's default and that action
-/// hasn't been explicitly remapped elsewhere — that action, implicitly.
-fn effective_target_at(hotkeys: &HashMap<char, HotkeyTarget>, key: char) -> Option<HotkeyTarget> {
-    if let Some(t) = hotkeys.get(&key) {
-        return Some(t.clone());
-    }
-    BuiltinAction::ALL.iter().find_map(|&(action, default)| {
-        let target = HotkeyTarget::Builtin(action);
-        (default == key && !hotkeys.values().any(|t| *t == target)).then_some(target)
-    })
-}
-
-/// `Session::bind_hotkey`'s core logic, pulled out so it's unit-testable —
-/// see that method's doc for the built-in-key refusal and steal/rebind rules.
-fn bind_hotkey(
-    hotkeys: &mut HashMap<char, HotkeyTarget>,
-    key: char,
-    target: HotkeyTarget,
-) -> std::result::Result<Option<HotkeyTarget>, HotkeyTarget> {
-    if let Some(occupant) = effective_target_at(hotkeys, key)
-        && occupant != target
-        && matches!(occupant, HotkeyTarget::Builtin(_))
-    {
-        return Err(occupant);
-    }
-    hotkeys.retain(|&k, p| *p != target || k == key);
-    Ok(hotkeys.insert(key, target.clone()).filter(|p| *p != target))
 }
 
 fn build_entry(t: &Track, primary: String) -> M3uEntry {

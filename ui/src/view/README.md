@@ -19,8 +19,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   the main rect, `PaneLayout::open` panes docked around it, a `PaneMode::Screen` pane fullscreen as
   `Modal::Pane`. A Queue/History pane in `Screen` mode switches to its tab instead of layering.
 - `Window` API, all of it called by the shell only:
-  - `relayout(rect, s)` from `required_size`: stores the rect; a list clamps its cursor into the list
-    and re-follows it when the height changed.
+  - `relayout(rect, s)` from `MedleyView::layout`: stores the rect; a list clamps its cursor into the
+    list and re-follows it when the height changed.
   - `frame(ctx) -> WindowFrame`: the window's session-derived draw data, taken under the frame's one
     lock and memoized inside the component (`ListFrame` rows, Settings entries; Log and Vis are `Live`).
   - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
@@ -49,12 +49,23 @@ build closure against its key.
 
 | memo | key | reads |
 | --- | --- | --- |
-| `TrackList::matches` (ranked filter ids) | list generation, `view_gen` | the whole list, `query`, `open` |
+| `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config | config, volume, scan mode |
 | `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, membership feedback, help key |
-| `MedleyView::follow_sig` | window id, list generation, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
-| `HelpModal::built` / `PlaylistPicker::built` | list generation | what the modal snapshots |
+| `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
+| `HelpModal::built` | hotkeys, playlists and remote-playlists generations | hotkeys, playlist names (plugin commands are fixed at startup) |
+| `PlaylistPicker::built` | playlists generation | the playlists |
+
+`TrackList::list_gen` is the generation of the list on screen. Generations are held by the type that
+owns the data and bumped next to the write in one private method, so no mutation site has to judge
+what kind of change it made: `Queue` (`queue_gen`, `history_gen`), `ViewCache` (`results_gen`, one per
+remote playlist in `edit_tracks`, one per source's folder list in `set_folders`), `Catalog`
+(`playlists_gen` in `save_playlist`, the one write path for a user playlist, and `removed_gen` for a
+track id that stops existing, which every `list_gen` adds in), `Hotkeys`, and `Session::context_gen`
+for the Now Playing list. A cache keys on the generation of exactly what it shows; `revision` stays
+the catch-all "something changed, redraw" that rows key on, because a row also shows attributes, the
+now-playing mark, cached markers and hotkey letters.
 
 The cursor is in no rows key: the selection highlight is applied at draw time, so moving within the
 visible window rebuilds nothing, and a keypress in one window never rebuilds another's rows. Per-tick
@@ -66,13 +77,15 @@ on `revision` — it is read fresh or kept in its own small cache.
 - Reads: `with_session(|s| …)` locks, extracts owned values, unlocks. The mutex is non-reentrant:
   never nest, never call a locking `MedleyView` method inside the closure — methods that need session
   data take `s: &Session` (or a `Ctx`) instead. Where a window must be mutated under the lock
-  (`send`, `required_size`, `relayout_modal`) the shell locks a clone of the handle so `self` stays
+  (`send`, `layout`, `relayout_modal`) the shell locks a clone of the handle so `self` stays
   free. One lock per frame: `MedleyView::frame` collects every visible window's `WindowFrame`, the
   `Chrome` and the live `StatusLine`, then `draw` renders without the guard.
-- No effects in `draw` or getters. Effects run on change from `on_event` or `required_size` (the one
-  `&mut self` hook that knows the screen size): `follow_scan` feeds the scan walk the active list —
-  the focused window's, else the active tab's — from every layout pass, deduped by `follow_sig`, so a
-  memo hit in `draw` can never skip it.
+- No effects in `draw` or getters. Effects run on change from `MedleyView::layout`, which hands every
+  visible window its rect under one lock and runs from `required_size` and again after every input
+  event — cursive drains buffered type-ahead through `on_event` before its next layout pass, so a tab
+  switched to or a pane docked in the same batch must already have its rect. `follow_scan` feeds the
+  scan walk the active list — the focused window's, else the active tab's — from there, deduped by
+  `follow_sig`, so a memo hit in `draw` can never skip it.
 - `Session::revision` bumps on every UI-visible mutation, including an attribute-only `TrackUpdated`
   patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
   frame. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
@@ -80,9 +93,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   event is not itself such a change: `on_event` only bumps `revision` when it actually clears something
   (`clear_membership_feedback` checks the slot first), so a keypress that changes nothing rebuilds
   nothing.
-- `Session::list_revision` bumps only when list membership/order/identity or a displayed name changes;
-  it is the "list generation" above, so a library scan's flood of `TrackUpdated`s never re-filters,
-  re-follows or rebuilds Help.
+- A library scan's flood of `TrackUpdated`s moves `revision` only, so it redraws the visible rows but
+  never re-filters, re-follows or rebuilds Help; nor does a remote page landing re-filter another list.
 - A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
   `TrackUpdated`/`Materialized` event, so every `MediaCache` write site must send one once the write
   lands.
@@ -99,7 +111,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   (clock, marquee, title flush); `vis_fps_cb` raises it to `vis::FPS` while the Vis window is shown
   and must never go below the floor. `Event::Refresh` is ignored by `on_event`.
 
-## Routing in `MedleyView::on_event`
+## Routing in `MedleyView::route`
 
 1. Clear one-keypress feedback (not on mouse hold/release).
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
@@ -117,7 +129,9 @@ on `revision` — it is read fresh or kept in its own small cache.
    `send` offers the key to the focused window, then the active tab's; what both ignore goes to
    `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
-7. `clamp_scroll()` re-follows the cursor in the active tab's and the focused window.
+7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
+   scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused
+   window.
 
 ## Modals
 

@@ -21,6 +21,7 @@
 
 use std::collections::VecDeque;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use log::info;
@@ -68,6 +69,10 @@ pub struct Queue {
     /// timestamp playback started, for the on-disk M3U history log
     /// (`Session::append_history_entry`).
     history: RwLock<VecDeque<(TrackId, DateTime<Utc>)>>,
+    /// Bumped by every change to `queue`'s contents, for caches of it.
+    queue_gen: AtomicU64,
+    /// Bumped by every change to `history`'s contents.
+    history_gen: AtomicU64,
     bus: Bus,
 }
 
@@ -79,8 +84,29 @@ impl Queue {
             repeat: RwLock::new(RepeatSetting::None),
             shuffle: RwLock::new(false),
             history: RwLock::new(VecDeque::new()),
+            queue_gen: AtomicU64::new(0),
+            history_gen: AtomicU64::new(0),
             bus,
         }
+    }
+
+    pub fn queue_gen(&self) -> u64 {
+        self.queue_gen.load(Ordering::Relaxed)
+    }
+
+    pub fn history_gen(&self) -> u64 {
+        self.history_gen.load(Ordering::Relaxed)
+    }
+
+    /// The one announcement of a change to `queue`'s contents.
+    fn queue_changed(&self) {
+        self.queue_gen.fetch_add(1, Ordering::Relaxed);
+        self.bus.send(CoreEvent::QueueChanged);
+    }
+
+    /// History only changes under `Session::dispatch`/`on_event`, which already redraw.
+    fn history_changed(&self) {
+        self.history_gen.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record that `id` just started playing. Consecutive duplicates (e.g.
@@ -99,6 +125,7 @@ impl Queue {
         if h.len() > MAX_HISTORY {
             h.pop_front();
         }
+        self.history_changed();
         Some(played_at)
     }
 
@@ -107,7 +134,9 @@ impl Queue {
     /// Consumes history as it walks back — there's no "forward" into it.
     pub fn previous_from_history(&self) -> Option<TrackId> {
         let mut h = self.history.write().unwrap();
-        h.pop_back();
+        if h.pop_back().is_some() {
+            self.history_changed();
+        }
         h.back().map(|(id, _)| *id)
     }
 
@@ -146,6 +175,7 @@ impl Queue {
         while h.len() > MAX_HISTORY {
             h.pop_front();
         }
+        self.history_changed();
     }
 
     /// The track currently playing, if any.
@@ -190,7 +220,7 @@ impl Queue {
     /// `Session::play_next_in_context`.
     pub fn append(&self, track: TrackId) {
         self.queue.write().unwrap().push_back(track);
-        self.bus.send(CoreEvent::QueueChanged);
+        self.queue_changed();
     }
 
     /// Insert `track` at the very front of the queue — it plays immediately
@@ -200,7 +230,7 @@ impl Queue {
     /// means "front of the FIFO."
     pub fn play_next(&self, track: TrackId) {
         self.queue.write().unwrap().push_front(track);
-        self.bus.send(CoreEvent::QueueChanged);
+        self.queue_changed();
     }
 
     /// Insert `tracks` at the front, in order (`tracks[0]` plays first,
@@ -211,7 +241,7 @@ impl Queue {
             q.push_front(*t);
         }
         drop(q);
-        self.bus.send(CoreEvent::QueueChanged);
+        self.queue_changed();
     }
 
     /// Remove the first occurrence of `track` from the queue, if present.
@@ -231,7 +261,7 @@ impl Queue {
             }
         };
         if found {
-            self.bus.send(CoreEvent::QueueChanged);
+            self.queue_changed();
         }
         found
     }
@@ -250,7 +280,7 @@ impl Queue {
             }
         };
         if removed {
-            self.bus.send(CoreEvent::QueueChanged);
+            self.queue_changed();
         }
     }
 
@@ -260,7 +290,7 @@ impl Queue {
     pub fn pop_front(&self) -> Option<TrackId> {
         let item = self.queue.write().unwrap().pop_front();
         if item.is_some() {
-            self.bus.send(CoreEvent::QueueChanged);
+            self.queue_changed();
         }
         item
     }
@@ -269,7 +299,7 @@ impl Queue {
     pub fn clear(&self) {
         self.stop();
         self.queue.write().unwrap().clear();
-        self.bus.send(CoreEvent::QueueChanged);
+        self.queue_changed();
     }
 
     /// Stop playback (clears `current`; leaves the upcoming queue alone).

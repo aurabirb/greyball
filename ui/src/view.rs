@@ -162,6 +162,23 @@ impl MedleyView {
         }
     }
 
+    /// Hands each visible window its rect, under the one lock a layout pass takes; effects on change run here, never in `draw`.
+    fn layout(&mut self) {
+        let (main_rect, pane_rects) = self.panes.split(self.last_screen_size);
+        let rects = std::iter::once((self.main_id(), main_rect))
+            .chain(pane_rects.into_iter().map(|(pane, rect)| (WindowId::Pane(pane), rect)));
+        let session = self.session.clone();
+        let warn_count = {
+            let s = session.lock().unwrap();
+            for (id, rect) in rects {
+                self.windows[id].relayout(rect, &s);
+            }
+            self.follow_scan(&s);
+            s.plugin_warning_count()
+        };
+        self.clamp_focus_given(warn_count);
+    }
+
     /// Keep the active tab's and the focused window's scroll windows around their cursors.
     fn clamp_scroll(&mut self) {
         for id in [self.main_id(), self.focused_id()] {
@@ -208,10 +225,6 @@ impl MedleyView {
         if !self.focus_order_given(warn_count).contains(&self.focus) {
             self.focus = Focus::Main;
         }
-    }
-
-    fn clamp_focus(&mut self) {
-        self.clamp_focus_given(self.warn_count());
     }
 
     /// Keys no window took.
@@ -337,22 +350,7 @@ impl View for MedleyView {
         // The one layout hook that gets `&mut self` with the resolved screen size.
         let resized = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
-        let (main_rect, pane_rects) = self.panes.split(constraint);
-        let rects = std::iter::once((self.main_id(), main_rect))
-            .chain(pane_rects.into_iter().map(|(pane, rect)| (WindowId::Pane(pane), rect)));
-
-        // One shared lock for everything this layout pass needs from the session.
-        let session = self.session.clone();
-        let warn_count = {
-            let s = session.lock().unwrap();
-            for (id, rect) in rects {
-                self.windows[id].relayout(rect, &s);
-            }
-            // Effects run here on change, never from `draw`: a memo hit there must not skip them.
-            self.follow_scan(&s);
-            s.plugin_warning_count()
-        };
-        self.clamp_focus_given(warn_count);
+        self.layout();
         self.relayout_modal(resized);
         constraint
     }
@@ -366,6 +364,19 @@ impl View for MedleyView {
         if event == Event::Refresh {
             return EventResult::Ignored;
         }
+        let result = self.route(&event);
+        // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away.
+        self.layout();
+        // A wheel scroll must stay where it is; any key brings the cursor back into view.
+        if !matches!(event, Event::Mouse { .. }) {
+            self.clamp_scroll();
+        }
+        result
+    }
+}
+
+impl MedleyView {
+    fn route(&mut self, event: &Event) -> EventResult {
         // Transient queue/wedge feedback shows for one keypress.
         let is_mouse_followup =
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
@@ -375,16 +386,16 @@ impl View for MedleyView {
             self.with_session_mut(|s| s.clear_membership_feedback());
         }
 
-        if let Some(result) = self.on_edit_event(&event) {
+        if let Some(result) = self.on_edit_event(event) {
             return result;
         }
         if self.modal.is_some() {
-            return self.on_modal_event(&event);
+            return self.on_modal_event(event);
         }
 
         // Fixed rows of the whole screen: the tab bar on top, the hint row and the status line at the bottom.
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
-            && let Some(local) = position.checked_sub(offset)
+            && let Some(local) = position.checked_sub(*offset)
             && local.x < self.last_screen_size.x
         {
             let size = self.last_screen_size;
@@ -416,7 +427,7 @@ impl View for MedleyView {
         // A mouse event goes to whichever visible window it lands in, which takes focus; wheel scrolls stay put.
         if matches!(event, Event::Mouse { .. }) {
             let visible = self.visible();
-            let Some((id, outcome)) = self.send(&visible, &event) else { return EventResult::Ignored };
+            let Some((id, outcome)) = self.send(&visible, event) else { return EventResult::Ignored };
             self.focus = match id {
                 WindowId::Pane(pane) => Focus::Pane(pane),
                 WindowId::Tab(_) => Focus::Main,
@@ -425,7 +436,7 @@ impl View for MedleyView {
         }
 
         if self.focus == Focus::Warnings {
-            if !defocuses_warnings(&event) {
+            if !defocuses_warnings(event) {
                 self.open_warnings();
                 return EventResult::consumed();
             }
@@ -433,11 +444,9 @@ impl View for MedleyView {
         }
 
         // A key goes to the focused window, then the active tab's, then the shell.
-        let result = match self.send(&[self.focused_id(), self.main_id()], &event) {
+        match self.send(&[self.focused_id(), self.main_id()], event) {
             Some((_, outcome)) => self.apply(outcome),
-            None => self.on_shell_key(&event),
-        };
-        self.clamp_scroll();
-        result
+            None => self.on_shell_key(event),
+        }
     }
 }

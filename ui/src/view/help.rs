@@ -14,20 +14,25 @@ use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset};
 pub(super) struct HelpModal {
     scroll: usize,
     lines: Vec<String>,
-    /// The `list_revision` that `lines` were built under.
-    built: Memo<u64>,
+    /// The generations `lines` were built under.
+    built: Memo<(u64, u64, u64)>,
 }
 
 impl HelpModal {
+    /// Of everything `help_lines` shows that can change: hotkeys, playlist names, remote playlist names.
+    fn generations(s: &Session) -> (u64, u64, u64) {
+        (s.hotkeys_gen(), s.playlists_gen(), s.remote_playlists_gen())
+    }
+
     pub(super) fn new(s: &Session) -> Self {
         let built = Memo::default();
-        built.changed(s.list_revision());
+        built.changed(Self::generations(s));
         Self { scroll: 0, lines: help_lines(s), built }
     }
 
     /// Rebuilds the lines in place once what they show changed, re-clamping `scroll` rather than jumping to the top.
     pub(super) fn relayout(&mut self, rect: Rect, s: &Session) {
-        if self.built.changed(s.list_revision()) {
+        if self.built.changed(Self::generations(s)) {
             self.lines = help_lines(s);
         }
         self.scroll = bound_offset(self.scroll, self.lines.len(), modal_body(rect, true).height());

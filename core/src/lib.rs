@@ -6,6 +6,7 @@ pub mod audio_decode;
 pub mod catalog;
 pub mod config;
 pub mod event;
+mod hotkeys;
 pub mod http_fetch;
 pub mod logbuf;
 pub mod matcher;

@@ -167,7 +167,6 @@ impl MedleyView {
         } else {
             self.panes.open.push(pane);
         }
-        self.clamp_focus();
     }
 
     /// Sync cursive's own redraw rate to whether/how fast the Vis pane needs to animate.
