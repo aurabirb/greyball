@@ -86,7 +86,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "block2",
  "bpm",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "bpm"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "log",
@@ -342,7 +342,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2435,7 +2435,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "player"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "crossbeam-channel",
@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "sources-http"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "log",
@@ -3292,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "sources-soulseek"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "log",
@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "sources-soundcloud"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "log",
@@ -3319,7 +3319,7 @@ dependencies = [
 
 [[package]]
 name = "sources-spotify"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "futures",
@@ -4035,7 +4035,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "cursive",
@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "waveform"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "core",
  "log",
