@@ -4,9 +4,9 @@ use std::sync::Arc;
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseEvent};
 
-use core::{Command, LogBuf, PaneLayoutConfig, PaneMode, Session};
+use core::{Command, LogBuf, PaneLayoutConfig, Session};
 
-use crate::screen::{Kind, Screen};
+use crate::screen::{Kind, Placement, WINDOWS};
 use crate::vis::Vis;
 
 use super::log::LogPane;
@@ -15,27 +15,8 @@ use super::settings::{SettingsEntry, SettingsPane};
 use super::track_list::{ListFrame, TrackList};
 
 /// One window instance; says nothing about its kind or where it is shown.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct WindowId(usize);
-
-/// Where the shell shows a window: as the active tab, docked beside it, fullscreen, or in a box over the view.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Placement {
-    Tabbed,
-    Docked,
-    Screen,
-    Floating,
-}
-
-impl From<PaneMode> for Placement {
-    fn from(mode: PaneMode) -> Self {
-        match mode {
-            PaneMode::Screen => Placement::Screen,
-            PaneMode::Embedded => Placement::Docked,
-            PaneMode::Float => Placement::Floating,
-        }
-    }
-}
 
 /// What the shell hands a window under its one session lock.
 pub(super) struct Ctx<'a> {
@@ -43,6 +24,24 @@ pub(super) struct Ctx<'a> {
     pub(super) pane_cfg: PaneLayoutConfig,
     /// A search query is being typed.
     pub(super) searching: bool,
+    pub(super) placements: &'a Placements,
+}
+
+/// Every window's placement, by id, apart from the windows so a `Ctx` can lend it while one window is borrowed mutably.
+pub(super) struct Placements {
+    of: Vec<Placement>,
+    generation: u64,
+}
+
+impl Placements {
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Each startup window's name and placement.
+    pub(super) fn named(&self) -> impl Iterator<Item = (&'static str, Placement)> + '_ {
+        WINDOWS.iter().zip(&self.of).map(|(startup, &placement)| (startup.name, placement))
+    }
 }
 
 /// What an event meant to a window, for the shell to act on; `Ignored` lets the shell route it on.
@@ -72,7 +71,6 @@ enum Body {
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
 pub(super) struct Window {
     pub(super) kind: Kind,
-    pub(super) placement: Placement,
     body: Body,
     rect: Rect,
 }
@@ -166,24 +164,18 @@ impl Window {
 /// Every window instance, by id; ids stay valid because windows are never removed.
 pub(super) struct Windows {
     items: Vec<Window>,
+    placements: Placements,
     log: Arc<LogBuf>,
     vis: Arc<Vis>,
-    tabs: Vec<(Screen, WindowId)>,
-    /// The one pane window each `:log`/`:settings`/`:vis`/`:queue`/`:history` command names.
-    command_panes: Vec<(Kind, WindowId)>,
 }
 
 impl Windows {
-    /// A tab per screen and one window per `:panes` name, placed by `pane_mode`.
-    pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>, pane_mode: PaneMode) -> Self {
-        let mut windows = Self { items: Vec::new(), log, vis, tabs: Vec::new(), command_panes: Vec::new() };
-        for screen in Screen::ALL {
-            let id = windows.add(Kind::List(screen), Placement::Tabbed);
-            windows.tabs.push((screen, id));
-        }
-        for kind in [Kind::Log, Kind::Settings, Kind::Vis, Kind::List(Screen::Queue), Kind::List(Screen::History)] {
-            let id = windows.add(kind, pane_mode.into());
-            windows.command_panes.push((kind, id));
+    /// One window per `WINDOWS` entry, in its order; the pane windows are placed by `panes`.
+    pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>, panes: Placement) -> Self {
+        let placements = Placements { of: Vec::new(), generation: 0 };
+        let mut windows = Self { items: Vec::new(), placements, log, vis };
+        for startup in &WINDOWS {
+            windows.add(startup.kind, if startup.tabbed { Placement::Tabbed } else { panes });
         }
         windows
     }
@@ -193,24 +185,57 @@ impl Windows {
             Kind::Log => Body::Log(LogPane::new(self.log.clone())),
             Kind::Settings => Body::Settings(SettingsPane::default()),
             Kind::Vis => Body::Vis(self.vis.clone()),
-            Kind::List(screen) => Body::List(TrackList::new(screen)),
+            Kind::List(list) => Body::List(TrackList::new(list)),
         };
-        self.items.push(Window { kind, placement, body, rect: Rect::from_size((0, 0), (0, 0)) });
+        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)) });
+        self.placements.of.push(placement);
         WindowId(self.items.len() - 1)
     }
 
-    /// Every window a pane command names.
-    pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.command_panes.iter().map(|&(_, id)| id)
+    pub(super) fn ids(&self) -> impl Iterator<Item = WindowId> + use<> {
+        (0..self.items.len()).map(WindowId)
     }
 
-    pub(super) fn tab(&self, screen: Screen) -> WindowId {
-        self.tabs.iter().find(|&&(tab, _)| tab == screen).expect("`Windows::new` builds a tab per screen").1
+    /// The startup window `:panes`, `:window` and `state.toml` call `name`.
+    pub(super) fn named(&self, name: &str) -> Option<WindowId> {
+        WINDOWS.iter().position(|startup| startup.name == name).map(WindowId)
     }
 
-    /// The window the pane command for `kind` opens.
-    pub(super) fn command_pane(&self, kind: Kind) -> Option<WindowId> {
-        self.command_panes.iter().find(|&&(pane, _)| pane == kind).map(|&(_, id)| id)
+    pub(super) fn name(&self, id: WindowId) -> &'static str {
+        WINDOWS[id.0].name
+    }
+
+    /// The windows `:panes <mode>` without a name places: those that do not start as tabs.
+    pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + use<> {
+        WINDOWS.iter().enumerate().filter(|(_, startup)| !startup.tabbed).map(|(i, _)| WindowId(i))
+    }
+
+    pub(super) fn placements(&self) -> &Placements {
+        &self.placements
+    }
+
+    pub(super) fn placement(&self, id: WindowId) -> Placement {
+        self.placements.of[id.0]
+    }
+
+    /// The one write to a placement; the shell's `set_placement` keeps the tab bar and `open` in step.
+    pub(super) fn place(&mut self, id: WindowId, placement: Placement) {
+        self.placements.of[id.0] = placement;
+        self.placements.generation += 1;
+    }
+
+    /// Offers `event` to each of `ids`; the first window not ignoring it, and its outcome.
+    pub(super) fn send(
+        &mut self,
+        ids: &[WindowId],
+        event: &Event,
+        (s, pane_cfg, searching): (&Session, PaneLayoutConfig, bool),
+    ) -> Option<(WindowId, WindowOutcome)> {
+        let ctx = Ctx { s, pane_cfg, searching, placements: &self.placements };
+        ids.iter().find_map(|&id| match self.items[id.0].on_event(event, &ctx) {
+            WindowOutcome::Ignored => None,
+            outcome => Some((id, outcome)),
+        })
     }
 }
 

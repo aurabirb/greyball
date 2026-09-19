@@ -10,9 +10,8 @@ use core::{Command, CoreEvent, Dispatch, PlaylistId, Plugin, SourceId, TrackId};
 
 use crate::command;
 use crate::keybindings::Action;
-use crate::screen::{Kind, Screen};
 
-use super::{Focus, MedleyView};
+use super::MedleyView;
 use super::help::HelpModal;
 use super::modal::Modal;
 use super::notice::Notice;
@@ -67,46 +66,41 @@ impl MedleyView {
                     Ok(p) => p,
                     Err(e) => return self.notify(Notice::failed(e)),
                 };
-                let open = self.windows[self.main_id()].list().and_then(TrackList::open_local);
+                let open = self.active_list().and_then(TrackList::open_local);
                 if parsed == command::Parsed::Help {
                     return self.handle_action(Action::OpenHelp);
                 }
-                let toggled = match parsed {
-                    command::Parsed::TogglePane(kind) => Some(kind),
-                    command::Parsed::Vis => Some(Kind::Vis),
+                let named = match parsed {
+                    command::Parsed::ToggleWindow(name) => Some((name, true)),
+                    command::Parsed::History => Some(("history-tab", false)),
                     _ => None,
                 };
-                if let Some(id) = toggled.and_then(|kind| self.windows.command_pane(kind)) {
-                    self.toggle_window(id);
-                    return self.vis_fps_cb();
-                }
-                if command::Parsed::History == parsed {
-                    return self.handle_action(Action::Screen(Screen::History));
+                if let Some((name, toggle)) = named {
+                    let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
+                    if toggle { self.toggle_window(id) } else { self.show(id) }
+                    return EventResult::consumed();
                 }
                 if command::Parsed::Keys == parsed {
                     return self.handle_action(Action::OpenHotkeyMenu);
                 }
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
-                    // `side`/`stack` stay shared layout geometry regardless of `patch.pane`.
+                    // `side`/`stack` are shared dock geometry whatever window is named.
                     if let Some(side) = patch.side {
                         self.pane_cfg.side = side;
                     }
                     if let Some(stack) = patch.stack {
                         self.pane_cfg.stack = stack;
                     }
-                    if let Some(mode) = patch.mode {
-                        let ids: Vec<_> = match patch.pane {
-                            Some(kind) => self.windows.command_pane(kind).into_iter().collect(),
-                            None => {
-                                self.pane_cfg.mode = mode;
-                                self.windows.panes().collect()
-                            }
+                    if let Some(placement) = patch.mode {
+                        let ids: Vec<_> = match patch.window {
+                            Some(name) => self.windows.named(name).into_iter().collect(),
+                            None => self.windows.panes().collect(),
                         };
                         for id in ids {
-                            self.set_placement(id, mode.into());
+                            self.set_placement(id, placement, false);
                         }
                     }
-                    return self.vis_fps_cb();
+                    return EventResult::consumed();
                 }
                 if parsed == command::Parsed::OpenBrowse {
                     let session = self.session.clone();
@@ -191,32 +185,36 @@ impl MedleyView {
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {
         match action {
             Action::Command(c) => self.run(c),
-            // A list that can't be filtered locally sends `/` to the Search tab's input instead.
+            // A list that can't be filtered locally sends `/` to the Search window's input instead.
             Action::FocusSearch => {
-                if self.active_list().is_none_or(|list| list.is_search()) {
-                    self.handle_action(Action::Screen(Screen::Search))
-                } else {
-                    self.editing = Editing::Filter;
-                    self.buffer.clear();
-                    EventResult::consumed()
+                let id = self.active_list_id();
+                match self.windows[id].list().map(TrackList::is_search) {
+                    Some(false) => {
+                        self.editing = Editing::Filter;
+                        self.buffer.clear();
+                    }
+                    Some(true) => self.show(id),
+                    None => {
+                        if let Some(id) = self.windows.named("search") {
+                            self.show(id);
+                        }
+                    }
                 }
+                EventResult::consumed()
             }
             Action::CommandLine => {
                 self.editing = Editing::CommandLine;
                 self.buffer.clear();
                 EventResult::consumed()
             }
-            Action::Screen(n) => {
-                let left = self.main_id();
-                self.screen = n;
-                if self.focus == Focus::Window(left) {
-                    self.focus = Focus::Window(self.main_id());
+            Action::Tab(n) => {
+                if let Some(&id) = self.tabs.get(n) {
+                    self.show(id);
                 }
-                // Switching to Search focuses the input immediately, same as `/`.
-                if n == Screen::Search {
-                    self.editing = Editing::Search;
-                    self.buffer.clear();
-                }
+                EventResult::consumed()
+            }
+            Action::CyclePlacement => {
+                self.cycle_placement();
                 EventResult::consumed()
             }
             Action::OpenHotkeyMenu => {
@@ -333,12 +331,13 @@ impl MedleyView {
                     core::BrowseNode::Path(id) => id.clone(),
                     core::BrowseNode::Root => String::new(),
                 };
-                let result = self.handle_action(Action::Screen(Screen::Playlists));
-                let id = self.main_id();
-                if let Some(list) = self.windows[id].list_mut() {
-                    list.open_remote(sid, name, node);
+                if let Some(id) = self.windows.named("playlists") {
+                    self.show(id);
+                    if let Some(list) = self.windows[id].list_mut() {
+                        list.open_remote(sid, name, node);
+                    }
                 }
-                result
+                EventResult::consumed()
             }
             None => self.notify(Notice::failed(format!("no source can open this as a playlist: {uri:?}"))),
         }

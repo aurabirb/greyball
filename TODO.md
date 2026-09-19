@@ -216,8 +216,8 @@
   does). Keys this screen's raw handlers consume first (`x` export, `:`, Enter, …) stay theirs —
   see the raw-handler hotkey bug above; don't make them assignable.
   (2) `` ` `` from anywhere opens a second instance of the Playlists window, floating — a bordered
-  box over the current view, not fullscreen (the floating mode from the per-window mode item
-  below, which ships first — reuse it, don't build a second one) — with its
+  box over the current view, not fullscreen (`Placement::Floating`, `ui/src/view/README.md` — reuse
+  it, don't build a second one) — with its
   own state but the same behavior as the tabbed one: own cursor/scroll, own open local/remote
   playlist and drill-in/back navigation, own filter, and every Playlists-screen key working in it,
   including (1)'s direct assign, Backspace clearing the selected playlist's key, `x` export and
@@ -245,7 +245,7 @@
 - [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
   — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
   `HelpModal`/`help_lines`/`build_help_lines` (`ui/src/view/help.rs`) and `HotkeyMenu`/`menu_rows`
-  (`ui/src/view/hotkeys.rs`) with their `Modal` variants rather than keeping either alongside. Floating = the floating window mode from the per-window mode item; reuse it.
+  (`ui/src/view/hotkeys.rs`) with their `Modal` variants rather than keeping either alongside. Floating = `Placement::Floating` (`ui/src/view/README.md`); reuse it.
   Content: one table of items, each `{command, description, shortcut}`, grouped into titled
   sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
   then movement/navigation, then player controls, then everything else (panes/windows, playlist
@@ -294,23 +294,12 @@
   (commands needing an argument, fixed keys like Esc/Enter/arrows) show their key but refuse Enter
   with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
   `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
-- [ ] Per-window mode toggle, so the layout can be rearranged: every window — tab or pane — can be
-  switched between the four `Placement`s (`ui/src/view/window.rs`, model in `ui/src/view/README.md`):
-  tabbed, docked, screen and floating. Windows already store their placement, `Windows` can add an
-  instance of any `Kind`, and `:panes [<pane>] <screen|embedded|float>` re-places the five pane
-  windows live. What is left: a key that cycles the focused window's placement tabbed → docked →
-  screen → floating; `:panes` accepting every window (tab windows too, plus a way to target one that
-  isn't focused or visible) and the value `tabbed`; the tab bar (`TabBar`, tab click hit-test,
-  number-key switching, `MedleyView::screen`) built from whichever windows are currently `Tabbed`
-  instead of `Screen::ALL`, keeping at least one window tabbed so the main area is never empty — at
-  which point `Screen` is only the list kind and `Windows::tab` goes; deciding whether Queue/History
-  stay two instances or become one; merging `core::config::PaneMode` into the four-value placement
-  (no `Embedded` alias); persisting each window's placement and open/closed state in `state.toml`
-  next to volume and hotkeys (`save_state`, `app/src/main.rs`); and showing per-window placement in
-  Settings in place of the `panes.mode` info line, which only reflects the last `:panes <mode>`
-  given without a pane name. Floating windows all share one centered rect (`panes::float_rect`), so
-  only the top one is visible; give them distinct rects before two are meant to show at once. Do
-  this before the playlist hotkey rework and the merged Help/hotkey window.
+- [ ] `core::config::PaneMode` (`panes.mode` in `config.toml`: `screen`, `embedded`, `float`) only seeds
+  the five pane windows' placement for a default layout; merge it into `ui::screen::Placement` so the
+  config takes `tabbed` too and there is one enum and one vocabulary.
+- [ ] A `Screen`-placed window keeps every key but Esc and the placement key, so a fullscreen list has
+  no `/`, `q`, `:` or number keys. Draw the hint row under a fullscreen window and let the shell keys
+  through, or decide that fullscreen stays modal.
 - [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
   track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
   pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
@@ -401,10 +390,10 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item below or under Features): (1) the per-window
-  mode toggle; (2) the playlist hotkey rework, the merged Help/hotkey window, the status-row
-  widget, the title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis
-  levels lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
+- [ ] UI architecture work order (each step is an item under Features): (1) the playlist hotkey
+  rework; (2) the merged Help/hotkey window; (3) the status-row widget, the title scrubber. The
+  `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels lock and a `split` axis
+  helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use
   messages and reactive patterns to communicate between, and render, independent parts of the app (no
   part reaching into another's state or recomputing/polling per frame what an event should drive).

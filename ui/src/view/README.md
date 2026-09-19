@@ -12,23 +12,43 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   (`track_list.rs`, every list kind: Now Playing, Playlists, Search, History, Queue), the `LogPane`,
   the `SettingsPane` or `Vis`.
 - `Windows` is an open store: `WindowId` is an opaque index that encodes neither kind nor placement,
-  and `Windows::add(kind, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(Screen)`,
-  `Log`, `Settings`, `Vis`). Startup adds a `Tabbed` list per `Screen` and one pane window per `:panes`
-  name. The Queue tab and the Queue pane are two instances of one kind, each with its own cursor,
-  scroll window, filter and memos; nothing may assume a window is the only instance of its kind, that
-  it is fullscreen-wide, or that it starts at column 0. Nothing looks a window up by kind:
-  `Windows::tab`/`command_pane` resolve a tab or a pane command's name to the id startup recorded.
-- Each instance stores its `Placement` (`Tabbed`, `Docked`, `Screen`, `Floating`); `:panes [<pane>]
-  <screen|embedded|float>` sets it through `set_placement`, which moves an open window at once (to
-  fullscreen it only closes it). A `Tabbed` window shows while it is the active tab (`screen`);
-  `MedleyView::open` lists the other open windows, oldest first, which is both dock order and z-order,
-  each with the focus it opened over. `placed()` derives every shown window's `Placed` (its rect and
-  the `frame` box it is hit-tested by), bottom first: the active tab, the `Docked` ones around it
-  (`panes::split`), then each `Floating` one's `float_body` inside its `float_rect` frame — a centered
-  box three fifths of the area between the fixed rows, recomputed from the screen size. Layout, draw
-  and the mouse hit-test all read that one `placed()`. An open `Screen` window is shown alone, above a
-  footer hint; it keeps every key, takes the mouse like any window, and Esc closes it. A `Screen` list
-  window switches to its kind's tab instead.
+  and `Windows::add(kind, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(ListKind)`,
+  `Log`, `Settings`, `Vis`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
+  `ListKind`s). Startup adds one window per entry of `screen::WINDOWS`, which gives each the name
+  `:panes`, `:window` and `state.toml` know it by: the five tabs (`now-playing`, `playlists`, `search`,
+  `history-tab`, `queue-tab`) and the five panes (`log`, `settings`, `vis`, `queue`, `history`). The Queue
+  tab and the Queue pane are two instances of one kind, each with its own cursor, scroll window, filter
+  and memos; nothing may assume a window is the only instance of its kind, that it is a list, that it
+  is fullscreen-wide, or that it starts at column 0. Nothing looks a window up by kind: `Windows::named`
+  resolves a name to the id startup gave it.
+- Each window has a `Placement` (`Tabbed`, `Docked`, `Screen`, `Floating`; `tabbed`, `embedded`, `screen`,
+  `float` wherever the user reads or types one), held in `Windows::placements` apart from the windows
+  so a `Ctx` can lend the Settings pane all of them while one window is borrowed mutably;
+  `Windows::place` is its one write and bumps `Placements::generation`. `MedleyView::set_placement` is
+  the one caller: it keeps `tabs` and `open` in step, keeps a shown window shown and a focused one
+  focused, and refuses to move the last tab (a flash). `:panes [<window>] <placement>` goes through it
+  (without a name: every pane window; to `screen` it only closes an open window), and so does the
+  `CyclePlacement` key (`M`), which moves the focused window Tabbed → Docked → Screen → Floating and
+  flashes the new placement.
+- The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
+  appended, never empty. `active` is the one shown; when it moves away its right neighbour takes over.
+  `1`-`9` and a tab click select by position (`Action::Tab`); `tab_names` numbers a second tab of one
+  kind ("Queue 2"). `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
+  order and z-order, each with the focus it opened over. `show(id)` brings any window into view (its
+  tab, else opened and focused) and is what `/`, `:hist` and `:open <playlist link>` use; `toggle_window`
+  (`:window <name>`, `:log`, …) opens or closes a non-tab window and switches to a tabbed one.
+- `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
+  bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
+  one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
+  recomputed from the screen size, cascaded from the centre by the window's rank by id among the open
+  floats, so raising one moves none. Layout, draw and the mouse hit-test all read that one `placed()`.
+  An open `Screen` window is shown alone, above a footer that shows the flash or a key hint; it keeps
+  every key but the `CyclePlacement` one, takes the mouse like any window, and Esc closes it.
+- `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
+  shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
+  and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
+  windows with at least one tab. A restored layout's active tab wins over `Config::initial_screen`,
+  which only picks the tab of a default layout.
 - A floating window's own title row sits in the top border of the box the shell draws around it
   (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window
   focuses it; focusing a floating window raises it (`focus_window`). Closing the focused window
@@ -44,8 +64,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
     `ToggleSetting(row)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
-  - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config and
-    `searching`.
+  - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
+    `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
   playlist, a remote one), its `/`-filter query and two memos. `reset_for_new_list` is the only way
   `Open` changes and `set_query` the only way the filter does; both reset the selection and bump
@@ -68,7 +88,7 @@ build closure against its key.
 | --- | --- | --- |
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
-| `SettingsPane::entries` | `revision`, pane layout config | config, volume, scan mode |
+| `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
 | `HelpModal::built` | hotkeys, playlists and remote-playlists generations | hotkeys, playlist names (plugin commands are fixed at startup) |
@@ -146,8 +166,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by
   `on_root`, which dialog buttons also use to `run` a command); everything else is re-read from the
   session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
-  (clock, marquee, title flush); `vis_fps_cb` raises it to `vis::FPS` while the Vis window is shown
-  and must never go below the floor. `Event::Refresh` is ignored by `on_event`.
+  (clock, marquee, title flush); `sync_vis_fps`, run after every event, raises it to `vis::FPS` while
+  a Vis window is shown and must never go below the floor. `Event::Refresh` only runs that sync.
 
 ## Routing in `MedleyView::route`
 
@@ -168,7 +188,7 @@ on `revision` — it is read fresh or kept in its own small cache.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
    `send` offers the key to the focused window, then the active tab's — except Esc with a floating
    or `Screen` window focused, which only that window sees and which closes it when ignored, and any
-   key under a `Screen` window, which goes no further; what both ignore goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
+   key under a `Screen` window, which goes no further but for the `CyclePlacement` key; what both ignore goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused
@@ -195,5 +215,5 @@ printer, rect, title, footer)` draws the title bar and footer hint and returns t
 4. Session data arrives as arguments (`Ctx`, `&Session`, a frame); outcomes go back as
    `WindowOutcome`/`ModalOutcome`. Anything crossing a component boundary goes through the shell.
 5. Reuse `ListState`, `Nav`, `draw_row_list`, `draw_modal_frame`/`modal_list`, `Marquee`, `text.rs`
-   before writing scroll or width math. `Screen` (`../screen.rs`) names the tabs and list kinds and
-   owns every mapping over them.
+   before writing scroll or width math. `../screen.rs` names the kinds, the placements and the
+   startup windows and owns every mapping over them.

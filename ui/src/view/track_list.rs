@@ -11,7 +11,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, SourceId, TrackId};
 
 use crate::row::RowItem;
-use crate::screen::Screen;
+use crate::screen::ListKind;
 
 use super::memo::Memo;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
@@ -96,7 +96,7 @@ pub(super) struct ListFrame {
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
 pub(super) struct TrackList {
-    kind: Screen,
+    kind: ListKind,
     state: ListState,
     open: Open,
     /// The `/`-filter, live while typed; never empty.
@@ -111,7 +111,7 @@ pub(super) struct TrackList {
 }
 
 impl TrackList {
-    pub(super) fn new(kind: Screen) -> Self {
+    pub(super) fn new(kind: ListKind) -> Self {
         Self {
             kind,
             state: ListState::default(),
@@ -156,42 +156,42 @@ impl TrackList {
     }
 
     pub(super) fn is_search(&self) -> bool {
-        self.kind == Screen::Search
+        self.kind == ListKind::Search
     }
 
     /// Whether the `/`-filter narrows this list.
     fn filterable(&self) -> bool {
         match self.kind {
-            Screen::NowPlaying | Screen::Queue | Screen::History => true,
-            Screen::Playlists => !matches!(self.open, Open::TopLevel),
-            Screen::Search => false,
+            ListKind::NowPlaying | ListKind::Queue | ListKind::History => true,
+            ListKind::Playlists => !matches!(self.open, Open::TopLevel),
+            ListKind::Search => false,
         }
     }
 
     /// The generation, held by its owner, of the list on screen, plus that of track ids vanishing from any list.
     pub(super) fn list_gen(&self, s: &Session) -> u64 {
         s.removed_tracks_gen() + match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => s.context_gen(),
-            (Screen::Search, _) => s.results_gen(),
-            (Screen::Queue, _) => s.queue.queue_gen(),
-            (Screen::History, _) => s.queue.history_gen(),
-            (Screen::Playlists, Open::Local(_)) => s.playlists_gen(),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
-            (Screen::Playlists, Open::TopLevel) => 0,
+            (ListKind::NowPlaying, _) => s.context_gen(),
+            (ListKind::Search, _) => s.results_gen(),
+            (ListKind::Queue, _) => s.queue.queue_gen(),
+            (ListKind::History, _) => s.queue.history_gen(),
+            (ListKind::Playlists, Open::Local(_)) => s.playlists_gen(),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
+            (ListKind::Playlists, Open::TopLevel) => 0,
         }
     }
 
     /// Every track already loaded for the list, unwindowed.
     fn all_tracks(&self, s: &Session) -> Vec<core::Track> {
         match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => s.playing_context_window(0, s.playing_context_len()),
-            (Screen::Queue, _) => s.queue_window(0, s.queue_len()),
-            (Screen::History, _) => s.history_window(0, s.queue.history_len()),
-            (Screen::Playlists, Open::Local(id)) => s.playlist_window(*id, 0, s.playlist_len(*id)),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => {
+            (ListKind::NowPlaying, _) => s.playing_context_window(0, s.playing_context_len()),
+            (ListKind::Queue, _) => s.queue_window(0, s.queue_len()),
+            (ListKind::History, _) => s.history_window(0, s.queue.history_len()),
+            (ListKind::Playlists, Open::Local(id)) => s.playlist_window(*id, 0, s.playlist_len(*id)),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => {
                 s.remote_playlist_window(sid, node, 0, s.remote_playlist_len(sid, node))
             }
-            (Screen::Playlists, Open::TopLevel) | (Screen::Search, _) => vec![],
+            (ListKind::Playlists, Open::TopLevel) | (ListKind::Search, _) => vec![],
         }
     }
 
@@ -216,13 +216,13 @@ impl TrackList {
             return ids.to_vec();
         }
         match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => s.playing_context_ids(),
-            (Screen::Search, _) => s.results_ids(),
-            (Screen::Queue, _) => s.queue_ids(),
-            (Screen::History, _) => s.history_ids(),
-            (Screen::Playlists, Open::Local(id)) => s.playlist_track_ids(*id),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
-            (Screen::Playlists, Open::TopLevel) => vec![],
+            (ListKind::NowPlaying, _) => s.playing_context_ids(),
+            (ListKind::Search, _) => s.results_ids(),
+            (ListKind::Queue, _) => s.queue_ids(),
+            (ListKind::History, _) => s.history_ids(),
+            (ListKind::Playlists, Open::Local(id)) => s.playlist_track_ids(*id),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
+            (ListKind::Playlists, Open::TopLevel) => vec![],
         }
     }
 
@@ -245,9 +245,9 @@ impl TrackList {
     /// The playlist (local or remote) selected or open, if this is a Playlists window.
     pub(super) fn selected_hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
         match (self.kind, &self.open) {
-            (Screen::Playlists, Open::Local(id)) => Some(HotkeyTarget::Local(*id)),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => Some(HotkeyTarget::Remote(sid.clone(), node.clone())),
-            (Screen::Playlists, Open::TopLevel) => self.top_row(s).as_ref().map(TopRow::target),
+            (ListKind::Playlists, Open::Local(id)) => Some(HotkeyTarget::Local(*id)),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => Some(HotkeyTarget::Remote(sid.clone(), node.clone())),
+            (ListKind::Playlists, Open::TopLevel) => self.top_row(s).as_ref().map(TopRow::target),
             _ => None,
         }
     }
@@ -258,26 +258,26 @@ impl TrackList {
             return ids.len();
         }
         match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => s.playing_context_len(),
-            (Screen::Search, _) => s.results_len(),
-            (Screen::Queue, _) => s.queue_len(),
-            (Screen::History, _) => s.queue.history_len(),
-            (Screen::Playlists, Open::Local(id)) => s.playlist_len(*id),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
-            (Screen::Playlists, Open::TopLevel) => top_rows(s).len(),
+            (ListKind::NowPlaying, _) => s.playing_context_len(),
+            (ListKind::Search, _) => s.results_len(),
+            (ListKind::Queue, _) => s.queue_len(),
+            (ListKind::History, _) => s.queue.history_len(),
+            (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
+            (ListKind::Playlists, Open::TopLevel) => top_rows(s).len(),
         }
     }
 
     /// The list's display name as a playback context.
     fn context_name(&self, s: &Session) -> Option<String> {
         match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => s.playing_context_name(),
-            (Screen::Search, _) => Some("Search results".to_string()),
-            (Screen::Queue, _) => Some("Queue".to_string()),
-            (Screen::History, _) => Some("History".to_string()),
-            (Screen::Playlists, Open::Local(id)) => s.playlists().into_iter().find(|p| p.id == *id).map(|p| p.name),
-            (Screen::Playlists, Open::Remote(_, name, _)) => Some(name.clone()),
-            (Screen::Playlists, Open::TopLevel) => None,
+            (ListKind::NowPlaying, _) => s.playing_context_name(),
+            (ListKind::Search, _) => Some("Search results".to_string()),
+            (ListKind::Queue, _) => Some("Queue".to_string()),
+            (ListKind::History, _) => Some("History".to_string()),
+            (ListKind::Playlists, Open::Local(id)) => s.playlists().into_iter().find(|p| p.id == *id).map(|p| p.name),
+            (ListKind::Playlists, Open::Remote(_, name, _)) => Some(name.clone()),
+            (ListKind::Playlists, Open::TopLevel) => None,
         }
     }
 
@@ -292,7 +292,7 @@ impl TrackList {
             };
             return WindowOutcome::Run(Command::PlayContext { tracks, index, remote, name: self.context_name(s) });
         }
-        if self.kind != Screen::Playlists || !matches!(self.open, Open::TopLevel) {
+        if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;
         }
         match self.top_row(s) {
@@ -304,7 +304,7 @@ impl TrackList {
     }
 
     fn unit(&self, count: usize) -> &'static str {
-        let playlists = self.kind == Screen::Playlists && matches!(self.open, Open::TopLevel);
+        let playlists = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel);
         match (playlists, count == 1) {
             (true, true) => "playlist",
             (true, false) => "playlists",
@@ -320,10 +320,10 @@ impl TrackList {
             return format!("filter {query:?} ({total} match{plural})");
         }
         let (name, hint) = match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) => (s.playing_context_name(), None),
-            (Screen::Search, _) => (s.results_query().map(str::to_string), searching.then_some("Esc to cancel")),
-            (Screen::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
-            (Screen::Playlists, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
+            (ListKind::NowPlaying, _) => (s.playing_context_name(), None),
+            (ListKind::Search, _) => (s.results_query().map(str::to_string), searching.then_some("Esc to cancel")),
+            (ListKind::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
+            (ListKind::Playlists, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
             _ => (None, None),
         };
         let name = name.unwrap_or_else(|| format!("{} ({total} {})", self.kind.label(), self.unit(total)));
@@ -348,25 +348,25 @@ impl TrackList {
             return track_rows(s.tracks_for(&window));
         }
         match (self.kind, &self.open) {
-            (Screen::NowPlaying, _) if s.playing_context_len() == 0 => {
+            (ListKind::NowPlaying, _) if s.playing_context_len() == 0 => {
                 vec![plain_row("nothing played yet — press Enter on a track to start playing")]
             }
-            (Screen::NowPlaying, _) => track_rows(s.playing_context_window(offset, limit)),
-            (Screen::Search, _) if s.results_len() == 0 => match s.results_query() {
+            (ListKind::NowPlaying, _) => track_rows(s.playing_context_window(offset, limit)),
+            (ListKind::Search, _) if s.results_len() == 0 => match s.results_query() {
                 // A search ran and came back empty — say so.
                 Some(q) => vec![plain_row(format!(
                     "no results for {q:?} — check the Log pane (:log) for source errors"
                 ))],
                 None => vec![],
             },
-            (Screen::Search, _) => track_rows(s.results_window(offset, limit)),
-            (Screen::Queue, _) => track_rows(s.queue_window(offset, limit)),
-            (Screen::History, _) => track_rows(s.history_window(offset, limit)),
-            (Screen::Playlists, Open::Local(id)) => track_rows(s.playlist_window(*id, offset, limit)),
-            (Screen::Playlists, Open::Remote(sid, _, node)) => {
+            (ListKind::Search, _) => track_rows(s.results_window(offset, limit)),
+            (ListKind::Queue, _) => track_rows(s.queue_window(offset, limit)),
+            (ListKind::History, _) => track_rows(s.history_window(offset, limit)),
+            (ListKind::Playlists, Open::Local(id)) => track_rows(s.playlist_window(*id, offset, limit)),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => {
                 track_rows(s.remote_playlist_window(sid, node, offset, limit))
             }
-            (Screen::Playlists, Open::TopLevel) => {
+            (ListKind::Playlists, Open::TopLevel) => {
                 let playlists = s.playlists();
                 top_rows(s)
                     .into_iter()
@@ -393,8 +393,8 @@ impl TrackList {
 
     fn loading(&self, s: &Session) -> bool {
         match (self.kind, &self.open) {
-            (Screen::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_loading(sid, node),
-            (Screen::Playlists, Open::TopLevel) => s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid)),
+            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_loading(sid, node),
+            (ListKind::Playlists, Open::TopLevel) => s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid)),
             _ => false,
         }
     }
@@ -417,7 +417,7 @@ impl TrackList {
                 total,
                 loading: self.loading(s),
                 unit: self.unit(total),
-                hotkey_target: self.kind == Screen::Playlists && (total > 0 || !matches!(self.open, Open::TopLevel)),
+                hotkey_target: self.kind == ListKind::Playlists && (total > 0 || !matches!(self.open, Open::TopLevel)),
             })
         })
     }

@@ -10,11 +10,11 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
+use core::{Command, HotkeyTarget, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
-use crate::screen::Screen;
+use crate::screen::{Placement, initial_window};
 
 use frame::Chrome;
 use input::{Editing, key_name};
@@ -26,7 +26,7 @@ use tab_bar::{TabBar, TabBarHit};
 use text::{Marquee, in_span};
 use track_list::TrackList;
 use warnings::{defocuses_warnings, warnings_label, warnings_span};
-use window::{Ctx, Placement, WindowFrame, WindowId, WindowOutcome, Windows};
+use window::{Ctx, WindowFrame, WindowId, WindowOutcome, Windows};
 
 mod frame;
 mod help;
@@ -72,9 +72,11 @@ struct Placed {
 
 pub struct MedleyView {
     session: SessionHandle,
-    /// The active tab.
-    screen: Screen,
     windows: Windows,
+    /// The `Tabbed` windows in tab-bar order, never empty; a window moved to `Tabbed` appends.
+    tabs: Vec<WindowId>,
+    /// The active tab, one of `tabs`.
+    active: WindowId,
     /// Whole-terminal size as of the last layout pass.
     last_screen_size: Vec2,
     editing: Editing,
@@ -88,6 +90,8 @@ pub struct MedleyView {
     /// Which window currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     vis: Arc<crate::vis::Vis>,
+    /// Cursive's redraw rate is raised for a shown Vis window.
+    vis_fast: bool,
     modal: Option<Modal>,
     marquee: Marquee,
     /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
@@ -96,16 +100,19 @@ pub struct MedleyView {
 }
 
 impl MedleyView {
-    pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> Self {
+    /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on `initial_screen`'s tab.
+    pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
         let pane_cfg = session.lock().unwrap().cfg.panes;
         let vis = crate::vis::Vis::spawn(session.clone());
-        let screen = Screen::from_config(initial_screen);
-        let windows = Windows::new(log, vis.clone(), pane_cfg.mode);
-        Self {
+        let windows = Windows::new(log, vis.clone(), pane_cfg.mode.into());
+        let tabs: Vec<WindowId> = windows.ids().filter(|&id| windows.placement(id) == Placement::Tabbed).collect();
+        let active = windows.named(initial_window(initial_screen)).filter(|id| tabs.contains(id)).unwrap_or(tabs[0]);
+        let mut view = Self {
             session,
-            screen,
-            focus: Focus::Window(windows.tab(screen)),
             windows,
+            tabs,
+            active,
+            focus: Focus::Window(active),
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
@@ -113,15 +120,80 @@ impl MedleyView {
             pane_cfg,
             open: Vec::new(),
             vis,
+            vis_fast: false,
             modal: None,
             marquee: Marquee::new(),
             follow_sig: Memo::default(),
             chrome: Memo::default(),
+        };
+        if let Some(layout) = layout {
+            view.restore(&layout);
+        }
+        view
+    }
+
+    /// Applies a saved layout, or none of it unless it places exactly the startup windows and keeps a tab.
+    fn restore(&mut self, layout: &Layout) -> Option<()> {
+        let ids = |names: &[String]| names.iter().map(|name| self.windows.named(name)).collect::<Option<Vec<_>>>();
+        let (tabs, open) = (ids(&layout.tabs)?, ids(&layout.open)?);
+        let active = self.windows.named(&layout.active).filter(|id| tabs.contains(id))?;
+        let placed = layout
+            .placements
+            .iter()
+            .map(|(name, word)| {
+                let placement = Placement::from_word(word).filter(|&placement| placement != Placement::Tabbed)?;
+                Some((self.windows.named(name)?, placement))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let all: Vec<WindowId> = tabs.iter().copied().chain(placed.iter().map(|&(id, _)| id)).collect();
+        let repeats = |ids: &[WindowId]| ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id));
+        let open_tab = open.iter().any(|id| tabs.contains(id));
+        if repeats(&all) || all.len() != self.windows.ids().count() || repeats(&open) || open_tab {
+            return None;
+        }
+        for &id in &tabs {
+            self.windows.place(id, Placement::Tabbed);
+        }
+        for (id, placement) in placed {
+            self.windows.place(id, placement);
+        }
+        self.open = open.into_iter().map(|id| (id, Focus::Window(active))).collect();
+        (self.tabs, self.active, self.focus) = (tabs, active, Focus::Window(active));
+        (self.pane_cfg.side, self.pane_cfg.stack) = (layout.side, layout.stack);
+        Some(())
+    }
+
+    /// The layout for `state.toml`: what `restore` reads back.
+    pub fn saved_layout(&self) -> Layout {
+        let names = |ids: &mut dyn Iterator<Item = WindowId>| ids.map(|id| self.windows.name(id).to_string()).collect();
+        let placements = self.windows.placements().named().filter(|&(_, placement)| placement != Placement::Tabbed);
+        Layout {
+            tabs: names(&mut self.tabs.iter().copied()),
+            active: self.windows.name(self.active).to_string(),
+            open: names(&mut self.open.iter().map(|&(id, _)| id)),
+            placements: placements.map(|(name, placement)| (name.to_string(), placement.word().to_string())).collect(),
+            side: self.pane_cfg.side,
+            stack: self.pane_cfg.stack,
         }
     }
 
     fn main_id(&self) -> WindowId {
-        self.windows.tab(self.screen)
+        self.active
+    }
+
+    /// Each tab's name in tab order; a second tab of one kind is numbered.
+    fn tab_names(&self) -> Vec<String> {
+        let kind = |id: WindowId| self.windows[id].kind;
+        (0..self.tabs.len())
+            .map(|i| match self.tabs[..i].iter().filter(|&&tab| kind(tab) == kind(self.tabs[i])).count() {
+                0 => kind(self.tabs[i]).label().to_string(),
+                earlier => format!("{} {}", kind(self.tabs[i]).label(), earlier + 1),
+            })
+            .collect()
+    }
+
+    fn active_tab(&self) -> usize {
+        self.tabs.iter().position(|&id| id == self.active).unwrap_or(0)
     }
 
     fn focused_id(&self) -> WindowId {
@@ -145,8 +217,13 @@ impl MedleyView {
         }
         let docked: Vec<WindowId> = self.open_in(Placement::Docked).collect();
         let (main_rect, docked) = split(size, &docked, self.pane_cfg);
-        let frame = float_rect(size);
-        let floating = self.open_in(Placement::Floating).map(|id| Placed { id, rect: float_body(frame), frame });
+        // A float's cascade slot is its rank by id among the open ones, so raising one moves none.
+        let mut slots: Vec<WindowId> = self.open_in(Placement::Floating).collect();
+        slots.sort();
+        let floating = self.open_in(Placement::Floating).map(|id| {
+            let frame = float_rect(size, slots.iter().position(|&slot| slot == id).unwrap_or(0));
+            Placed { id, rect: float_body(frame), frame }
+        });
         std::iter::once((self.main_id(), main_rect)).chain(docked).map(plain).chain(floating).collect()
     }
 
@@ -163,19 +240,15 @@ impl MedleyView {
         self.windows[self.active_list_id()].list()
     }
 
-    fn ctx<'a>(&self, s: &'a Session) -> Ctx<'a> {
-        Ctx { s, pane_cfg: self.pane_cfg, searching: self.editing == Editing::Search }
+    fn ctx<'a>(&'a self, s: &'a Session) -> Ctx<'a> {
+        Ctx { s, pane_cfg: self.pane_cfg, searching: self.editing == Editing::Search, placements: self.windows.placements() }
     }
 
     /// Offers `event` to each of `ids` under one session lock; the first window not ignoring it, and its outcome.
     fn send(&mut self, ids: &[WindowId], event: &Event) -> Option<(WindowId, WindowOutcome)> {
-        let (session, pane_cfg, searching) = (self.session.clone(), self.pane_cfg, self.editing == Editing::Search);
+        let session = self.session.clone();
         let guard = session.lock().unwrap();
-        let ctx = Ctx { s: &guard, pane_cfg, searching };
-        ids.iter().find_map(|&id| match self.windows[id].on_event(event, &ctx) {
-            WindowOutcome::Ignored => None,
-            outcome => Some((id, outcome)),
-        })
+        self.windows.send(ids, event, (&guard, self.pane_cfg, self.editing == Editing::Search))
     }
 
     fn apply(&mut self, outcome: WindowOutcome) -> EventResult {
@@ -320,7 +393,7 @@ impl View for MedleyView {
             let window = &self.windows[placed.id];
             // The active tab's window carries no focus marker.
             let marked = placed.id != self.main_id() && self.focus == Focus::Window(placed.id);
-            if window.placement == Placement::Floating {
+            if self.windows.placement(placed.id) == Placement::Floating {
                 draw_float_frame(printer, placed.frame, marked);
             }
             window.draw(printer, marked, window_frame);
@@ -328,7 +401,7 @@ impl View for MedleyView {
 
         let chrome = &frame.chrome;
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
-        TabBar { active: self.screen, state: &frame.status.state }
+        TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &frame.status.state }
             .draw(printer, &frame.status.now_playing, marquee_offset);
 
         // command / hint line (row above the status line).
@@ -386,7 +459,7 @@ impl View for MedleyView {
     fn on_event(&mut self, event: Event) -> EventResult {
         // Synthetic periodic wakeup.
         if event == Event::Refresh {
-            return EventResult::Ignored;
+            return self.sync_vis_fps();
         }
         let result = self.route(&event);
         // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away.
@@ -395,7 +468,7 @@ impl View for MedleyView {
         if !matches!(event, Event::Mouse { .. }) {
             self.clamp_scroll();
         }
-        result
+        result.and(self.sync_vis_fps())
     }
 }
 
@@ -425,13 +498,13 @@ impl MedleyView {
             let size = self.last_screen_size;
             if local.y == 0 {
                 let state = self.with_session(|s| s.player_status().state);
-                let hit = TabBar { active: self.screen, state: &state }.click(local.x, size.x);
+                let hit = TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &state }.click(local.x, size.x);
                 if let Some(TabBarHit::Transport(button)) = hit {
                     return self.run(button.command());
                 }
                 self.focus = Focus::Window(self.main_id());
                 return match hit {
-                    Some(TabBarHit::Tab(target)) => self.handle_action(Action::Screen(target)),
+                    Some(TabBarHit::Tab(target)) => self.handle_action(Action::Tab(target)),
                     _ => EventResult::consumed(),
                 };
             }
@@ -480,15 +553,22 @@ impl MedleyView {
         let ids = [fullscreen.unwrap_or(self.focused_id()), self.main_id()];
         // Esc a floating or fullscreen window has no use for closes it, before the tab beneath sees it.
         let closing = *event == Event::Key(Key::Esc)
-            && matches!(self.windows[ids[0]].placement, Placement::Floating | Placement::Screen);
+            && matches!(self.windows.placement(ids[0]), Placement::Floating | Placement::Screen);
         let alone = fullscreen.is_some() || closing || ids[0] == ids[1];
         match self.send(if alone { &ids[..1] } else { &ids }, event) {
             Some((_, outcome)) => self.apply(outcome),
             None if closing => {
                 self.close_window(ids[0]);
-                self.vis_fps_cb()
+                EventResult::consumed()
             }
-            None if fullscreen.is_some() => EventResult::consumed(),
+            // Of the shell's keys a fullscreen window leaves only the one that moves it on.
+            None if fullscreen.is_some() => {
+                let action = key_name(event).map(|key| self.with_session(|s| keybindings::map(&key, None, &s.hotkeys().into_iter().collect())));
+                match action {
+                    Some(Action::CyclePlacement) => self.handle_action(Action::CyclePlacement),
+                    _ => EventResult::consumed(),
+                }
+            }
             None => self.on_shell_key(event),
         }
     }

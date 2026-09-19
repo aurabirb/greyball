@@ -31,7 +31,7 @@ pub use app::{
 };
 pub use catalog::Catalog;
 pub use config::{
-    Axis, BpmScanConfig, Config, HttpConfig, PaneLayoutConfig, PaneMode, ScanConfig, Side,
+    Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
     SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES,
 };
 pub use audio_decode::decode_and_cache;

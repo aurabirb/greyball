@@ -74,7 +74,7 @@ impl MedleyView {
         if self.focus == Focus::Warnings {
             self.focus = Focus::Window(self.main_id());
         }
-        self.vis_fps_cb()
+        EventResult::consumed()
     }
 
     /// Layout-pass upkeep for the open modal, under one session lock.

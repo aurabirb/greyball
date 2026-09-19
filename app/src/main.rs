@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use medley_core::{
-    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LogBuf, MediaCache, MediaProvider, Player,
+    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, Layout, LogBuf, MediaCache, MediaProvider, Player,
     PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, Uuid,
 };
 #[cfg(any(feature = "spotify", feature = "soundcloud", feature = "soulseek"))]
@@ -189,11 +189,19 @@ fn load_hotkeys() -> HashMap<char, HotkeyTarget> {
     map
 }
 
+/// The `[layout]` table; one that is absent or doesn't parse whole means the default layout.
+fn load_layout() -> Option<Layout> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("layout")?.clone().try_into().ok()
+}
+
 fn save_state(
     volume: f32,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
+    layout: Option<Layout>,
 ) {
     let _ = std::fs::create_dir_all(data_dir());
     let mut text = format!("volume = {volume:?}\n");
@@ -211,6 +219,10 @@ fn save_state(
         for (name, enabled) in source_overrides {
             text.push_str(&format!("{name} = {enabled}\n"));
         }
+    }
+    let layout = layout.and_then(|layout| toml::Value::try_from(layout).ok());
+    if let Some(table) = layout.and_then(|layout| toml::to_string(&toml::Table::from_iter([("layout".to_string(), layout)])).ok()) {
+        text.push_str(&format!("\n{table}"));
     }
     let _ = std::fs::write(state_path(), text);
 }
@@ -498,7 +510,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
 
     siv.set_theme(ui::theme::load(&theme));
     siv.set_user_data(session.clone());
-    siv.add_fullscreen_layer(ui::root_view(session.clone(), &initial_screen, log_buf));
+    siv.add_fullscreen_layer(ui::root_view(session.clone(), &initial_screen, log_buf, load_layout()));
 
     // Hardware media keys, lock-screen/notification widgets, etc. — Linux/BSD
     // only (D-Bus). Fails soft internally if no session bus is reachable.
@@ -607,6 +619,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let layout = ui::saved_layout(&mut siv);
     let s = session.lock().unwrap();
     // Only persisted when it's an explicit override of the config default —
     // otherwise a later default change would be masked by today's value.
@@ -619,7 +632,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             (current != default).then_some((name, current))
         })
         .collect();
-    save_state(s.player_status().volume, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides);
+    save_state(s.player_status().volume, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

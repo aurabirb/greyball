@@ -1,6 +1,8 @@
 //! Plain configuration struct. NO file IO — `app` reads/writes the TOML and
 //! passes a `Config` value in.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -295,4 +297,18 @@ impl Default for SoulseekConfig {
             data_dir: None,
         }
     }
+}
+
+/// The window layout `state.toml` keeps: windows by their startup names, placements by their `:panes` words.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Layout {
+    /// The tabbed windows, in tab-bar order.
+    pub tabs: Vec<String>,
+    pub active: String,
+    /// The open non-tab windows, oldest first.
+    pub open: Vec<String>,
+    /// Every non-tab window's placement.
+    pub placements: BTreeMap<String, String>,
+    pub side: Side,
+    pub stack: Axis,
 }

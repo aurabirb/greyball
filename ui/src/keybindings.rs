@@ -1,14 +1,10 @@
 //! Key → action map, targeting [`core::Command`] (no `a`).
 //!
-//! `/`, `1`-`5` are **UI-local** — they move focus / swap the visible
-//! screen (now playing/playlists/search/history/queue) and never reach
-//! `Session`.
+//! `/` and `1`-`9` are **UI-local** — they move focus / switch tabs and never reach `Session`.
 
 use std::collections::HashMap;
 
 use core::{BuiltinAction, Command, HotkeyTarget, TrackId};
-
-use crate::screen::Screen;
 
 /// What a keypress means outside an active text field.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,10 +13,8 @@ pub enum Action {
     Command(Command),
     /// UI-local: `/` — filters the active list, or focuses the Search input when that list is the Search one.
     FocusSearch,
-    /// UI-local: switch to screen 0-4 (now playing/queue/playlists/
-    /// history/search — the raw `view::Screen::NowPlaying`/`Screen::Queue`/`Screen::Playlists`/
-    /// `Screen::History`/`Screen::Search` constant, not a hotkey/tab-bar position).
-    Screen(Screen),
+    /// UI-local: switch to the tab at this tab-bar position, from 0.
+    Tab(usize),
     /// UI-local: open the `:` command line.
     CommandLine,
     /// UI-local: open the "Hotkeys" modal (backtick, nothing selected
@@ -38,6 +32,8 @@ pub enum Action {
     /// top+horizontal -> back to right+vertical (`view::PANE_LAYOUT_CYCLE`)
     /// — one key instead of four `:panes <side> <stack>` combos.
     CyclePaneLayout,
+    /// UI-local: move the focused window to its next placement.
+    CyclePlacement,
     /// UI-local: open the fullscreen help/shortcuts screen directly (`?`) —
     /// same destination as `:help`, just without going through the command
     /// line. The view owns the modal's state.
@@ -66,11 +62,11 @@ pub enum Action {
 /// (`Session::hotkeys`) — every [`BuiltinAction`] below is looked up against
 /// it (falling back to [`BuiltinAction::default_key`] when unremapped)
 /// instead of being a fixed key, so `:keys`/the hotkey menu can move it.
-/// `/`, `:`, `1`-`5`, `Enter`, `Space` stay hardcoded: they're structural
+/// `/`, `:`, `1`-`9`, `Enter`, `Space` stay hardcoded: they're structural
 /// (screen/focus navigation, not a "command"), not remappable commands.
 pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
-    if let Some(screen) = Screen::from_digit(key) {
-        return Action::Screen(screen);
+    if let Ok(n @ 1..=9) = key.parse::<usize>() {
+        return Action::Tab(n - 1);
     }
     match key {
         "/" => return Action::FocusSearch,
@@ -103,6 +99,7 @@ pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyT
         BuiltinAction::ToggleScan => Action::Command(Command::ToggleScan),
         BuiltinAction::ToggleShuffle => Action::Command(Command::ToggleShuffle),
         BuiltinAction::CyclePaneLayout => Action::CyclePaneLayout,
+        BuiltinAction::CyclePlacement => Action::CyclePlacement,
         BuiltinAction::Enqueue => match selected {
             Some(id) => Action::Command(Command::Enqueue(id)),
             None => Action::None,
@@ -141,7 +138,7 @@ fn builtin_at(hotkeys: &HashMap<char, HotkeyTarget>, ch: char) -> Option<Builtin
 pub const RAW_KEYS: &[(&str, &str)] = &[
     ("/", "focus search (or fuzzy-filter the current list, outside Search)"),
     (":", "open the command line (:help)"),
-    ("1-5", "switch screen (now playing/playlists/search/history/queue)"),
+    ("1-9", "switch to that tab"),
     ("Tab", "switch focused pane"),
     ("Space", "play/pause"),
     ("n / p, > / <", "next/previous track"),
@@ -154,6 +151,7 @@ pub const RAW_KEYS: &[(&str, &str)] = &[
     ("L", "unlike the selected track (confirms first)"),
     ("B", "pause/resume the background scan"),
     ("P", "cycle the embedded-pane layout"),
+    ("M", "move the focused window: tabbed, embedded, screen, float"),
     ("E", "clear the queue"),
     ("Q", "quit"),
     ("`", "open the hotkeys menu (or, with a playlist selected, set its hotkey)"),

@@ -20,7 +20,7 @@ use cursive::event::EventResult;
 use cursive::view::Nameable;
 use cursive::views::NamedView;
 use cursive::{Cursive, CursiveRunner};
-use core::{CoreEvent, LogBuf, Session};
+use core::{CoreEvent, Layout, LogBuf, Session};
 
 pub mod command;
 mod filebrowser;
@@ -58,11 +58,19 @@ pub fn create_cursive() -> Result<CursiveRunner<Cursive>, Box<dyn std::error::Er
     Ok(CursiveRunner::new(Cursive::new(), backend))
 }
 
-/// Build the root view for the three screens, seeded with the configured
-/// initial screen. `log` backs the optional Log pane (`:log`) — shared with
-/// whatever sink `app` installs for the `log` crate.
-pub fn root_view(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> NamedView<MedleyView> {
-    MedleyView::new(session, initial_screen, log).with_name(ROOT)
+/// The root view; `layout` is last run's `saved_layout`, and without one `initial_screen` names the active tab.
+pub fn root_view(
+    session: SessionHandle,
+    initial_screen: &str,
+    log: Arc<LogBuf>,
+    layout: Option<Layout>,
+) -> NamedView<MedleyView> {
+    MedleyView::new(session, initial_screen, log, layout).with_name(ROOT)
+}
+
+/// The window layout to persist, read at shutdown.
+pub fn saved_layout(siv: &mut Cursive) -> Option<Layout> {
+    siv.call_on_name(ROOT, |view: &mut MedleyView| view.saved_layout())
 }
 
 const ROOT: &str = "medley";

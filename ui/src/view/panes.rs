@@ -4,12 +4,12 @@ use cursive::theme::ColorStyle;
 
 use core::{Axis, PaneLayoutConfig, Side};
 
-use crate::keybindings::Action;
-use crate::screen::Kind;
+use crate::screen::{Kind, ListKind, Placement};
 
 use super::{Focus, MedleyView};
 use super::modal::draw_modal_frame;
-use super::window::{Placement, WindowId};
+use super::input::Editing;
+use super::window::WindowId;
 
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
@@ -113,11 +113,16 @@ pub(super) fn split(total: Vec2, open_panes: &[WindowId], cfg: PaneLayoutConfig)
     (shift(main), panes.into_iter().map(|(p, r)| (p, shift(r))).collect())
 }
 
-/// A floating window's border box: centered, three fifths of the area between the fixed rows, never below a usable minimum.
-pub(super) fn float_rect(total: Vec2) -> Rect {
+/// How far each further floating window sits right of and below the one before.
+const CASCADE: Vec2 = Vec2 { x: 4, y: 2 };
+
+/// A floating window's border box: three fifths of the area between the fixed rows, cascaded from the centre by `slot`.
+pub(super) fn float_rect(total: Vec2, slot: usize) -> Rect {
     let band_h = total.y.saturating_sub(TAB_BAR_ROWS + BOTTOM_BAR_ROWS);
     let size = Vec2::new((total.x * 3 / 5).max(40).min(total.x), (band_h * 3 / 5).max(10).min(band_h));
-    Rect::from_size(((total.x - size.x) / 2, TAB_BAR_ROWS + (band_h - size.y) / 2), size)
+    let room = Vec2::new(total.x, band_h) - size;
+    let origin = (room / 2 + CASCADE * slot).or_min(room);
+    Rect::from_size(origin + (0, TAB_BAR_ROWS), size)
 }
 
 /// The window's rect in its border box: its own title row takes the top border's place.
@@ -160,41 +165,98 @@ impl MedleyView {
         true
     }
 
-    /// Open/close a pane window per its placement — `:log`, `:settings`, `:vis`, `:queue`, `:history`.
-    pub(super) fn toggle_window(&mut self, id: WindowId) {
-        if self.close_window(id) {
-            return;
-        }
-        let window = &self.windows[id];
-        // A fullscreen list that also has a tab switches to the tab instead of layering.
-        if let (Placement::Screen, Kind::List(screen)) = (window.placement, window.kind) {
-            self.handle_action(Action::Screen(screen));
-            return;
-        }
-        self.open.push((id, self.focus));
-        if window.placement != Placement::Docked {
+    /// Makes `id` the active tab; focus follows only from the tab it replaces.
+    fn activate(&mut self, id: WindowId) {
+        if self.focus == Focus::Window(self.active) {
             self.focus = Focus::Window(id);
+        }
+        self.active = id;
+    }
+
+    /// Brings `id` into view: its tab, else open and focused; a Search list takes the query input at once, same as `/`.
+    pub(super) fn show(&mut self, id: WindowId) {
+        if self.windows.placement(id) == Placement::Tabbed {
+            self.activate(id);
+        } else {
+            if !self.open.iter().any(|&(open, _)| open == id) {
+                self.open.push((id, self.focus));
+            }
+            self.focus_window(id);
+        }
+        if self.windows[id].kind == Kind::List(ListKind::Search) {
+            self.editing = Editing::Search;
+            self.buffer.clear();
         }
     }
 
-    /// An open window moves to its new placement at once, except to fullscreen, which would cover the view unasked.
-    pub(super) fn set_placement(&mut self, id: WindowId, placement: Placement) {
-        let reopen = self.close_window(id) && placement != Placement::Screen;
-        self.windows[id].placement = placement;
-        if reopen {
-            self.toggle_window(id);
+    /// `:window <name>` and its short forms: a tab is switched to, any other window opened or closed.
+    pub(super) fn toggle_window(&mut self, id: WindowId) {
+        if self.windows.placement(id) == Placement::Tabbed {
+            self.activate(id);
+        } else if !self.close_window(id) {
+            self.open.push((id, self.focus));
+            if self.windows.placement(id) != Placement::Docked {
+                self.focus = Focus::Window(id);
+            }
+        }
+    }
+
+    /// Moves `id`, keeping a shown window shown and a focused one focused; only `cover` lets it take the whole screen.
+    pub(super) fn set_placement(&mut self, id: WindowId, placement: Placement, cover: bool) -> bool {
+        let (from, focused) = (self.windows.placement(id), self.focus == Focus::Window(id));
+        if from == placement {
+            return true;
+        }
+        let shown = match self.tabs.iter().position(|&tab| tab == id) {
+            Some(_) if self.tabs.len() == 1 => {
+                self.feedback = Some(format!("{}: the last tab stays tabbed", self.windows[id].kind.label()));
+                return false;
+            }
+            Some(i) => {
+                self.tabs.remove(i);
+                let active = self.active == id;
+                if active {
+                    self.active = self.tabs[i.min(self.tabs.len() - 1)];
+                }
+                active
+            }
+            None => self.close_window(id),
+        };
+        self.windows.place(id, placement);
+        let show = shown && (cover || placement != Placement::Screen);
+        if placement == Placement::Tabbed {
+            self.tabs.push(id);
+            if show {
+                self.active = id;
+            }
+        } else if show {
+            self.open.push((id, Focus::Window(self.active)));
+        }
+        if show && (focused || matches!(placement, Placement::Floating | Placement::Screen)) {
+            self.focus_window(id);
+        }
+        true
+    }
+
+    /// `Action::CyclePlacement`: the focused window moves on one placement, and the hint row names it.
+    pub(super) fn cycle_placement(&mut self) {
+        let id = self.fullscreen().unwrap_or(self.focused_id());
+        let at = Placement::CYCLE.iter().position(|&placement| placement == self.windows.placement(id)).unwrap_or(0);
+        let next = Placement::CYCLE[(at + 1) % Placement::CYCLE.len()];
+        if self.set_placement(id, next, true) {
+            self.feedback = Some(format!("{}: {}", self.windows[id].kind.label(), next.word()));
         }
     }
 
     /// Open windows in `placement`, oldest first.
     pub(super) fn open_in(&self, placement: Placement) -> impl Iterator<Item = WindowId> + '_ {
-        self.open.iter().map(|&(id, _)| id).filter(move |&id| self.windows[id].placement == placement)
+        self.open.iter().map(|&(id, _)| id).filter(move |&id| self.windows.placement(id) == placement)
     }
 
     /// Focuses `id`; a floating window also comes to the top.
     pub(super) fn focus_window(&mut self, id: WindowId) {
         self.focus = Focus::Window(id);
-        if self.windows[id].placement == Placement::Floating
+        if self.windows.placement(id) == Placement::Floating
             && let Some(i) = self.open.iter().position(|&(open, _)| open == id)
         {
             let entry = self.open.remove(i);
@@ -202,11 +264,15 @@ impl MedleyView {
         }
     }
 
-    /// Sync cursive's own redraw rate to whether/how fast the Vis pane needs to animate.
-    pub(super) fn vis_fps_cb(&self) -> EventResult {
-        let vis_open = self.open.iter().any(|&(id, _)| self.windows[id].kind == Kind::Vis);
-        self.vis.set_enabled(vis_open);
-        let fps = if vis_open { crate::vis::FPS } else { crate::BASELINE_FPS };
+    /// Syncs cursive's redraw rate to whether a Vis window is shown; a callback only when that changed.
+    pub(super) fn sync_vis_fps(&mut self) -> EventResult {
+        let shown = self.visible().into_iter().any(|id| self.windows[id].kind == Kind::Vis);
+        if shown == self.vis_fast {
+            return EventResult::Ignored;
+        }
+        self.vis_fast = shown;
+        self.vis.set_enabled(shown);
+        let fps = if shown { crate::vis::FPS } else { crate::BASELINE_FPS };
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }
 
@@ -218,7 +284,8 @@ impl MedleyView {
             Kind::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
             _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
         };
-        draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, hint);
+        let flash = self.feedback.as_ref().map(|text| format!("  {text}"));
+        draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, flash.as_deref().unwrap_or(hint));
         window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
     }
 }

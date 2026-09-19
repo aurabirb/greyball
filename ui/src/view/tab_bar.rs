@@ -5,56 +5,42 @@ use unicode_width::UnicodeWidthStr;
 
 use core::PlayerState;
 
-use crate::screen::Screen;
-
 use super::text::{in_span, scroll_title};
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
 /// Background for the active tab only — every other tab uses the terminal's default colors, unstyled.
 const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
 
-/// A tab's rendered button text.
-fn tab_label(screen: Screen, collapsed: bool) -> String {
-    let name = screen.label();
+/// A tab's rendered button text; `n` is its number key.
+fn tab_label(n: usize, name: &str, collapsed: bool) -> String {
     if collapsed {
         let letter = name.chars().next().unwrap_or('?');
         format!(" {letter} ")
     } else {
-        format!(" [{}] {name} ", screen.digit())
+        format!(" [{n}] {name} ")
     }
-}
-
-/// Each tab's screen, start column and width, from column 0 with a 1-column gap between tabs.
-fn tab_layout(collapsed: bool) -> Vec<(Screen, usize, usize)> {
-    let mut x = 0;
-    Screen::ALL
-        .iter()
-        .map(|&screen| {
-            let start = x;
-            let w = tab_label(screen, collapsed).chars().count();
-            x += w + 1;
-            (screen, start, w)
-        })
-        .collect()
 }
 
 /// What a click on the tab bar landed on.
 pub(super) enum TabBarHit {
-    Tab(Screen),
+    /// The tab at this index of `TabBar::tabs`.
+    Tab(usize),
     Transport(Transport),
 }
 
-/// Row 0 of the screen: the screen tabs, the transport buttons, then the now-playing marquee.
+/// Row 0 of the screen: a tab per tabbed window, the transport buttons, then the now-playing marquee.
 pub(super) struct TabBar<'a> {
-    pub(super) active: Screen,
+    /// The tabbed windows' names, in tab order.
+    pub(super) tabs: &'a [String],
+    pub(super) active: usize,
     pub(super) state: &'a PlayerState,
 }
 
 /// Where everything sits in a bar of a given width, for both drawing and hit-testing.
 struct Layout {
     collapsed: bool,
-    /// Each visible tab's screen, start column and (clipped) width.
-    tabs: Vec<(Screen, usize, usize)>,
+    /// Each visible tab's index, start column and (clipped) width.
+    tabs: Vec<(usize, usize, usize)>,
     /// Empty when the buttons don't fit.
     transport: Vec<(Transport, usize, usize)>,
     /// `(start, width)` left for the marquee.
@@ -62,19 +48,34 @@ struct Layout {
 }
 
 impl TabBar<'_> {
+    /// Each tab's index, start column and width, from column 0 with a 1-column gap between tabs.
+    fn tab_layout(&self, collapsed: bool) -> Vec<(usize, usize, usize)> {
+        let mut x = 0;
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let start = x;
+                let w = tab_label(i + 1, name, collapsed).chars().count();
+                x += w + 1;
+                (i, start, w)
+            })
+            .collect()
+    }
+
     fn layout(&self, total_w: usize) -> Layout {
         // The last column stays clear, matching the list's scrollbar gutter below.
         let content_w = total_w.saturating_sub(1);
         let buttons_w = transport_layout(0, self.state).last().map_or(0, |&(_, s, w)| s + w);
-        let full_w = tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
+        let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
         let collapsed = full_w + TRANSPORT_GAP + buttons_w > content_w;
 
-        let all_tabs = tab_layout(collapsed);
+        let all_tabs = self.tab_layout(collapsed);
         let tabs_end = all_tabs.last().map_or(0, |&(_, start, w)| start + w);
         let tabs = all_tabs
             .into_iter()
             .filter(|&(_, start, _)| start < content_w)
-            .map(|(screen, start, w)| (screen, start, w.min(content_w - start)))
+            .map(|(i, start, w)| (i, start, w.min(content_w - start)))
             .collect();
 
         let transport_start = tabs_end + TRANSPORT_GAP;
@@ -91,9 +92,9 @@ impl TabBar<'_> {
     /// Draws the bar across row 0 of `printer`, `marquee` right-aligned in whatever room is left.
     pub(super) fn draw(&self, printer: &Printer, marquee: &str, marquee_offset: usize) {
         let layout = self.layout(printer.size.x);
-        for &(screen, start, w) in &layout.tabs {
-            let text: String = tab_label(screen, layout.collapsed).chars().take(w).collect();
-            if screen == self.active {
+        for &(i, start, w) in &layout.tabs {
+            let text: String = tab_label(i + 1, &self.tabs[i], layout.collapsed).chars().take(w).collect();
+            if i == self.active {
                 let style = ColorStyle::new(Color::Dark(BaseColor::White), ACTIVE_TAB_BG);
                 printer.with_color(style, |p| p.print((start, 0), &text));
             } else {
@@ -117,6 +118,6 @@ impl TabBar<'_> {
         if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Transport(button));
         }
-        layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))).map(|&(screen, ..)| TabBarHit::Tab(screen))
+        layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))).map(|&(i, ..)| TabBarHit::Tab(i))
     }
 }

@@ -11,7 +11,7 @@ use super::MedleyView;
 use super::memo::Memo;
 use super::scroll::ListState;
 use super::text::pad;
-use super::window::Ctx;
+use super::window::{Ctx, Placements};
 
 /// One row of the Settings pane: plain info text, or a togglable bool.
 #[derive(Clone)]
@@ -35,7 +35,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
 }
 
 /// Effective config as togglable/info rows.
-fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntry> {
+fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placements) -> Vec<SettingsEntry> {
     let cfg = &s.cfg;
     let mut v = vec![
         SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
@@ -52,9 +52,12 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntr
         available: s.scan.is_some(),
     });
     v.push(SettingsEntry::Info(String::new()));
-    v.push(SettingsEntry::Info(format!("panes.mode:       {:?}", pane_cfg.mode)));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
     v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
+    v.push(SettingsEntry::Info(String::new()));
+    for (name, placement) in placements.named() {
+        v.push(SettingsEntry::Info(format!("{:<18}{}", format!("{name}:"), placement.word())));
+    }
     v
 }
 
@@ -62,13 +65,14 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntr
 #[derive(Default)]
 pub(super) struct SettingsPane {
     list: ListState,
-    entries: Memo<(u64, PaneLayoutConfig), Arc<Vec<SettingsEntry>>>,
+    entries: Memo<(u64, PaneLayoutConfig, u64), Arc<Vec<SettingsEntry>>>,
 }
 
 impl SettingsPane {
-    /// The rows, rebuilt only when the session or the pane layout changed.
+    /// The rows, rebuilt only when the session, the dock layout or a window's placement changed.
     pub(super) fn entries(&self, ctx: &Ctx) -> Arc<Vec<SettingsEntry>> {
-        self.entries.get_or_build((ctx.s.revision(), ctx.pane_cfg), || Arc::new(settings_entries(ctx.s, ctx.pane_cfg)))
+        let key = (ctx.s.revision(), ctx.pane_cfg, ctx.placements.generation());
+        self.entries.get_or_build(key, || Arc::new(settings_entries(ctx.s, ctx.pane_cfg, ctx.placements)))
     }
 
     pub(super) fn cursor(&self) -> usize {
@@ -96,8 +100,8 @@ impl SettingsPane {
 impl MedleyView {
     /// Enter/Space on row `cursor` of the Settings window.
     pub(super) fn toggle_setting(&mut self, cursor: usize) {
-        let pane_cfg = self.pane_cfg;
-        let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
+        let entries = self.with_session(|s| settings_entries(s, self.pane_cfg, self.windows.placements()));
+        let Some(entry) = entries.into_iter().nth(cursor) else {
             return;
         };
         match entry {

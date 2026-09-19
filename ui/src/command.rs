@@ -4,15 +4,15 @@
 
 use std::path::PathBuf;
 
-use core::{Axis, Command, PaneMode, Session, Side, TrackId};
+use core::{Axis, Command, Session, Side, TrackId};
 
-use crate::screen::{Kind, Screen};
+use crate::screen::{Placement, WINDOWS};
 
-/// A `:panes` argument; `None` fields stay as they are, `pane: None` targets every pane window.
+/// A `:panes` argument; `None` fields stay as they are, `window: None` targets every pane window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanePatch {
-    pub pane: Option<Kind>,
-    pub mode: Option<PaneMode>,
+    pub window: Option<&'static str>,
+    pub mode: Option<Placement>,
     pub side: Option<Side>,
     pub stack: Option<Axis>,
 }
@@ -36,13 +36,11 @@ pub enum Parsed {
     OpenBrowse,
     /// `help` — show the command list in a modal.
     Help,
-    /// `log` / `settings` — open/close that pane.
-    TogglePane(Kind),
-    /// `vis` — toggle the visualizer pane open/closed.
-    Vis,
+    /// `window <name>` and `log`/`settings`/`vis`/`queue`/`history` — open or close that window, or switch to its tab.
+    ToggleWindow(&'static str),
     /// `panes ...` — change where open panes render.
     SetPaneLayout(PanePatch),
-    /// `hist` — switch to the play-history screen.
+    /// `hist` — show the History tab window.
     History,
     /// `keys` — open the hotkey menu (same modal as backtick outside the
     /// Playlists screen), to remap a built-in command's key. Playlist
@@ -78,16 +76,21 @@ pub const HELP: &[(&str, &str)] = &[
     ("export <playlist> [path]", "export a playlist to M3U"),
     ("log", "toggle the log pane"),
     ("settings", "toggle the settings pane"),
-    ("hist", "switch the main screen to play history (same as pressing 4)"),
+    ("hist", "show the History tab window (history-tab)"),
     ("vis", "toggle the real-audio bar-eq visualizer pane"),
-    ("queue", "toggle the queue pane (dock it, or switch to it — see :panes)"),
-    ("history", "toggle the history pane (dock it, or switch to it — see :panes)"),
+    ("queue", "toggle the queue pane"),
+    ("history", "toggle the history pane"),
+    (
+        "window <window>",
+        "open or close any window, or switch to its tab: now-playing, playlists, search, history-tab, \
+         queue-tab (the startup tabs), log, settings, vis, queue, history (the panes)",
+    ),
     ("togglescan", "toggle the background scan (bpm, ...) between active and cache-only"),
     ("toggleshuffle", "toggle queue shuffle"),
     (
-        "panes [<pane>] [screen|embedded|float] [left|right|top|bottom] [horizontal|vertical]",
-        "change where a pane renders (float: a box over the current view) — \
-         omit <pane> to place every pane",
+        "panes [<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
+        "move a window (names as for :window) to the tab bar, the dock, fullscreen or a box over the view — \
+         omit <window> to move every pane; the last tab stays tabbed",
     ),
     (
         "keys",
@@ -157,13 +160,9 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
             })
         }
         "exportm3u" => Err("usage: export <playlist> [path]".into()),
-        "log" => Ok(Parsed::TogglePane(Kind::Log)),
-        "settings" => Ok(Parsed::TogglePane(Kind::Settings)),
-        "vis" if rest.is_empty() => Ok(Parsed::Vis),
-        "vis" => Err("usage: vis".into()),
-        "queue" => Ok(Parsed::TogglePane(Kind::List(Screen::Queue))),
-        // Unlike "hist", this toggles the History pane window per its own placement.
-        "history" => Ok(Parsed::TogglePane(Kind::List(Screen::History))),
+        "vis" if !rest.is_empty() => Err("usage: vis".into()),
+        "log" | "settings" | "vis" | "queue" | "history" => window_name(word).map(Parsed::ToggleWindow),
+        "window" => window_name(rest).map(Parsed::ToggleWindow),
         "togglescan" => Ok(Parsed::Ready(Command::ToggleScan)),
         "toggleshuffle" => Ok(Parsed::Ready(Command::ToggleShuffle)),
         "hist" => Ok(Parsed::History),
@@ -214,39 +213,34 @@ pub(crate) fn split_paths(rest: &str) -> Vec<PathBuf> {
     out
 }
 
+/// The startup window `name` names.
+fn window_name(name: &str) -> Result<&'static str, String> {
+    let known = WINDOWS.iter().map(|window| window.name);
+    known.clone().find(|&known| known == name).ok_or_else(|| {
+        format!("no window named {name:?}; the windows are {}", known.collect::<Vec<_>>().join(", "))
+    })
+}
+
 fn parse_pane_patch(rest: &str) -> Result<PanePatch, String> {
     let mut patch = PanePatch::default();
-    let mut toks = rest.split_whitespace().peekable();
-    if let Some(&first) = toks.peek() {
-        let pane = match first.to_ascii_lowercase().as_str() {
-            "log" => Some(Kind::Log),
-            "settings" => Some(Kind::Settings),
-            "vis" => Some(Kind::Vis),
-            "queue" => Some(Kind::List(Screen::Queue)),
-            "history" => Some(Kind::List(Screen::History)),
-            _ => None,
-        };
-        if pane.is_some() {
-            patch.pane = pane;
-            toks.next();
-        }
-    }
-    for tok in toks {
-        match tok.to_ascii_lowercase().as_str() {
-            "screen" => patch.mode = Some(PaneMode::Screen),
-            "embedded" => patch.mode = Some(PaneMode::Embedded),
-            "float" => patch.mode = Some(PaneMode::Float),
+    for (i, tok) in rest.split_whitespace().enumerate() {
+        let tok = tok.to_ascii_lowercase();
+        match tok.as_str() {
             "left" => patch.side = Some(Side::Left),
             "right" => patch.side = Some(Side::Right),
             "top" => patch.side = Some(Side::Top),
             "bottom" => patch.side = Some(Side::Bottom),
             "horizontal" => patch.stack = Some(Axis::Horizontal),
             "vertical" => patch.stack = Some(Axis::Vertical),
-            other => {
-                return Err(format!(
-                    "usage: panes [<pane>] [screen|embedded|float] [left|right|top|bottom] [horizontal|vertical] (unknown {other:?})"
-                ));
-            }
+            word => match (Placement::from_word(word), window_name(word)) {
+                (Some(placement), _) => patch.mode = Some(placement),
+                (None, Ok(name)) if i == 0 => patch.window = Some(name),
+                _ => {
+                    return Err(format!(
+                        "usage: panes [<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical] (unknown {word:?})"
+                    ));
+                }
+            },
         }
     }
     Ok(patch)
@@ -265,10 +259,9 @@ pub fn resolve(parsed: Parsed, session: &Session, selected: Option<TrackId>) -> 
         Parsed::Help => Err("help is handled by the UI".into()),
         // Both handled in `view::commit_edit` — pane visibility/layout is
         // UI-local, not a `core::Command`.
-        Parsed::TogglePane(_) => Err("pane toggling is handled by the UI".into()),
+        Parsed::ToggleWindow(_) => Err("window toggling is handled by the UI".into()),
         Parsed::History => Err("screen switching is handled by the UI".into()),
         Parsed::Keys => Err("the hotkey menu is handled by the UI".into()),
-        Parsed::Vis => Err("pane toggling is handled by the UI".into()),
         Parsed::SetPaneLayout(_) => Err("pane layout is handled by the UI".into()),
         Parsed::ExportM3u { name, path } => {
             let playlist = session
