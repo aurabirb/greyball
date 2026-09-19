@@ -136,9 +136,18 @@
     (the next playlist slides under it in the keyed-first `playlist-keys` window, so `a` `b` `c`
     binds three playlists in a row) instead of following the bound row; the flash names what was
     bound. `TrackList::select` keeps serving `:newplaylist`, `show_top` and Esc-back-out.
-  - Direct assign stays enabled on the Playlists tab, but there it refuses a key that is already on
-    another playlist ("'z' is on X — reassign it from the playlist keys window"); moving a key
-    between playlists only happens in the `playlist-keys` window and the Help window.
+  - Direct assign stays enabled on the Playlists tab and the `playlist-keys` window alike, but a
+    key assignment that would OVERWRITE something — the key is already on another playlist, or the
+    target playlist already has a different key that would be replaced — first shows a confirm
+    dialog naming both sides ("Move 'z' from X to Y?" / "Replace Y's key 'q' with 'z'?"); Enter/y
+    confirms, Esc/n cancels, nothing changes until confirmed. Same for a rebind captured in the
+    Help window. Binding a free key to an unkeyed playlist stays immediate. Reuse the unlike-confirm
+    dialog pattern (`confirm_unlike`) rather than a new modal kind.
+  - Commands have exactly two spellings each: one long name and one short alias (`:open`/`:o`,
+    `:newplaylist`/`:np`, `:search`/`:s`, …). In `ui/src/items.rs` cut every `names` list to
+    [long, short], give commands that lack a short form one (unique, mnemonic, 1–3 letters), drop
+    all other aliases from parsing, and let the table enforce it (`names: [&str; 2]`). List the
+    removed spellings in the commit message body.
   - `toggle_playlist_keys` preselect order: the playing playlist first (when something is playing
     from a playlist), then the playlist open in the active list, then one open in another window.
   - The placement key and backtick pass through a fullscreen (`screen`) window, and a fullscreen
