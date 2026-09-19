@@ -43,16 +43,6 @@ impl PluginHealth {
     }
 }
 
-/// What [`Plugin::setup`] needs from the user to run.
-pub enum SetupKind {
-    /// No input — just run it (e.g. open a browser and wait for an OAuth
-    /// callback).
-    Action,
-    /// A single pasted string (e.g. an OAuth token obtained out-of-band).
-    /// `prompt` is shown above the input line.
-    TextInput { prompt: String },
-}
-
 /// `Source`/`Player`/`MediaProvider` a plugin can currently offer, given its
 /// present (possibly `Warn`) health — e.g. SoundCloud without a login still
 /// offers a working (if browse-less) `Source`, while Spotify without one
@@ -88,8 +78,16 @@ pub trait Plugin: Send + Sync {
     /// prompt. Safe to call from a UI render path on every redraw.
     fn probe(&self) -> PluginHealth;
 
-    /// What [`Plugin::setup`] needs from the caller.
-    fn setup_kind(&self) -> SetupKind;
+    /// The next prompt to show given the `answers` collected so far, or `None` once
+    /// [`Plugin::setup`] can run (immediately, for a plugin needing no input). Non-blocking.
+    fn setup_prompt(&self, _answers: &[String]) -> Option<String> {
+        None
+    }
+
+    /// One line on the plugin's detected state for Settings. Non-blocking; default: none.
+    fn detail(&self) -> Option<String> {
+        None
+    }
 
     /// Best-effort `Source`/`Player`/`MediaProvider` for the current health.
     /// Also non-blocking — built from whatever's already on disk/in memory,
@@ -98,10 +96,10 @@ pub trait Plugin: Send + Sync {
 
     /// Run the actual fix-up. Blocking and possibly interactive (an OAuth
     /// browser flow, a network call) is fine here — the only caller is an
-    /// explicit user action, always off the UI thread. `input` is `Some` iff
-    /// `setup_kind` was `TextInput`. Returns the resulting health; call
+    /// explicit user action, always off the UI thread. `answers` holds one entry per
+    /// `setup_prompt`. Returns the resulting health; call
     /// `wiring()` again afterward to pick up anything newly available.
-    fn setup(&self, input: Option<String>) -> PluginHealth;
+    fn setup(&self, answers: Vec<String>) -> PluginHealth;
 
     /// `:`-commands this plugin wants registered at startup, beyond the
     /// generic probe/setup/wiring lifecycle every plugin already gets.

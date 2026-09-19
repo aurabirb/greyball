@@ -182,7 +182,7 @@ pub struct SoulseekConfig {
     /// The directory slskd itself reads/writes (contains `downloads/`,
     /// `incomplete/`, `slskd.yml`) — needed to locate a finished download on
     /// disk for playback (search works without it). Normally set once via
-    /// the plugin's setup prompt (see `SetupKind::TextInput`), which caches
+    /// the plugin's setup prompt (see `Plugin::setup_prompt`), which caches
     /// it outside this file; set here to skip that prompt.
     pub data_dir: Option<String>,
 }

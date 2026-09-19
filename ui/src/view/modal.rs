@@ -2,7 +2,7 @@ use cursive::{Printer, Rect};
 use cursive::event::{Event, EventResult};
 use cursive::theme::ColorStyle;
 
-use core::{Command, SetupKind};
+use core::Command;
 
 use crate::screen::Corners;
 
@@ -91,15 +91,13 @@ impl MedleyView {
         let rect = Rect::from_size((0, 0), printer.size);
         match modal {
             Modal::Warnings(m) => {
-                let setup_id = match &self.editing {
-                    Editing::PluginSetup(id) => Some(id),
-                    _ => None,
-                };
                 let (warnings, prompt) = self.with_session(|s| {
-                    let prompt = setup_id.map(|id| match s.plugin(id).map(|p| p.setup_kind()) {
-                        Some(SetupKind::TextInput { prompt }) => prompt,
-                        Some(SetupKind::Action) | None => String::new(),
-                    });
+                    let prompt = match &self.editing {
+                        Editing::PluginSetup(id, answers) => {
+                            Some(s.plugin(id).and_then(|p| p.setup_prompt(answers)).unwrap_or_default())
+                        }
+                        _ => None,
+                    };
                     (Warnings::read(s), prompt)
                 });
                 m.draw(printer, rect, &warnings, prompt.as_deref().map(|p| (p, self.buffer.as_str())));

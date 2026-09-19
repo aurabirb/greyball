@@ -4,7 +4,7 @@ use cursive::{Printer, Rect};
 use cursive::event::Event;
 use cursive::theme::ColorStyle;
 
-use core::{CoreEvent, PluginHealth, Session, SetupKind, SourceId};
+use core::{CoreEvent, PluginHealth, Session, SourceId};
 
 use super::MedleyView;
 use super::input::Editing;
@@ -136,24 +136,23 @@ impl MedleyView {
         let Some(plugin) = self.with_session(|s| s.plugin(&id)) else {
             return;
         };
-        match plugin.setup_kind() {
-            SetupKind::Action => self.run_plugin_setup(id, None),
-            SetupKind::TextInput { .. } => {
-                self.buffer.clear();
-                self.editing = Editing::PluginSetup(id);
-            }
+        if plugin.setup_prompt(&[]).is_some() {
+            self.buffer.clear();
+            self.editing = Editing::PluginSetup(id, Vec::new());
+        } else {
+            self.run_plugin_setup(id, Vec::new());
         }
     }
 
     /// Run a plugin's `setup()` on a background thread.
-    pub(super) fn run_plugin_setup(&self, id: SourceId, input: Option<String>) {
+    pub(super) fn run_plugin_setup(&self, id: SourceId, answers: Vec<String>) {
         let session = self.session.clone();
         let bus = self.with_session(|s| s.bus.clone());
         thread::spawn(move || {
             let Some(plugin) = session.lock().unwrap().plugin(&id) else {
                 return;
             };
-            let health = plugin.setup(input);
+            let health = plugin.setup(answers);
             let succeeded = health.is_ok();
             // A degraded-but-usable result stays a warnings row.
             let failure = match &health {

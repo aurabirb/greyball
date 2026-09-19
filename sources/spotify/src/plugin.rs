@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
-    Bus, CoreEvent, MediaCache, Plugin, PluginCommand, PluginHealth, SetupKind, SourceId, Wiring,
+    Bus, CoreEvent, MediaCache, Plugin, PluginCommand, PluginHealth, SourceId, Wiring,
 };
 
 use crate::auth::Auth;
@@ -105,10 +105,6 @@ impl Plugin for SpotifyPlugin {
         PluginHealth::Warn("not logged in — select to open a browser and log in".to_string())
     }
 
-    fn setup_kind(&self) -> SetupKind {
-        SetupKind::Action
-    }
-
     fn wiring(&self) -> Wiring {
         // Unlike SoundCloud, Spotify has no anonymous mode at all — no
         // token means nothing to build. `Warn` health here means "not
@@ -136,7 +132,7 @@ impl Plugin for SpotifyPlugin {
         Wiring { source: Some(source), player: Some(player), media: None }
     }
 
-    fn setup(&self, _input: Option<String>) -> PluginHealth {
+    fn setup(&self, _answers: Vec<String>) -> PluginHealth {
         let had_credentials = Auth::cache(&self.cache_dir).is_ok_and(|c| c.credentials().is_some());
         match Auth::login(&self.cache_dir) {
             Ok(_) => {

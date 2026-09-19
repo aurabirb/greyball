@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use core::{Bus, MediaProvider, Plugin, PluginHealth, SetupKind, Source, SourceId, Wiring};
+use core::{Bus, MediaProvider, Plugin, PluginHealth, Source, SourceId, Wiring};
 
 use crate::auth;
 use crate::client::SoundcloudSource;
@@ -53,12 +53,12 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
-    fn setup_kind(&self) -> SetupKind {
-        SetupKind::TextInput {
-            prompt: "SoundCloud OAuth token — devtools on soundcloud.com, Application tab, \
-                     Local Storage, the `oauth_token` key (or a request's Authorization header)"
-                .to_string(),
-        }
+    fn setup_prompt(&self, answers: &[String]) -> Option<String> {
+        answers.is_empty().then(|| {
+            "SoundCloud OAuth token — devtools on soundcloud.com, Application tab, \
+             Local Storage, the `oauth_token` key (or a request's Authorization header)"
+                .to_string()
+        })
     }
 
     fn wiring(&self) -> Wiring {
@@ -75,8 +75,8 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
-    fn setup(&self, input: Option<String>) -> PluginHealth {
-        let token = input.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    fn setup(&self, answers: Vec<String>) -> PluginHealth {
+        let token = answers.first().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let Some(token) = token else {
             return PluginHealth::Warn("no token entered".to_string());
         };

@@ -39,24 +39,23 @@ fn src_err(message: impl Into<String>) -> Error {
 
 pub struct SoulseekSource {
     client: SlskdClient,
-    /// The directory slskd's own data (config, `downloads/`, `incomplete/`)
-    /// lives in — `None` until the user completes plugin setup, in which
-    /// case playback (but not search) is unavailable.
-    data_dir: Option<PathBuf>,
+    /// slskd's downloads directory as this machine sees it — `None` until plugin
+    /// setup knows it, in which case playback (but not search) is unavailable.
+    downloads_dir: Option<PathBuf>,
     /// Tracks already downloaded this run, so replaying the same search hit
     /// doesn't re-enqueue a fresh peer-to-peer transfer for it.
     downloaded: Mutex<HashMap<String, PathBuf>>,
 }
 
 impl SoulseekSource {
-    pub fn new(client: SlskdClient, data_dir: Option<PathBuf>) -> Self {
-        Self { client, data_dir, downloaded: Mutex::new(HashMap::new()) }
+    pub fn new(client: SlskdClient, downloads_dir: Option<PathBuf>) -> Self {
+        Self { client, downloads_dir, downloaded: Mutex::new(HashMap::new()) }
     }
 
     fn downloads_dir(&self) -> Result<&Path> {
-        self.data_dir
+        self.downloads_dir
             .as_deref()
-            .ok_or_else(|| src_err("no slskd data directory configured — finish setup from the warnings panel"))
+            .ok_or_else(|| src_err("no slskd downloads directory known — finish setup from the warnings panel"))
     }
 
     /// Downloads `track` (blocking) and returns its local path, first

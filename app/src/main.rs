@@ -532,6 +532,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             conn,
             cfg.soulseek.data_dir.clone(),
             cache_dir,
+            cfg.media_cache_dir.clone(),
             bus.clone(),
         ));
         // Soulseek never populates `Wiring::player` — playback goes through

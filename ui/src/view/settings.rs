@@ -4,7 +4,7 @@ use std::sync::Arc;
 use cursive::{Printer, Rect};
 use cursive::theme::ColorStyle;
 
-use core::{PaneLayoutConfig, ScanMode, Session, TOGGLABLE_SOURCES};
+use core::{PaneLayoutConfig, ScanMode, Session, SourceId, TOGGLABLE_SOURCES};
 
 use crate::screen::Kind;
 
@@ -62,6 +62,9 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     ];
     for name in TOGGLABLE_SOURCES {
         v.push(SettingsEntry::Source { name, enabled: cfg.source_enabled(name).unwrap_or(false) });
+        if let Some(detail) = s.plugin(&SourceId::from(name)).and_then(|p| p.detail()) {
+            v.push(SettingsEntry::Info(format!("    {detail}")));
+        }
     }
     v.push(SettingsEntry::Scan {
         enabled: s.scan.as_ref().is_some_and(|d| d.mode() != ScanMode::Disabled),
@@ -86,13 +89,13 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
 #[derive(Default)]
 pub(super) struct SettingsPane {
     list: ListState,
-    entries: Memo<(u64, PaneLayoutConfig, u64), Arc<Vec<SettingsEntry>>>,
+    entries: Memo<(u64, u64, PaneLayoutConfig, u64), Arc<Vec<SettingsEntry>>>,
 }
 
 impl SettingsPane {
     /// The rows, rebuilt only when the session, the dock layout or a window's placement changed.
     pub(super) fn entries(&self, ctx: &Ctx) -> Arc<Vec<SettingsEntry>> {
-        let key = (ctx.s.revision(), ctx.pane_cfg, ctx.placements.generation());
+        let key = (ctx.s.revision(), ctx.s.warnings_revision(), ctx.pane_cfg, ctx.placements.generation());
         self.entries.get_or_build(key, || Arc::new(settings_entries(ctx.s, ctx.pane_cfg, ctx.placements)))
     }
 

@@ -1,73 +1,95 @@
-//! `core::Plugin` impl for Soulseek. Connectivity (does a local `slskd`
-//! actually answer on the configured host:port?) is exactly the kind of
-//! check `core::plugin`'s module doc says `probe()` must never do inline —
-//! it's real network I/O and `probe()` is called both from the warnings
-//! panel and from `app`'s periodic health timer. So it follows
-//! `sources_spotify::SpotifyPlugin`'s
-//! `kick_off_auto_refresh` pattern instead: `probe()` kicks off a cooldown-
-//! guarded background check and reports the last result, `setup()` does one
-//! for real inline (it's the one place a blocking network call is fine).
+//! `core::Plugin` impl for Soulseek. `probe()` must not do network I/O inline, so it follows
+//! `sources_spotify::SpotifyPlugin`'s pattern: it kicks off a cooldown-guarded background check
+//! (slskd reachability, Docker state) and reports the last result; `setup()` does it inline.
+//!
+//! Setup prompts: with Docker usable and slskd not answering, offer to create the container
+//! (folder, plus a Soulseek login when the folder has no `slskd.yml`); anything else asks for
+//! host, username, password and the data directory. The container's downloads directory is the
+//! media cache directory, which is also where playback looks for finished files.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Bus, CoreEvent, MediaProvider, Plugin, PluginHealth, SetupKind, Source, SourceId, Wiring};
+use core::{Bus, CoreEvent, MediaProvider, Plugin, PluginHealth, Source, SourceId, Wiring, expand_home, tilde};
 
 use crate::client::{SlskdClient, SlskdConfig};
-use crate::persist;
+use crate::docker;
+use crate::persist::{self, State};
 use crate::source::SoulseekSource;
 use crate::yaml_config::{self, YamlAuth};
 
-/// Cooldown between automatic background reachability checks kicked off
-/// from `probe` (called by the warnings modal and by `app`'s periodic
-/// health timer) — keeps a permanently-unreachable daemon from getting
-/// hammered with connection attempts.
 const CHECK_COOLDOWN: Duration = Duration::from_secs(30);
+const STARTUP_WAIT: Duration = Duration::from_secs(60);
+const DEFAULT_FOLDER: &str = "~/Documents/slskd";
+
+#[derive(Clone, Copy, PartialEq)]
+enum Step {
+    UseDocker,
+    Folder,
+    SoulseekUser,
+    SoulseekPass,
+    Host,
+    User,
+    Pass,
+    DataDir,
+}
+
+#[derive(Clone)]
+struct DockerSnapshot {
+    status: docker::Status,
+    container: Option<String>,
+}
 
 pub struct SoulseekPlugin {
-    conn: SlskdConfig,
+    conn: Mutex<SlskdConfig>,
     cache_dir: PathBuf,
+    media_cache_dir: PathBuf,
     bus: Bus,
-    /// The slskd data directory — `None` until a config value or a cached
-    /// `setup()` value provides one. Needed for playback only; search works
-    /// without it.
-    data_dir: Mutex<Option<String>>,
-    /// Web-API credentials read straight out of that data directory's own
-    /// `slskd.yml`, if it has an explicit `web.authentication` block —
-    /// takes precedence over `conn`'s config.toml/default values so the
-    /// daemon's actual config doesn't need to be duplicated by hand.
+    state: Mutex<State>,
     yaml_auth: Mutex<Option<YamlAuth>>,
-    /// Last background/`setup()` reachability result. `None` until the
-    /// first check completes.
     reachable: Arc<Mutex<Option<bool>>>,
+    docker: Arc<Mutex<Option<DockerSnapshot>>>,
     checking: Arc<AtomicBool>,
     next_check: Arc<Mutex<Instant>>,
 }
 
 impl SoulseekPlugin {
-    pub fn new(conn: SlskdConfig, configured_data_dir: Option<String>, cache_dir: PathBuf, bus: Bus) -> Self {
-        let data_dir = configured_data_dir
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| persist::load_cached(&cache_dir));
-        let yaml_auth = data_dir.as_deref().and_then(|d| yaml_config::read(&expand_home(d)));
+    pub fn new(
+        mut conn: SlskdConfig,
+        configured_data_dir: Option<String>,
+        cache_dir: PathBuf,
+        media_cache_dir: PathBuf,
+        bus: Bus,
+    ) -> Self {
+        let mut state = persist::load(&cache_dir);
+        if let Some(dir) = configured_data_dir.filter(|s| !s.trim().is_empty()) {
+            state.data_dir = Some(dir);
+        }
+        if let Some(saved) = &state.connection {
+            conn.base_url = saved.base_url.clone();
+            conn.username = saved.username.clone();
+            conn.password = saved.password.clone();
+        }
+        let yaml_auth = state.data_dir.as_deref().and_then(|d| yaml_config::read(&expand_home(d)));
         Self {
-            conn,
+            conn: Mutex::new(conn),
             cache_dir,
+            media_cache_dir,
             bus,
-            data_dir: Mutex::new(data_dir),
+            state: Mutex::new(state),
             yaml_auth: Mutex::new(yaml_auth),
             reachable: Arc::new(Mutex::new(None)),
+            docker: Arc::new(Mutex::new(None)),
             checking: Arc::new(AtomicBool::new(false)),
             next_check: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
-    /// `conn` (from `config.toml`/defaults) with any override found in the
-    /// data directory's own `slskd.yml` applied on top.
+    /// The configured connection with any override found in the data directory's own `slskd.yml` on top.
     fn effective_conn(&self) -> SlskdConfig {
-        let mut conn = self.conn.clone();
+        let mut conn = self.conn.lock().unwrap().clone();
         if let Some(auth) = self.yaml_auth.lock().unwrap().as_ref() {
             if let Some(key) = &auth.api_key {
                 conn.api_key = Some(key.clone());
@@ -96,16 +118,19 @@ impl SoulseekPlugin {
             }
             *next = Instant::now() + CHECK_COOLDOWN;
         }
-        let conn = self.conn.clone();
-        let reachable = self.reachable.clone();
+        let conn = self.conn.lock().unwrap().clone();
+        let (reachable, docker_snapshot) = (self.reachable.clone(), self.docker.clone());
         let checking = self.checking.clone();
         let bus = self.bus.clone();
         std::thread::spawn(move || {
             let ok = SlskdClient::new(conn).reachable();
+            let snapshot = snapshot_docker();
             let mut r = reachable.lock().unwrap();
-            let changed = *r != Some(ok);
+            let mut d = docker_snapshot.lock().unwrap();
+            let changed = *r != Some(ok) || d.as_ref().map(|d| (&d.status, &d.container)) != Some((&snapshot.status, &snapshot.container));
             *r = Some(ok);
-            drop(r);
+            *d = Some(snapshot);
+            drop((r, d));
             checking.store(false, Ordering::SeqCst);
             if changed {
                 bus.send(CoreEvent::PluginStatusChanged);
@@ -113,14 +138,210 @@ impl SoulseekPlugin {
         });
     }
 
+    fn base_url(&self) -> String {
+        self.conn.lock().unwrap().base_url.clone()
+    }
+
     fn unreachable_message(&self) -> String {
         format!(
-            "no slskd reachable at {} — install and run it \
-             (https://github.com/slskd/slskd/), or set [soulseek] enabled = false in config.toml \
-             to silence this; check [soulseek] host/port if it's running on a different address",
-            self.conn.base_url
+            "no slskd reachable at {} — select to set it up (with Docker, or by host/username/password), \
+             or set [soulseek] enabled = false in config.toml to silence this",
+            self.base_url()
         )
     }
+
+    fn docker_ready(&self) -> bool {
+        self.docker.lock().unwrap().as_ref().is_some_and(|d| d.status == docker::Status::Ready)
+    }
+
+    /// The prompts for the answers given so far; the full list once they determine the path.
+    fn plan(&self, answers: &[String]) -> Vec<Step> {
+        let reachable = *self.reachable.lock().unwrap() == Some(true);
+        let record = self.state.lock().unwrap().docker.clone();
+        let offer = self.docker_ready() && (record.is_some() || !reachable);
+        let mut steps = Vec::new();
+        if offer {
+            steps.push(Step::UseDocker);
+            if answers.first().is_some_and(|a| is_yes(a)) {
+                if record.is_none() {
+                    steps.push(Step::Folder);
+                    if let Some(folder) = answers.get(1)
+                        && !folder_path(folder).join("slskd.yml").exists()
+                    {
+                        steps.extend([Step::SoulseekUser, Step::SoulseekPass]);
+                    }
+                }
+                return steps;
+            }
+            if answers.is_empty() {
+                return steps;
+            }
+        }
+        if reachable {
+            steps.push(Step::DataDir);
+        } else {
+            steps.extend([Step::Host, Step::User, Step::Pass, Step::DataDir]);
+        }
+        steps
+    }
+
+    fn health(&self) -> PluginHealth {
+        let stale = self.state.lock().unwrap().docker.as_ref().filter(|d| d.mounted_cache != self.media_cache_dir).cloned();
+        match *self.reachable.lock().unwrap() {
+            None => PluginHealth::Warn("checking for a local slskd…".to_string()),
+            Some(false) => PluginHealth::Warn(self.unreachable_message()),
+            Some(true) if stale.is_some() => {
+                let d = stale.unwrap();
+                PluginHealth::Warn(format!(
+                    "the media cache is now {} but the slskd container writes downloads to {} — select to recreate it",
+                    tilde(&self.media_cache_dir),
+                    tilde(&d.mounted_cache)
+                ))
+            }
+            Some(true) if self.state.lock().unwrap().data_dir.is_none() => PluginHealth::Warn(
+                "slskd found, but no data directory configured — select to set it up \
+                 (search works either way; playback needs it to find finished downloads)"
+                    .to_string(),
+            ),
+            Some(true) => PluginHealth::Ok,
+        }
+    }
+
+    fn recheck(&self) -> bool {
+        let ok = SlskdClient::new(self.effective_conn()).reachable();
+        *self.reachable.lock().unwrap() = Some(ok);
+        ok
+    }
+
+    fn save_state(&self) {
+        persist::save(&self.cache_dir, &self.state.lock().unwrap());
+    }
+
+    fn set_data_dir(&self, dir: &str) -> Result<(), String> {
+        let path = expand_home(dir);
+        if !path.is_dir() {
+            return Err(format!("{} is not a directory", path.display()));
+        }
+        *self.yaml_auth.lock().unwrap() = yaml_config::read(&path);
+        self.state.lock().unwrap().data_dir = Some(dir.to_string());
+        Ok(())
+    }
+
+    fn setup_manual(&self, host: &str, user: &str, pass: &str, data_dir: &str) -> PluginHealth {
+        if !host.is_empty() {
+            let mut conn = self.conn.lock().unwrap();
+            conn.base_url = base_url(host);
+            if !user.is_empty() {
+                conn.username = user.to_string();
+            }
+            if !pass.is_empty() {
+                conn.password = pass.to_string();
+            }
+            self.state.lock().unwrap().connection =
+                Some(persist::Connection { base_url: conn.base_url.clone(), username: conn.username.clone(), password: conn.password.clone() });
+        }
+        if !data_dir.is_empty()
+            && let Err(e) = self.set_data_dir(data_dir)
+        {
+            return PluginHealth::Warn(e);
+        }
+        self.save_state();
+        self.recheck();
+        self.health()
+    }
+
+    fn setup_docker(&self, folder_text: &str, soulseek_login: Option<(&str, &str)>) -> PluginHealth {
+        let warn = |m: String| PluginHealth::Warn(m);
+        match docker::status() {
+            docker::Status::Ready => {}
+            docker::Status::NotInstalled => return warn("docker is not installed".to_string()),
+            docker::Status::Unavailable(e) => return warn(format!("docker is not usable: {e}")),
+        }
+        let folder_text = if folder_text.is_empty() { DEFAULT_FOLDER } else { folder_text };
+        let folder = folder_path(folder_text);
+        let cache = &self.media_cache_dir;
+        if let Err(e) = std::fs::create_dir_all(&folder).and_then(|()| std::fs::create_dir_all(cache)) {
+            return warn(format!("cannot create {}: {e}", folder.display()));
+        }
+        let (Ok(folder), Ok(cache)) = (std::fs::canonicalize(&folder), std::fs::canonicalize(cache)) else {
+            return warn(format!("cannot resolve {}", folder.display()));
+        };
+        if !folder.join("slskd.yml").exists() {
+            let Some((user, pass)) = soulseek_login else {
+                return warn("no Soulseek login entered".to_string());
+            };
+            if let Err(e) = docker::write_config(&folder, user, pass) {
+                return warn(e);
+            }
+        }
+        if docker::container_state().is_some() {
+            if self.state.lock().unwrap().docker.is_none() {
+                return warn(format!(
+                    "a container named {0} already exists and wasn't created by medley — remove it \
+                     (docker rm -f {0}) or answer no to enter its host instead",
+                    docker::CONTAINER
+                ));
+            }
+            if let Err(e) = docker::remove() {
+                return warn(format!("removing the old container failed: {e}"));
+            }
+        }
+        if let Err(e) = docker::create(&folder, &cache) {
+            return warn(format!("docker run failed: {e}"));
+        }
+
+        let folder_str = folder.display().to_string();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.data_dir = Some(folder_str.clone());
+            state.docker = Some(persist::Docker { folder: folder_str.clone(), mounted_cache: self.media_cache_dir.clone() });
+            let mut conn = self.conn.lock().unwrap();
+            conn.base_url = format!("http://127.0.0.1:{}", docker::HTTP_PORT);
+            state.connection =
+                Some(persist::Connection { base_url: conn.base_url.clone(), username: conn.username.clone(), password: conn.password.clone() });
+        }
+        *self.yaml_auth.lock().unwrap() = yaml_config::read(&folder);
+        self.save_state();
+
+        let deadline = Instant::now() + STARTUP_WAIT;
+        while !self.recheck() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        *self.docker.lock().unwrap() = Some(snapshot_docker());
+        if *self.reachable.lock().unwrap() == Some(true) {
+            self.health()
+        } else {
+            warn(format!(
+                "container started but slskd isn't answering at {} after {}s — see `docker logs {}`",
+                self.base_url(),
+                STARTUP_WAIT.as_secs(),
+                docker::CONTAINER
+            ))
+        }
+    }
+}
+
+fn snapshot_docker() -> DockerSnapshot {
+    let status = docker::status();
+    let container = (status == docker::Status::Ready).then(docker::container_state).flatten();
+    DockerSnapshot { status, container }
+}
+
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+fn folder_path(text: &str) -> PathBuf {
+    let text = text.trim();
+    expand_home(if text.is_empty() { DEFAULT_FOLDER } else { text })
+}
+
+/// `host`, `host:port` or a full URL, as the API base URL.
+fn base_url(host: &str) -> String {
+    let host = host.trim().trim_end_matches('/');
+    let with_scheme = if host.contains("://") { host.to_string() } else { format!("http://{host}") };
+    let authority = with_scheme.split("://").nth(1).unwrap_or_default();
+    if authority.contains(':') { with_scheme } else { format!("{with_scheme}:{}", docker::HTTP_PORT) }
 }
 
 impl Plugin for SoulseekPlugin {
@@ -130,32 +351,56 @@ impl Plugin for SoulseekPlugin {
 
     fn probe(&self) -> PluginHealth {
         self.kick_off_connectivity_check();
-        match *self.reachable.lock().unwrap() {
-            None => PluginHealth::Warn("checking for a local slskd…".to_string()),
-            Some(false) => PluginHealth::Warn(self.unreachable_message()),
-            Some(true) if self.data_dir.lock().unwrap().is_none() => PluginHealth::Warn(
-                "slskd found, but no data directory configured — select to set it up \
-                 (search works either way; playback needs it to find finished downloads)"
-                    .to_string(),
-            ),
-            Some(true) => PluginHealth::Ok,
-        }
+        self.health()
     }
 
-    fn setup_kind(&self) -> SetupKind {
-        SetupKind::TextInput {
-            prompt: "slskd data directory — the folder slskd itself reads/writes (contains \
-                     downloads/, incomplete/, slskd.yml); needed to find finished downloads on \
-                     disk. Connection settings (host/port/username/password/api_key) come from \
-                     [soulseek] in config.toml, not here."
-                .to_string(),
-        }
+    fn setup_prompt(&self, answers: &[String]) -> Option<String> {
+        let prompt = match self.plan(answers).get(answers.len())? {
+            Step::UseDocker if self.state.lock().unwrap().docker.is_some() => format!(
+                "Recreate the slskd container so it downloads into the media cache ({})? yes, or anything else to enter host/login instead",
+                tilde(&self.media_cache_dir)
+            ),
+            Step::UseDocker => format!(
+                "Set up slskd with Docker (downloads go to the media cache, {})? yes, or anything else to enter the host/login of an existing slskd",
+                tilde(&self.media_cache_dir)
+            ),
+            Step::Folder => format!("slskd folder (config and incomplete downloads; Enter for {DEFAULT_FOLDER})"),
+            Step::SoulseekUser => "Soulseek network username (an unused name registers a new account)".to_string(),
+            Step::SoulseekPass => "Soulseek network password".to_string(),
+            Step::Host => "slskd host (host, host:port or URL)".to_string(),
+            Step::User => "slskd web username (Enter to keep the current one)".to_string(),
+            Step::Pass => "slskd web password (Enter to keep the current one)".to_string(),
+            Step::DataDir => "slskd data directory, the folder with downloads/ and slskd.yml (Enter to skip: search works, playback needs it)".to_string(),
+        };
+        Some(prompt)
+    }
+
+    fn detail(&self) -> Option<String> {
+        let reach = match *self.reachable.lock().unwrap() {
+            None => "checking".to_string(),
+            Some(true) => format!("reachable at {}", self.base_url()),
+            Some(false) => format!("not reachable at {}", self.base_url()),
+        };
+        let docker = match self.docker.lock().unwrap().as_ref() {
+            None => "checking".to_string(),
+            Some(DockerSnapshot { status: docker::Status::NotInstalled, .. }) => "not installed".to_string(),
+            Some(DockerSnapshot { status: docker::Status::Unavailable(e), .. }) => format!("unusable ({e})"),
+            Some(DockerSnapshot { container: Some(c), .. }) => format!("container {} {c}", docker::CONTAINER),
+            Some(DockerSnapshot { container: None, .. }) => format!("no {} container", docker::CONTAINER),
+        };
+        Some(format!("slskd {reach}; docker {docker}"))
     }
 
     fn wiring(&self) -> Wiring {
         let client = SlskdClient::new(self.effective_conn());
-        let data_dir = self.data_dir.lock().unwrap().clone().map(|d| expand_home(&d));
-        let src = Arc::new(SoulseekSource::new(client, data_dir));
+        let state = self.state.lock().unwrap();
+        let downloads: Option<PathBuf> = if state.docker.is_some() {
+            Some(self.media_cache_dir.clone())
+        } else {
+            state.data_dir.as_deref().map(|d| expand_home(d).join("downloads"))
+        };
+        drop(state);
+        let src = Arc::new(SoulseekSource::new(client, downloads));
         Wiring {
             source: Some(src.clone() as Arc<dyn Source>),
             media: Some(src as Arc<dyn MediaProvider>),
@@ -163,38 +408,17 @@ impl Plugin for SoulseekPlugin {
         }
     }
 
-    fn setup(&self, input: Option<String>) -> PluginHealth {
-        let Some(dir) = input.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
-            return PluginHealth::Warn("no directory entered".to_string());
-        };
-        let path = expand_home(&dir);
-        if !path.is_dir() {
-            return PluginHealth::Fail(format!("{} is not a directory", path.display()));
+    fn setup(&self, answers: Vec<String>) -> PluginHealth {
+        let steps = self.plan(&answers);
+        let get = |step: Step| steps.iter().position(|s| *s == step).and_then(|i| answers.get(i)).map_or("", |a| a.trim());
+        if steps.first() == Some(&Step::UseDocker) && is_yes(get(Step::UseDocker)) {
+            let record = self.state.lock().unwrap().docker.clone();
+            match record {
+                Some(d) => self.setup_docker(&d.folder, None),
+                None => self.setup_docker(get(Step::Folder), Some((get(Step::SoulseekUser), get(Step::SoulseekPass)))),
+            }
+        } else {
+            self.setup_manual(get(Step::Host), get(Step::User), get(Step::Pass), get(Step::DataDir))
         }
-
-        *self.yaml_auth.lock().unwrap() = yaml_config::read(&path);
-        let client = SlskdClient::new(self.effective_conn());
-        let ok = client.reachable();
-        *self.reachable.lock().unwrap() = Some(ok);
-        if !ok {
-            // Same transient condition `probe` reports as `Warn` — a
-            // moment-in-time connectivity check, not a permanent verdict on
-            // this plugin, so it shouldn't outrank `probe`'s own `Warn` with
-            // a harsher icon once the daemon comes up.
-            return PluginHealth::Warn(self.unreachable_message());
-        }
-
-        persist::persist(&self.cache_dir, &dir);
-        *self.data_dir.lock().unwrap() = Some(dir);
-        PluginHealth::Ok
     }
-}
-
-fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return PathBuf::from(home).join(rest);
-    }
-    PathBuf::from(path)
 }
