@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cursive::{Printer, Rect};
-use cursive::event::{Event, Key, MouseEvent};
+use cursive::event::{Event, Key, MouseButton, MouseEvent};
 
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -15,7 +15,7 @@ use crate::row::RowItem;
 use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
-use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
+use super::rows::{BACK_LABEL, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -576,7 +576,7 @@ impl TrackList {
     /// `marked` brackets the title, the focus marker docked windows use.
     pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame) {
         let title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
-        draw_row_list(printer, &title, &frame.rows, self.state.offset, self.state.cursor, frame.total);
+        draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state.offset, self.state.cursor, frame.total);
     }
 
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
@@ -606,6 +606,12 @@ impl TrackList {
             }
             if matches!(mouse, MouseEvent::Hold(_) | MouseEvent::Release(_)) {
                 return WindowOutcome::Ignored;
+            }
+            let local = *position - *offset - rect.top_left();
+            let back = !matches!(self.open, Open::TopLevel) && back_button_fits(rect.width().saturating_sub(1));
+            if back && matches!(mouse, MouseEvent::Press(MouseButton::Left)) && local.y == 0 && local.x < BACK_LABEL.len() {
+                self.show_top(None);
+                return WindowOutcome::Consumed;
             }
         }
         // The wheel scrolls the window only; the next key press re-follows the cursor.

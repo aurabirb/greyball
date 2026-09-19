@@ -177,16 +177,26 @@ fn bpm_color(bpm: &str) -> Option<Color> {
 pub(super) const LIST_TITLE_ROWS: usize = 1;
 
 /// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
-pub(super) fn draw_row_list(printer: &Printer, title: &str, rows: &[Row], offset: usize, sel: usize, total: usize) {
+pub(super) fn draw_row_list(printer: &Printer, title: &str, back: bool, rows: &[Row], offset: usize, sel: usize, total: usize) {
     // Reserve the rightmost column of the list body as a scrollbar gutter.
     let content_w = printer.size.x.saturating_sub(1);
     let indent = main_col_start(content_w);
     printer.with_color(ColorStyle::title_primary(), |p| {
         p.print((0, 0), &pad(&format!("{:indent$}{title}", ""), content_w));
     });
+    if back && back_button_fits(content_w) {
+        printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
+    }
     let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
     let body = printer.windowed(Rect::from_size((0, LIST_TITLE_ROWS), (printer.size.x, body_h)));
     draw_list_body(&body, rows, offset, sel, total);
+}
+
+/// The title row's clickable back button, over the tags column; hidden when it would run into the title.
+pub(super) const BACK_LABEL: &str = "<back";
+
+pub(super) fn back_button_fits(content_w: usize) -> bool {
+    main_col_start(content_w) > BACK_LABEL.len()
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
