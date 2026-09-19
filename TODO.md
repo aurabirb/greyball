@@ -51,13 +51,15 @@
   liked track pressed again is removed. Remove the separate `BuiltinAction::Unlike` (default `L`),
   its Help row and its own confirm; the unlike direction asks for confirmation the way the
   playlist-key removal item below describes (one shared confirm path). `Like` stays `l`.
-- [ ] Open the Help window as a TAB when `?` (`OpenHelp`, `:help`) is pressed, and let it follow the
-  normal placement cycle afterwards (tabbed → docked → screen → float → tabbed, like any
-  non-companion window), instead of opening as a float. `?` on the open tab returns to where the
-  user came from; Esc rules follow the existing window rules (a tab does not close on Esc).
-  `screen::HELP`'s `Home::Float` and everything that special-cases Help floating (its status hint,
-  README) follow.
 ### Bugs
+- [ ] The top bar's now-playing title can overlap the player controls (the transport buttons on the
+  left of row 0) since it became a scrubber (`TabBar::draw`, `ui/src/view/tab_bar.rs`, and the
+  span function shared with the click hit-test): a long title that is not clipped to the space right
+  of the transport draws over the buttons, and its underline and click span cover them. Bound the
+  title (and its scrub span) to the columns between the end of the transport/tabs cluster plus a
+  gap and the right edge, truncating or marquee-scrolling inside that width; the buttons' click
+  targets must win. Check narrow widths, the collapsed-tabs layout and a very long title. Fix
+  together with the waveform item below, which shares the same space budget.
 - [ ] The waveform never shows up: the top bar (`TabBar::draw`, `ui/src/view/tab_bar.rs`) should draw it
   in the second row between the player controls and the title on every wide enough terminal, and
   drop it entirely on small widths (no shrunken stub). Investigate why nothing is drawn: no
@@ -197,14 +199,9 @@
   share of the track from the known duration); persist only once complete. SoundCloud tracks carry a
   ready-made `waveform_url` in the API response — use it there instead of decoding if it's cheap to
   wire.
-- [ ] With Help as the active tab nothing but a tab digit, `?` or the mouse leaves it: it consumes Tab
-  for its sections and only a float or `screen` window closes on Esc. Decide whether a tabbed or docked
-  Help should give Tab back to the shell's focus cycle.
 - [ ] `core::config::PaneMode` (`panes.mode` in `config.toml`: `screen`, `embedded`, `float`) only seeds
   the five pane windows' placement for a default layout; merge it into `ui::screen::Placement` so the
   config takes `tabbed` too and there is one enum and one vocabulary.
-- [ ] A `Screen`-placed window keeps every key but Esc and the placement key, so a fullscreen list has
-  no `/`, `q`, `:` or number keys. Let the shell keys through, or decide that fullscreen stays modal.
 - [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
   track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
   pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
