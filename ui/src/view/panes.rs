@@ -125,15 +125,23 @@ pub(super) fn float_body(frame: Rect) -> Rect {
     Rect::from_size(frame.top_left() + (1, 0), frame.size().saturating_sub((2, 1)))
 }
 
-/// Boxes `frame` and clears it, the top border between the corners included.
+/// Clears `frame` and boxes it, leaving the top edge between the corners to the window's title row.
 pub(super) fn draw_float_frame(printer: &Printer, frame: Rect, focused: bool) {
-    let style = if focused { ColorStyle::title_primary() } else { ColorStyle::primary() };
-    printer.with_color(style, |p| p.print_box(frame.top_left(), frame.size(), false));
-    let body = float_body(frame);
-    let blank = " ".repeat(body.width());
-    for y in body.top()..body.top() + body.height() {
-        printer.print((body.left(), y), &blank);
+    let blank = " ".repeat(frame.width());
+    for y in frame.top()..=frame.bottom() {
+        printer.print((frame.left(), y), &blank);
     }
+    // `Printer::print_box` would force the theme's border colour, and draw nothing under `borders = none`.
+    let style = if focused { ColorStyle::title_primary() } else { ColorStyle::primary() };
+    printer.with_color(style, |p| {
+        let (l, t, r, b) = (frame.left(), frame.top(), frame.right(), frame.bottom());
+        p.print_hline((l, b), frame.width(), "─");
+        p.print_vline((l, t), frame.height(), "│");
+        p.print_vline((r, t), frame.height(), "│");
+        for (pos, corner) in [((l, t), "┌"), ((r, t), "┐"), ((l, b), "└"), ((r, b), "┘")] {
+            p.print(pos, corner);
+        }
+    });
 }
 
 impl MedleyView {
