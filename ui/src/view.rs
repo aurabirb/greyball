@@ -405,7 +405,7 @@ impl View for MedleyView {
             if self.windows.placement(placed.id) == Placement::Floating {
                 draw_float_frame(printer, placed.frame);
             }
-            window.draw(printer, marked, window_frame, self.over_view(placed.id));
+            window.draw(printer, marked, window_frame, self.over_view(placed.id), frame.chrome.keys_key);
         }
 
         let chrome = &frame.chrome;
@@ -421,9 +421,7 @@ impl View for MedleyView {
             _ => None,
         };
         let bottom = printer.size.y.saturating_sub(if covered { 1 } else { 2 });
-        let focused = placed.iter().position(|placed| placed.id == self.focused_id()).map(|i| &frame.windows[i]);
-        let assignable = matches!(focused, Some(WindowFrame::List(list)) if list.assignable);
-        let line = self.hint_line(assignable, chrome);
+        let line = self.hint_line(chrome);
         // Cursor position in the main list / its length, right-aligned before the warnings button.
         let button = warnings_span(chrome.warn_count, printer.size.x).filter(|_| !covered);
         let warn_w = button.map_or(0, |(_, width)| width);

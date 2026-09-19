@@ -10,9 +10,8 @@ use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, Sourc
 
 use crate::command;
 use crate::keybindings::Action;
-use crate::screen::PLAYLIST_KEYS;
 
-use super::{Focus, MedleyView};
+use super::MedleyView;
 use super::frame::Chrome;
 use super::modal::Modal;
 use super::notice::Notice;
@@ -324,7 +323,7 @@ impl MedleyView {
     }
 
     /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
-    pub(super) fn hint_line(&self, assignable: bool, chrome: &Chrome) -> String {
+    pub(super) fn hint_line(&self, chrome: &Chrome) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
@@ -336,12 +335,6 @@ impl MedleyView {
                 }
                 let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
                 let keys_key = key(chrome.keys_key);
-                if assignable {
-                    let keys = self.windows.named(PLAYLIST_KEYS);
-                    let closes = self.open.iter().any(|&(id, _)| Some(id) == keys && Focus::Window(id) == self.focus);
-                    let close = if closes { format!("   [{keys_key}] close") } else { String::new() };
-                    return format!("  [key] assign   [Backspace] clear   [Enter] open{close}");
-                }
                 let close = if self.fullscreen().is_some() { "   [Esc] close" } else { "" };
                 format!("  [{}] help   [{keys_key}] playlist keys{close}", key(chrome.help_key))
             }),

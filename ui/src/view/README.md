@@ -43,15 +43,16 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   tab, else opened and focused) and is what `/`, `:hist` and `:open <playlist link>` use; `toggle_window`
   (`:window <name>`, `:log`, …) opens or closes a non-tab window and switches to a tabbed one.
 - `playlist-keys` is a second Playlists window, the key overview meant to be opened mid-work: it
-  starts floating and closed, and differs from the Playlists tab by one instance setting,
-  `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order).
+  starts floating and closed, and differs from the Playlists tab by two instance settings,
+  `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order; the
+  window `Windows::keyed_first` finds) and `Startup::status_row`.
   The `SwitchPlaylists` key (backtick) runs `switch_playlists`: when that window is shown it takes focus (the
   open entry remembers the focus it came from, and the key on the focused one returns there, else to the
   Playlists tab, and closes it only when it floats); else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
   came from (`Session::playing_playlist`, else the one open in the active list, else in any other window),
-  else on the playlist it was left in, else where it was. The hint row reads the focused window's
-  frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open
-  hint, plus the closing key when that window is the open `playlist-keys`. Everything else — placement, `:window`,
+  else on the playlist it was left in, else where it was. Its status row shows the
+  assign/clear/open hint (`ListFrame::assignable`: a Playlists top level with rows), plus the closing key
+  while it has focus. Everything else — placement, `:window`,
   `M`, Esc closing a focused float, persistence — is what any window has.
 - `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`)
   and `:help` run `toggle_help` (close it when it has focus, else `show` and focus).
@@ -77,10 +78,12 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   prompt named whatever rebuilt meanwhile; every key is consumed while capturing, a non-character
   cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
   Backspace is `Unbind`: a playlist loses its key, a built-in returns to its default, which
-  `clear_hotkey` refuses while another binding holds that default. Its last row is its own status row, so the body is two rows shorter than the window (title, status):
-  the capture prompt, else the last bind result (`Notice::Status`, styled as a warning when refused, until
-  the next key in the window), else what the row under the cursor allows or why it has no key.
-  `Notice::Status` goes to the focused window's `Window::set_status` when it has such a row, else to the hint row.
+  `clear_hotkey` refuses while another binding holds that default. Its idle status row text is the capture prompt, else what the row under the cursor allows or why it has no key.
+- A window with `Startup::status_row` (Help, `playlist-keys`) reserves its last row: `Window::content` is
+  the rect without it, which is what the component lays out, draws and hit-tests in (a click on the row is
+  consumed). `Window::draw` fills the row with the last bind result (`Notice::Status`, styled as a warning
+  when refused, cleared by the next key or blur), else the component's idle hints. `Notice::Status` goes
+  to the focused window's `Window::set_status` when it has such a row, else to the hint row.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
@@ -115,7 +118,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
     `ToggleSetting(row)`, `Bind`/`Unbind`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
   - `blur()` when the window closes or another takes focus, and `set_status(text, refused)`, a message
-    for the window's own status row; only Help has state to drop or such a row.
+    for the window's own status row (`Startup::status_row`); only Help has state to drop.
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local

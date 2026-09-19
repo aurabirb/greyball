@@ -4,7 +4,7 @@ use cursive::theme::ColorStyle;
 
 use core::{Axis, PaneLayoutConfig, Session, Side};
 
-use crate::screen::{HELP, Kind, ListKind, PLAYLIST_KEYS, Placement};
+use crate::screen::{HELP, Kind, ListKind, Placement};
 
 use super::{Focus, MedleyView};
 use super::input::Editing;
@@ -213,7 +213,7 @@ impl MedleyView {
 
     /// The `SwitchPlaylists` key: the other Playlists window takes focus, or opens at its top level when none is shown.
     pub(super) fn switch_playlists(&mut self) {
-        let Some(id) = self.windows.named(PLAYLIST_KEYS) else { return };
+        let Some(id) = self.windows.keyed_first() else { return };
         let shown = self.visible();
         if self.focus == Focus::Window(id) {
             if self.windows.placement(id) == Placement::Floating {

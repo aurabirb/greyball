@@ -483,6 +483,17 @@ impl TrackList {
         })
     }
 
+    /// The status row's text when nothing was reported: what a key does here; `close` is the key that closes the focused window.
+    pub(super) fn idle(&self, frame: &ListFrame, close: Option<char>) -> String {
+        let mut hints = match () {
+            _ if frame.assignable => vec!["[key] assign".to_string(), "[Backspace] clear".into(), "[Enter] open".into()],
+            _ if !matches!(self.open, Open::TopLevel) => vec!["[Enter] play".to_string(), "[Esc] back".into()],
+            _ => vec![],
+        };
+        hints.extend(close.map(|key| format!("[{key}] close")));
+        hints.join("   ")
+    }
+
     /// `marked` brackets the title, the focus marker docked windows use.
     pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame) {
         let title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };

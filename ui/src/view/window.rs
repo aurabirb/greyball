@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseEvent};
+use cursive::theme::{BaseColor, Color, ColorStyle};
 
 use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
@@ -12,6 +13,7 @@ use crate::vis::Vis;
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
+use super::text::pad;
 use super::settings::{SettingsEntry, SettingsPane};
 use super::track_list::{ListFrame, TrackList};
 
@@ -73,11 +75,18 @@ enum Body {
     Help(HelpPane),
 }
 
+/// A window's own last row: the last bind result and whether it was a refusal, else the component's hints.
+#[derive(Default)]
+struct StatusRow {
+    message: Option<(String, bool)>,
+}
+
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
 pub(super) struct Window {
     pub(super) kind: Kind,
     body: Body,
     rect: Rect,
+    status: Option<StatusRow>,
 }
 
 impl Window {
@@ -99,10 +108,17 @@ impl Window {
         self.rect
     }
 
+    /// `rect()` without the status row: the rect the component lays out, draws and hit-tests in.
+    fn content(&self) -> Rect {
+        let rows = usize::from(self.status.is_some());
+        Rect::from_size(self.rect.top_left(), (self.rect.width(), self.rect.height().saturating_sub(rows)))
+    }
+
     /// Takes the rect this layout pass gave the window and keeps its scroll state inside it.
     pub(super) fn relayout(&mut self, rect: Rect, s: &Session) {
         let resized = rect.height() != self.rect.height();
         self.rect = rect;
+        let rect = self.content();
         match &mut self.body {
             Body::List(list) => list.relayout(resized, s, rect),
             Body::Help(help) => help.relayout(rect, s),
@@ -115,48 +131,77 @@ impl Window {
         if let Body::Help(help) = &mut self.body {
             help.blur();
         }
+        if let Some(row) = &mut self.status {
+            row.message = None;
+        }
     }
 
-    /// Puts a message on the window's own status row; false when it has none.
+    /// Puts a message on the window's own status row until its next key; false when it has none.
     pub(super) fn set_status(&mut self, text: &str, refused: bool) -> bool {
-        match &mut self.body {
-            Body::Help(help) => help.set_status(text.to_string(), refused),
-            _ => return false,
-        }
+        let Some(row) = &mut self.status else { return false };
+        row.message = Some((text.to_string(), refused));
         true
     }
 
     /// Brings a list's scroll window back around its cursor.
     pub(super) fn follow(&mut self) {
+        let rect = self.content();
         if let Body::List(list) = &mut self.body {
-            list.follow(self.rect);
+            list.follow(rect);
         }
     }
 
     pub(super) fn frame(&self, ctx: &Ctx) -> WindowFrame {
         match &self.body {
-            Body::List(list) => WindowFrame::List(list.frame(ctx, self.rect)),
+            Body::List(list) => WindowFrame::List(list.frame(ctx, self.content())),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
-            Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.rect)),
+            Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
             Body::Log(_) | Body::Vis(_) => WindowFrame::Live,
         }
     }
 
-    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `over` that it is shown over the view.
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, over: bool) {
-        let printer = &printer.windowed(self.rect);
+    /// The status row's text when nothing was reported; `over` is that the window is shown over the view, `close` the key that closes it.
+    fn idle(&self, frame: &WindowFrame, focused: bool, over: bool, close: Option<char>) -> String {
         match (&self.body, frame) {
-            (Body::List(list), WindowFrame::List(frame)) => list.draw(printer, focused, frame),
-            (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(printer, entries, focused),
-            (Body::Log(log), _) => log.draw(printer, focused),
-            (Body::Vis(vis), _) => vis.draw(printer, focused),
-            (Body::Help(help), WindowFrame::Help(built)) => help.draw(printer, focused, built, over),
+            (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, close.filter(|_| focused)),
+            (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, over),
+            _ => String::new(),
+        }
+    }
+
+    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `over` that it is shown over the view, `close` the key that closes a floating window.
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, over: bool, close: Option<char>) {
+        let printer = &printer.windowed(self.rect);
+        let content = &printer.windowed(Rect::from_size((0, 0), self.content().size()));
+        match (&self.body, frame) {
+            (Body::List(list), WindowFrame::List(frame)) => list.draw(content, focused, frame),
+            (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(content, entries, focused),
+            (Body::Log(log), _) => log.draw(content, focused),
+            (Body::Vis(vis), _) => vis.draw(content, focused),
+            (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
+        }
+        if let Some(row) = &self.status
+            && let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0)
+        {
+            let (text, refused) = row.message.clone().unwrap_or_else(|| (self.idle(frame, focused, over, close), false));
+            let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
+            printer.with_color(style, |p| p.print((0, y), &pad(&text, p.size.x)));
         }
     }
 
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx) -> WindowOutcome {
-        let rect = self.rect;
+        if !matches!(event, Event::Mouse { .. })
+            && let Some(row) = &mut self.status
+        {
+            row.message = None;
+        }
+        if let Event::Mouse { offset, position, .. } = event
+            && position.checked_sub(*offset).is_some_and(|pos| self.rect.contains(pos) && !self.content().contains(pos))
+        {
+            return WindowOutcome::Consumed;
+        }
+        let rect = self.content();
         if let Body::Help(help) = &mut self.body {
             return help.on_event(event, ctx.s, rect);
         }
@@ -222,7 +267,8 @@ impl Windows {
             Kind::Help => Body::Help(HelpPane::default()),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
-        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)) });
+        let status = startup.status_row.then(StatusRow::default);
+        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status });
         self.placements.of.push(placement);
         WindowId(self.items.len() - 1)
     }
@@ -234,6 +280,11 @@ impl Windows {
     /// The startup window `:panes`, `:window` and `state.toml` call `name`.
     pub(super) fn named(&self, name: &str) -> Option<WindowId> {
         WINDOWS.iter().position(|startup| startup.name == name).map(WindowId)
+    }
+
+    /// The window the `SwitchPlaylists` key switches to: the one that lists the keyed playlists first.
+    pub(super) fn keyed_first(&self) -> Option<WindowId> {
+        WINDOWS.iter().position(|startup| startup.keyed_first).map(WindowId)
     }
 
     /// The companion of a startup tab.

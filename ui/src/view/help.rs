@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
-use cursive::theme::{BaseColor, Color, ColorStyle};
+use cursive::theme::ColorStyle;
 
 use core::{HotkeyTarget, Session};
 
@@ -165,8 +165,6 @@ pub(super) struct HelpPane {
     offset: usize,
     /// The row awaiting its new key: its name and what the key will bind.
     capturing: Option<(String, HotkeyTarget)>,
-    /// The last bind result and whether it was a refusal, shown until the next key.
-    status: Option<(String, bool)>,
     built: Memo<LayoutKey, Arc<Built>>,
     /// The layout and body height the scroll window was last fitted to.
     fitted: Memo<(LayoutKey, usize)>,
@@ -176,9 +174,9 @@ pub(super) struct HelpPane {
 type LayoutKey = (usize, u64, u64, u64);
 
 impl HelpPane {
-    /// `rect` minus the title row, the status row and the scrollbar gutter.
+    /// `rect` minus the title row and the scrollbar gutter.
     fn body(rect: Rect) -> Rect {
-        Rect::from_size((rect.left(), rect.top() + 1), (rect.width().saturating_sub(1), rect.height().saturating_sub(2)))
+        Rect::from_size((rect.left(), rect.top() + 1), (rect.width().saturating_sub(1), rect.height().saturating_sub(1)))
     }
 
     /// Everything the layout shows that can change: the width, the keys, the playlist names.
@@ -213,30 +211,21 @@ impl HelpPane {
         self.offset = bound_offset(self.offset, built.lines.len(), view_h);
     }
 
-    /// A pending capture and the last result don't outlive the focus they were made under.
+    /// A pending capture doesn't outlive the focus it was started under.
     pub(super) fn blur(&mut self) {
         self.capturing = None;
-        self.status = None;
     }
 
-    pub(super) fn set_status(&mut self, text: String, refused: bool) {
-        self.status = Some((text, refused));
-    }
-
-    /// The status row: the capture prompt, else the last result, else what the row under the cursor allows; only `over` the view are Tab and Esc its own.
-    fn status_line(&self, built: &Built, over: bool) -> (String, bool) {
+    /// The status row's text when nothing was reported: the capture prompt, else what the row under the cursor allows; only `over` the view are Tab and Esc its own.
+    pub(super) fn idle(&self, built: &Built, over: bool) -> String {
         if let Some((name, _)) = &self.capturing {
-            return (format!("press a key for {name:?} — [Esc] cancel"), false);
+            return format!("press a key for {name:?} — [Esc] cancel");
         }
-        if let Some((text, refused)) = &self.status {
-            return (text.clone(), *refused);
-        }
-        let idle = match built.rows.get(self.cursor) {
+        match built.rows.get(self.cursor) {
             Some(Row { name, target: Target::Refused(why), .. }) => format!("{name}: {why}"),
             _ if over => "[Enter] rebind   [Backspace] default   [Tab] next section   [Esc] close".to_string(),
             _ => "[Enter] rebind   [Backspace] default   [Tab] next window   [?] leave".to_string(),
-        };
-        (idle, false)
+        }
     }
 
     /// Moves to the next or previous section: cursor on its first item, its title at the top.
@@ -252,9 +241,6 @@ impl HelpPane {
     pub(super) fn on_event(&mut self, event: &Event, s: &Session, rect: Rect) -> WindowOutcome {
         let (built, body) = (self.built(s, rect), Self::body(rect));
         let view_h = body.height();
-        if !matches!(event, Event::Mouse { .. }) {
-            self.status = None;
-        }
         if let Event::Mouse { offset, position, event: mouse } = event {
             let Some(pos) = position.checked_sub(*offset).filter(|&pos| rect.contains(pos)) else {
                 return WindowOutcome::Ignored;
@@ -302,7 +288,7 @@ impl HelpPane {
         WindowOutcome::Consumed
     }
 
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, built: &Built, over: bool) {
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, built: &Built) {
         let title = if focused { format!("[{}]", Kind::Help.label()) } else { Kind::Help.label().to_string() };
         printer.with_color(ColorStyle::title_secondary(), |p| p.print((0, 0), &pad(&title, p.size.x)));
         let body = Self::body(Rect::from_size((0, 0), printer.size));
@@ -319,10 +305,5 @@ impl HelpPane {
             }
         }
         draw_scrollbar(&printer.windowed(Rect::from_size((0, 1), (printer.size.x, body.height()))), body.width(), body.height(), offset, built.lines.len());
-        if let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0) {
-            let (text, refused) = self.status_line(built, over);
-            let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
-            printer.with_color(style, |p| p.print((0, y), &pad(&text, p.size.x)));
-        }
     }
 }
