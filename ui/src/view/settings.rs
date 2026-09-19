@@ -21,7 +21,11 @@ pub(super) enum SettingsEntry {
     Source { name: &'static str, enabled: bool },
     /// Background scan on/off — live via `ScanDriver::set_mode`, unlike `Source`.
     Scan { enabled: bool, available: bool },
+    /// Vis frame-rate limit — live; Enter steps through `VIS_FPS_STEPS`.
+    VisFps(u32),
 }
+
+const VIS_FPS_STEPS: [u32; 6] = [10, 15, 20, 30, 45, 60];
 
 fn settings_entry_line(e: &SettingsEntry) -> String {
     match e {
@@ -30,6 +34,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::Scan { enabled, available: true } => {
             format!("[{}] bpm scan", if *enabled { "x" } else { " " })
         }
+        SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
     }
 }
@@ -50,6 +55,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
         enabled: s.scan.as_ref().is_some_and(|d| d.mode() != ScanMode::Disabled),
         available: s.scan.is_some(),
     });
+    v.push(SettingsEntry::VisFps(cfg.vis.limit()));
     v.push(SettingsEntry::Info(String::new()));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
     v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
@@ -113,6 +119,11 @@ impl MedleyView {
             }
             SettingsEntry::Scan { enabled, available: true } => {
                 self.with_session_mut(|s| s.set_scan_enabled(!enabled));
+            }
+            SettingsEntry::VisFps(fps) => {
+                let next = VIS_FPS_STEPS.into_iter().find(|&step| step > fps).unwrap_or(VIS_FPS_STEPS[0]);
+                self.with_session_mut(|s| s.set_vis_fps(next));
+                self.vis.set_fps(next);
             }
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
         }

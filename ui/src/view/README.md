@@ -164,7 +164,7 @@ build closure against its key.
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
 | `TrackList::top` (ordered top-level rows) | playlists, remote-playlists and hotkeys generations | local and remote playlists, which have a key, `keyed_first` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, liked marks, pending marks), title, total |
-| `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
+| `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, vis fps, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision`, `warnings_revision` | status core, warning count, the help, playlist-keys and placement keys |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
 | `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
@@ -243,7 +243,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by
   `on_root`, which dialog buttons also use to `run` a command); everything else is re-read from the
   session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
-  (clock, marquee, title flush); `sync_vis_fps`, run after every event, raises it to `vis::FPS` while
+  (clock, marquee, title flush); `sync_vis_fps`, run after every event, raises it to the Vis fps limit (`Vis::fps`, mirroring `cfg.vis.fps`) while
   a Vis window is shown and must never go below the floor. `Event::Refresh` only runs that sync.
 
 ## Routing in `MedleyView::route`

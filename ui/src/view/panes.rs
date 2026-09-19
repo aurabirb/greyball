@@ -349,12 +349,13 @@ impl MedleyView {
     /// Syncs cursive's redraw rate to whether a Vis window is shown; a callback only when that changed.
     pub(super) fn sync_vis_fps(&mut self) -> EventResult {
         let shown = self.visible().into_iter().any(|id| self.windows[id].kind == Kind::Vis);
-        if shown == self.vis_fast {
+        let want = shown.then(|| self.vis.fps());
+        if want == self.vis_fast {
             return EventResult::Ignored;
         }
-        self.vis_fast = shown;
+        self.vis_fast = want;
         self.vis.set_enabled(shown);
-        let fps = if shown { crate::vis::FPS } else { crate::BASELINE_FPS };
+        let fps = want.unwrap_or(crate::BASELINE_FPS);
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }
 }

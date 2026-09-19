@@ -76,6 +76,12 @@ fn load_volume() -> Option<f32> {
     v.get("volume")?.as_float().map(|f| f as f32)
 }
 
+fn load_vis_fps() -> Option<u32> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    u32::try_from(v.get("vis_fps")?.as_integer()?).ok()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -198,6 +204,7 @@ fn load_layout() -> Option<Layout> {
 
 fn save_state(
     volume: f32,
+    vis_fps: Option<u32>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
@@ -205,6 +212,9 @@ fn save_state(
 ) {
     let _ = std::fs::create_dir_all(data_dir());
     let mut text = format!("volume = {volume:?}\n");
+    if let Some(fps) = vis_fps {
+        text.push_str(&format!("vis_fps = {fps}\n"));
+    }
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
     }
@@ -356,6 +366,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // Diff base for `source_overrides` at shutdown — captured before Settings-toggled overrides apply.
     let config_source_defaults: Vec<(&str, bool)> =
         TOGGLABLE_SOURCES.iter().map(|&n| (n, cfg.source_enabled(n).unwrap_or(false))).collect();
+    let config_vis_fps = cfg.vis.limit();
+    if let Some(fps) = load_vis_fps() {
+        cfg.vis.fps = fps;
+    }
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
     }
@@ -631,7 +645,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             (current != default).then_some((name, current))
         })
         .collect();
-    save_state(s.player_status().volume, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    let vis_fps = Some(s.cfg.vis.limit()).filter(|&fps| fps != config_vis_fps);
+    save_state(s.player_status().volume, vis_fps, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

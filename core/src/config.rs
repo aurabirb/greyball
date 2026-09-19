@@ -29,6 +29,7 @@ pub struct Config {
     /// `ui` seeds its runtime state from this; `:panes` changes it live but
     /// (MVP) does not persist the change back to this file.
     pub panes: PaneLayoutConfig,
+    pub vis: VisConfig,
     pub theme: String,
     /// Persisted player volume, 0.0..=1.0.
     pub volume: f32,
@@ -58,6 +59,27 @@ impl Config {
             "soulseek" => self.soulseek.enabled = enabled,
             _ => {}
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VisConfig {
+    pub fps: u32,
+}
+
+impl VisConfig {
+    pub const MIN_FPS: u32 = 5;
+    pub const MAX_FPS: u32 = 60;
+
+    pub fn limit(&self) -> u32 {
+        self.fps.clamp(Self::MIN_FPS, Self::MAX_FPS)
+    }
+}
+
+impl Default for VisConfig {
+    fn default() -> Self {
+        Self { fps: 30 }
     }
 }
 
@@ -224,6 +246,7 @@ impl Default for Config {
             scan: ScanConfig::default(),
             visible_track_attrs: vec!["bpm".to_string()],
             panes: PaneLayoutConfig::default(),
+            vis: VisConfig::default(),
             theme: "default".to_string(),
             volume: 1.0,
         }

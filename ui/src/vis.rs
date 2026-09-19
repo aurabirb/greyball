@@ -7,13 +7,13 @@
 //! A real 5-band equalizer — `Session::audio_levels` (`Player::levels`, real
 //! Goertzel magnitude on the live audio tap, not a volume proxy) drives both
 //! how tall each bar swings and, via its own loudness, how fast the
-//! left-to-right rainbow gradient drifts. Runs best-effort [`FPS`].
+//! left-to-right rainbow gradient drifts. Runs best-effort at the configured fps limit.
 //!
 //! Frame-dropping is inherent, not a queue we prune: the worker is one
 //! thread computing one frame at a time in a loop — if a tick takes longer
 //! than its budget, the next tick just starts late, it never backs up.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,9 +25,6 @@ use cursive::{
 
 use crate::SessionHandle;
 
-/// Frames per second cursive redraws at (and the worker recomputes at) —
-/// "30fps or best effort" per this visualizer's simplicity.
-pub const FPS: u32 = 30;
 const N_BARS: usize = 5;
 
 #[derive(Default)]
@@ -40,6 +37,7 @@ struct Frame {
 
 pub struct Vis {
     enabled: AtomicBool,
+    fps: AtomicU32,
     size: Mutex<(usize, usize)>,
     frame: Mutex<Frame>,
 }
@@ -51,12 +49,21 @@ impl Vis {
     pub fn spawn(session: SessionHandle) -> Arc<Self> {
         let shared = Arc::new(Vis {
             enabled: AtomicBool::new(false),
+            fps: AtomicU32::new(session.lock().unwrap().cfg.vis.limit()),
             size: Mutex::new((0, 0)),
             frame: Mutex::new(Frame::default()),
         });
         let worker = shared.clone();
         thread::spawn(move || worker.run(session));
         shared
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.fps.load(Ordering::Relaxed)
+    }
+
+    pub fn set_fps(&self, fps: u32) {
+        self.fps.store(fps, Ordering::Relaxed);
     }
 
     pub fn set_enabled(&self, on: bool) {
@@ -106,7 +113,7 @@ impl Vis {
         let mut last_bars_tick = Instant::now();
         loop {
             if !self.enabled.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(1000 / FPS as u64) * 3);
+                thread::sleep(Duration::from_millis(1000 / self.fps().max(1) as u64) * 3);
                 last_bars_tick = Instant::now(); // don't count idle time as motion
                 continue;
             }
@@ -131,7 +138,7 @@ impl Vis {
             } else {
                 last_bars_tick = Instant::now();
             }
-            thread::sleep(Duration::from_millis(1000 / FPS as u64));
+            thread::sleep(Duration::from_millis(1000 / self.fps().max(1) as u64));
         }
     }
 }

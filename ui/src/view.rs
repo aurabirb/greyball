@@ -92,8 +92,8 @@ pub struct MedleyView {
     /// Which window currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     vis: Arc<crate::vis::Vis>,
-    /// Cursive's redraw rate is raised for a shown Vis window.
-    vis_fast: bool,
+    /// The redraw rate raised for a shown Vis window; `None` while none is shown.
+    vis_fast: Option<u32>,
     modal: Option<Modal>,
     marquee: Marquee,
     /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
@@ -129,7 +129,7 @@ impl MedleyView {
             pane_cfg,
             open: Vec::new(),
             vis,
-            vis_fast: false,
+            vis_fast: None,
             modal: None,
             marquee: Marquee::new(),
             follow_sig: Memo::default(),

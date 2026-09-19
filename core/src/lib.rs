@@ -32,7 +32,7 @@ pub use app::{
 pub use catalog::Catalog;
 pub use config::{
     Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
-    SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES,
+    SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES, VisConfig,
 };
 pub use audio_decode::decode_and_cache;
 pub use event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};

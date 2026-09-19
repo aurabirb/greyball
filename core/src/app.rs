@@ -1607,6 +1607,14 @@ impl Session {
         Arc::make_mut(&mut self.cfg).set_source_enabled(source, enabled);
     }
 
+    /// Sets the Vis frame-rate limit, clamped to the supported range.
+    pub fn set_vis_fps(&mut self, fps: u32) {
+        self.touch();
+        let vis = &mut Arc::make_mut(&mut self.cfg).vis;
+        vis.fps = fps;
+        vis.fps = vis.limit();
+    }
+
     /// Live scan on/off — reaches `ScanMode::Disabled`, which `B` deliberately never does.
     pub fn set_scan_enabled(&mut self, enabled: bool) {
         self.touch();
