@@ -12,6 +12,85 @@
 
 ## TODOs:
 
+- [ ] After a restart the Playlists window shows only `[spotify] Liked Songs` — the user's Spotify
+  playlists are missing (they used to list). Reproduce with the real Spotify login and read
+  `medley.log` for the `GET /v1/me/playlists` call made at startup (status, item count, any
+  401/429/timeout) and what `ViewCache` did with the result. Suspects, in order: (1) the top-level
+  fetch is now kicked once right at startup (`Session::ensure_remote_playlists`, called from
+  `app/src/main.rs` after `set_hotkeys`, and on `CoreEvent::PluginStatusChanged`) — possibly before
+  the Spotify token has been refreshed/the source is fully wired, so the first fetch fails or comes
+  back with only the synthetic Liked Songs row, and `ViewCache::ensure_remote_playlists`
+  (`core/src/view_cache.rs`) then freezes the entry (`partial = false` whether the fetch landed
+  `Ok` or `Err`; every later kick returns early) — the known "failed fetch is final for the
+  session" bug above; nothing re-kicks when the Playlists window is opened any more; (2) the
+  source's `browse` root returning Liked Songs first with the real playlists on a later page that
+  the walk never requests or drops (`BrowsePage::partial`, `set_folders` replacing instead of
+  extending); (3) a persisted/cached folder list being preferred over the fresh one. Fix the
+  cause, and make it self-healing regardless: keep a failed or suspiciously short top-level fetch
+  retriable, retry when the Playlists window is shown and when the source's health returns to
+  `Ok`, with a floor between attempts. Hotkeys bound to remote playlists that aren't in the root
+  list (the user's `a` binding) should still resolve a name in the Playlists/Help windows.
+- [ ] Move the assigned key on Playlists top-level rows from the left gutter (the tags column before
+  the name) to the right-hand hotkeys column, where track rows show their playlist letters
+  (`Column::Hotkeys` in `render_cell`, `ui/src/view/rows.rs`; the top-level rows are built in
+  `ui/src/view/track_list.rs` from `TrackList::top()`), same alignment and style as on track rows so
+  the two read as one column when switching between a playlist's tracks and the playlist list. Applies
+  to every Playlists-kind window (the tab and `playlist-keys`). Check it in a real-terminal
+  screenshot of the `playlist-keys` float at its default size: the key must stay visible when the
+  name is truncated in a narrow rect (the key column keeps its width; the name gives way).
+- [ ] Floating windows get a real top border, in the normal text colour. Today `draw_float_frame`
+  (`ui/src/view/panes.rs`) draws left, right and bottom lines plus corners but no top line — the
+  window's own title row sits on the box's top edge (`float_body` starts at the frame's top row) —
+  and colours the whole border `ColorStyle::title_primary()` (red) when focused. Change: draw the
+  top `─` line like the other three sides and move the window body one row down inside it
+  (`float_body` insets the top by 1 like the sides; `float_rect`'s minimum height grows by one), so
+  the title row sits under the border as the first inner row; border always in
+  `ColorStyle::primary()` (normal text colour), focused or not — focus stays visible through the
+  title's existing `[title]`/highlight styling, not the border. Hit-testing keeps using the same
+  `Placed.frame`/body rects as drawing (a press on the top border focuses/raises, like the other
+  sides). Same two rules for the remaining fullscreen modals' frame (`draw_modal_frame`,
+  `ui/src/view/modal.rs`) if they are ever drawn boxed; share one box-drawing helper between the
+  two rather than keeping two. Padding: a floating window's content gets one blank column between
+  the side borders and the text (left and right) and one blank row above the bottom border, so text
+  never touches the box — most visible in the Help/hotkey window, whose command lane starts at the
+  border and whose right-aligned shortcut lane ends on it. Do it in `float_body` (one inset for
+  every floating window; windows still don't know they float) rather than per window; the Help
+  window's lane widths and the lists' scrollbar gutter then derive from the padded rect. Judge the
+  result in a real-terminal screenshot with two cascaded floats (one of them Help) over a list and
+  over a docked pane.
+- [ ] A focused floating window must own the keyboard: every key press goes to it and nothing falls
+  through to the window or tab beneath. Seen: with the Help/hotkey window (or `playlist-keys`)
+  floating and focused, pressing a playlist hotkey letter went through to the track list underneath
+  and toggled that list's selected track in the playlist. Cause: `route` (`ui/src/view.rs`) offers a
+  key to the focused window and, when the window returns `Ignored`, hands it to the shell
+  (`on_shell_key` → `keybindings::map`), where playlist hotkeys, `q` enqueue, `+`, Space, seek keys
+  etc. act on `active_list()` — the hidden list. New rule: while a `float` (or `screen`) window has
+  focus, a key it ignores is dropped, except the small set of shell keys that are about windows
+  themselves — the placement key (`M`), backtick (`toggle-playlist-keys`), `?` (toggle Help), `:`
+  (command line), Tab/Shift-Tab focus cycling where the window doesn't use them, and Esc (close) —
+  derive that set from the key table (`ui/src/items.rs`/`keybindings`), not a hand-copied list. A
+  floating LIST window keeps acting on its OWN selection for track keys (playlist hotkeys, `q`,
+  `+`, Enter): those must target the focused list, never the tab beneath — check `active_list()`
+  resolves to the focused floating list. Docked windows keep today's behaviour (keys fall through
+  to the shell, acting on the active list). Supersedes the earlier decision that shell/number keys
+  fall through a focused float. No repro needed.
+- [ ] Give the Help/hotkey window its own status bar: the last inner row of the window (above the
+  bottom border/padding, inside its rect in every placement) shows the key instructions and the
+  binding feedback, instead of borrowing the shell's hint row underneath the float. Idle: the
+  instructions for the row under the cursor (`[Enter] rebind   [Backspace] default   [Tab] next
+  section   [Esc] close`, or why this row can't be bound). Capturing: `press a key for <name> —
+  [Esc] cancel`. After a bind attempt: the result — bound, moved from, refused (`'x' is a fixed
+  key`, `already used by built-in …`), restored default — styled as a warning when it is a
+  refusal, staying until the next key press in the window. Today these come from `Window::hint()`
+  and `WindowOutcome::Flash` → the shell's single feedback slot (`ui/src/view/help.rs`,
+  `notice.rs`, `hint_line`); route the Help window's own bind/refusal messages to its status bar
+  (the window returns the outcome, the shell hands the formatted text back, or the window formats
+  it itself — whichever keeps `notice.rs` the one place that words messages) and keep the shell
+  slot for everything else. The window's layout memo reserves the row (list height = body − 1);
+  draw and click hit-test share that layout. If the generic float frame later grows a footer slot
+  any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
+  it once there rather than per window.
+
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
@@ -156,40 +235,6 @@
   bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
-- [ ] After a restart the Playlists window shows only `[spotify] Liked Songs` — the user's Spotify
-  playlists are missing (they used to list). Reproduce with the real Spotify login and read
-  `medley.log` for the `GET /v1/me/playlists` call made at startup (status, item count, any
-  401/429/timeout) and what `ViewCache` did with the result. Suspects, in order: (1) the top-level
-  fetch is now kicked once right at startup (`Session::ensure_remote_playlists`, called from
-  `app/src/main.rs` after `set_hotkeys`, and on `CoreEvent::PluginStatusChanged`) — possibly before
-  the Spotify token has been refreshed/the source is fully wired, so the first fetch fails or comes
-  back with only the synthetic Liked Songs row, and `ViewCache::ensure_remote_playlists`
-  (`core/src/view_cache.rs`) then freezes the entry (`partial = false` whether the fetch landed
-  `Ok` or `Err`; every later kick returns early) — the known "failed fetch is final for the
-  session" bug above; nothing re-kicks when the Playlists window is opened any more; (2) the
-  source's `browse` root returning Liked Songs first with the real playlists on a later page that
-  the walk never requests or drops (`BrowsePage::partial`, `set_folders` replacing instead of
-  extending); (3) a persisted/cached folder list being preferred over the fresh one. Fix the
-  cause, and make it self-healing regardless: keep a failed or suspiciously short top-level fetch
-  retriable, retry when the Playlists window is shown and when the source's health returns to
-  `Ok`, with a floor between attempts. Hotkeys bound to remote playlists that aren't in the root
-  list (the user's `a` binding) should still resolve a name in the Playlists/Help windows.
-- [ ] A focused floating window must own the keyboard: every key press goes to it and nothing falls
-  through to the window or tab beneath. Seen: with the Help/hotkey window (or `playlist-keys`)
-  floating and focused, pressing a playlist hotkey letter went through to the track list underneath
-  and toggled that list's selected track in the playlist. Cause: `route` (`ui/src/view.rs`) offers a
-  key to the focused window and, when the window returns `Ignored`, hands it to the shell
-  (`on_shell_key` → `keybindings::map`), where playlist hotkeys, `q` enqueue, `+`, Space, seek keys
-  etc. act on `active_list()` — the hidden list. New rule: while a `float` (or `screen`) window has
-  focus, a key it ignores is dropped, except the small set of shell keys that are about windows
-  themselves — the placement key (`M`), backtick (`toggle-playlist-keys`), `?` (toggle Help), `:`
-  (command line), Tab/Shift-Tab focus cycling where the window doesn't use them, and Esc (close) —
-  derive that set from the key table (`ui/src/items.rs`/`keybindings`), not a hand-copied list. A
-  floating LIST window keeps acting on its OWN selection for track keys (playlist hotkeys, `q`,
-  `+`, Enter): those must target the focused list, never the tab beneath — check `active_list()`
-  resolves to the focused floating list. Docked windows keep today's behaviour (keys fall through
-  to the shell, acting on the active list). Supersedes the earlier decision that shell/number keys
-  fall through a focused float. No repro needed.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
@@ -258,50 +303,6 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Move the assigned key on Playlists top-level rows from the left gutter (the tags column before
-  the name) to the right-hand hotkeys column, where track rows show their playlist letters
-  (`Column::Hotkeys` in `render_cell`, `ui/src/view/rows.rs`; the top-level rows are built in
-  `ui/src/view/track_list.rs` from `TrackList::top()`), same alignment and style as on track rows so
-  the two read as one column when switching between a playlist's tracks and the playlist list. Applies
-  to every Playlists-kind window (the tab and `playlist-keys`). Check it in a real-terminal
-  screenshot of the `playlist-keys` float at its default size: the key must stay visible when the
-  name is truncated in a narrow rect (the key column keeps its width; the name gives way).
-- [ ] Floating windows get a real top border, in the normal text colour. Today `draw_float_frame`
-  (`ui/src/view/panes.rs`) draws left, right and bottom lines plus corners but no top line — the
-  window's own title row sits on the box's top edge (`float_body` starts at the frame's top row) —
-  and colours the whole border `ColorStyle::title_primary()` (red) when focused. Change: draw the
-  top `─` line like the other three sides and move the window body one row down inside it
-  (`float_body` insets the top by 1 like the sides; `float_rect`'s minimum height grows by one), so
-  the title row sits under the border as the first inner row; border always in
-  `ColorStyle::primary()` (normal text colour), focused or not — focus stays visible through the
-  title's existing `[title]`/highlight styling, not the border. Hit-testing keeps using the same
-  `Placed.frame`/body rects as drawing (a press on the top border focuses/raises, like the other
-  sides). Same two rules for the remaining fullscreen modals' frame (`draw_modal_frame`,
-  `ui/src/view/modal.rs`) if they are ever drawn boxed; share one box-drawing helper between the
-  two rather than keeping two. Padding: a floating window's content gets one blank column between
-  the side borders and the text (left and right) and one blank row above the bottom border, so text
-  never touches the box — most visible in the Help/hotkey window, whose command lane starts at the
-  border and whose right-aligned shortcut lane ends on it. Do it in `float_body` (one inset for
-  every floating window; windows still don't know they float) rather than per window; the Help
-  window's lane widths and the lists' scrollbar gutter then derive from the padded rect. Judge the
-  result in a real-terminal screenshot with two cascaded floats (one of them Help) over a list and
-  over a docked pane.
-- [ ] Give the Help/hotkey window its own status bar: the last inner row of the window (above the
-  bottom border/padding, inside its rect in every placement) shows the key instructions and the
-  binding feedback, instead of borrowing the shell's hint row underneath the float. Idle: the
-  instructions for the row under the cursor (`[Enter] rebind   [Backspace] default   [Tab] next
-  section   [Esc] close`, or why this row can't be bound). Capturing: `press a key for <name> —
-  [Esc] cancel`. After a bind attempt: the result — bound, moved from, refused (`'x' is a fixed
-  key`, `already used by built-in …`), restored default — styled as a warning when it is a
-  refusal, staying until the next key press in the window. Today these come from `Window::hint()`
-  and `WindowOutcome::Flash` → the shell's single feedback slot (`ui/src/view/help.rs`,
-  `notice.rs`, `hint_line`); route the Help window's own bind/refusal messages to its status bar
-  (the window returns the outcome, the shell hands the formatted text back, or the window formats
-  it itself — whichever keeps `notice.rs` the one place that words messages) and keep the shell
-  slot for everything else. The window's layout memo reserves the row (list height = body − 1);
-  draw and click hit-test share that layout. If the generic float frame later grows a footer slot
-  any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
-  it once there rather than per window.
 - [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
