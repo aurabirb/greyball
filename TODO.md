@@ -140,18 +140,9 @@
     [long, short], give commands that lack a short form one (unique, mnemonic, 1–3 letters), drop
     all other aliases from parsing, and let the table enforce it (`names: [&str; 2]`). List the
     removed spellings in the commit message body.
-  - `toggle_playlist_keys` preselect order: the playing playlist first (when something is playing
-    from a playlist), then the playlist open in the active list, then one open in another window.
   - The placement key and backtick pass through a fullscreen (`screen`) window, and a fullscreen
     LIST lets the shell keys through (`/`, `q`, `:`, digits, playlist hotkeys) with the hint row
     drawn beneath it, instead of being modal.
-  - Success reports (`Dispatch::Done`: exported…, imported…, added N…) become hint-row flashes
-    instead of popups.
-  - The warnings modal shows the selected row's full text (wrapped) in its message area; failure
-    rows are currently truncated.
-  - Remove the `initial_screen` config key (the saved `[layout]` decides the active tab; default
-    layout starts on its first tab). No shim for configs that still carry it beyond what the
-    config loader already does with unknown keys — check and report.
   Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
   flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
   focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an
@@ -271,8 +262,14 @@
   `Placed.frame`/body rects as drawing (a press on the top border focuses/raises, like the other
   sides). Same two rules for the remaining fullscreen modals' frame (`draw_modal_frame`,
   `ui/src/view/modal.rs`) if they are ever drawn boxed; share one box-drawing helper between the
-  two rather than keeping two. Judge the result in a real-terminal screenshot with two cascaded
-  floats over a list and over a docked pane.
+  two rather than keeping two. Padding: a floating window's content gets one blank column between
+  the side borders and the text (left and right) and one blank row above the bottom border, so text
+  never touches the box — most visible in the Help/hotkey window, whose command lane starts at the
+  border and whose right-aligned shortcut lane ends on it. Do it in `float_body` (one inset for
+  every floating window; windows still don't know they float) rather than per window; the Help
+  window's lane widths and the lists' scrollbar gutter then derive from the padded rect. Judge the
+  result in a real-terminal screenshot with two cascaded floats (one of them Help) over a list and
+  over a docked pane.
 - [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
