@@ -3,16 +3,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cursive::{Printer, Rect};
-use cursive::event::{Event, MouseEvent};
+use cursive::event::{Event, Key, MouseEvent};
 
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
 use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, SourceId, TrackId};
 
+use crate::keybindings;
 use crate::row::RowItem;
 use crate::screen::ListKind;
 
+use super::input::key_name;
 use super::memo::Memo;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
@@ -90,8 +92,8 @@ pub(super) struct ListFrame {
     /// A paginated remote list only knows what it has loaded so far.
     pub(super) loading: bool,
     pub(super) unit: &'static str,
-    /// Whether a playlist that can take a hotkey is selected or open.
-    pub(super) hotkey_target: bool,
+    /// A keypress binds the playlist row under the cursor.
+    pub(super) assignable: bool,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -417,7 +419,7 @@ impl TrackList {
                 total,
                 loading: self.loading(s),
                 unit: self.unit(total),
-                hotkey_target: self.kind == ListKind::Playlists && (total > 0 || !matches!(self.open, Open::TopLevel)),
+                assignable: self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel) && total > 0,
             })
         })
     }
@@ -478,7 +480,23 @@ impl TrackList {
             }
             ListEvent::Close => WindowOutcome::Ignored,
             ListEvent::Unhandled if matches!(event, Event::Mouse { .. }) => WindowOutcome::Consumed,
-            ListEvent::Unhandled => WindowOutcome::Ignored,
+            ListEvent::Unhandled => self.assign(event, s),
+        }
+    }
+
+    /// On a top-level playlist row a free key binds that playlist and Backspace clears its key.
+    fn assign(&self, event: &Event, s: &Session) -> WindowOutcome {
+        if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
+            return WindowOutcome::Ignored;
+        }
+        let Some(target) = self.top_row(s).as_ref().map(TopRow::target) else { return WindowOutcome::Ignored };
+        if *event == Event::Key(Key::Backspace) {
+            return WindowOutcome::Unbind(target);
+        }
+        let hotkeys = s.hotkeys().into_iter().collect();
+        match key_name(event).and_then(|key| keybindings::bindable(&key, &hotkeys)) {
+            Some(key) => WindowOutcome::Bind(target, key),
+            None => WindowOutcome::Ignored,
         }
     }
 }

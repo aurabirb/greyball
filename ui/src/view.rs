@@ -10,7 +10,7 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, Layout, LogBuf, PaneLayoutConfig, Session};
+use core::{Command, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
@@ -262,6 +262,14 @@ impl MedleyView {
                 self.toggle_setting(row);
                 EventResult::consumed()
             }
+            WindowOutcome::Bind(target, key) => {
+                self.bind_hotkey(target, key);
+                EventResult::consumed()
+            }
+            WindowOutcome::Unbind(target) => {
+                self.clear_hotkey(target);
+                EventResult::consumed()
+            }
         }
     }
 
@@ -336,22 +344,12 @@ impl MedleyView {
             }
             Event::Key(Key::Right) => self.run(Command::Seek(5000)),
             Event::Key(Key::Left) => self.run(Command::Seek(-5000)),
-            Event::Char(':') => self.handle_action(Action::CommandLine),
-            Event::Char('x') => match self.with_session(|s| self.hotkey_target(s)) {
-                Some(HotkeyTarget::Local(id)) => self.run(Command::ExportM3u(id)),
-                _ => EventResult::Ignored,
-            },
             ev => {
                 let Some(key) = key_name(ev) else { return EventResult::Ignored };
-                let (sel, target, hotkeys) = self.with_session(|s| {
+                let (sel, hotkeys) = self.with_session(|s| {
                     let sel = self.active_list().and_then(|list| list.selected_track(s));
-                    (sel, self.hotkey_target(s), s.hotkeys().into_iter().collect())
+                    (sel, s.hotkeys().into_iter().collect())
                 });
-                // With a playlist selected or open, backtick binds that playlist instead of opening the menu.
-                if let ("`", Some(target)) = (key.as_str(), target) {
-                    self.open_hotkey_capture(target);
-                    return EventResult::consumed();
-                }
                 // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
                 match keybindings::hotkey_toggle(&key, sel, &hotkeys) {
                     Some(cmd) => self.run(cmd),
@@ -359,11 +357,6 @@ impl MedleyView {
                 }
             }
         }
-    }
-
-    /// The playlist the focused window, else the active tab's, has selected or open.
-    fn hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
-        [self.focused_id(), self.main_id()].iter().find_map(|&id| self.windows[id].list()?.selected_hotkey_target(s))
     }
 
     // `session` is a non-reentrant `Mutex`: always lock via `with_session`, never twice in one statement.
@@ -416,8 +409,9 @@ impl View for MedleyView {
             _ => None,
         };
         let bottom = printer.size.y.saturating_sub(2);
-        let hotkey_target = main.is_some_and(|list| list.hotkey_target);
-        let line = self.hint_line(hotkey_target, chrome.help_key);
+        let focused = placed.iter().position(|placed| placed.id == self.focused_id()).map(|i| &frame.windows[i]);
+        let assignable = matches!(focused, Some(WindowFrame::List(list)) if list.assignable);
+        let line = self.hint_line(assignable, chrome.help_key);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.

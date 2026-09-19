@@ -17,15 +17,7 @@ pub enum Action {
     Tab(usize),
     /// UI-local: open the `:` command line.
     CommandLine,
-    /// UI-local: open the "Hotkeys" modal (backtick, nothing selected
-    /// required) — lists every built-in action with its bound key, if any,
-    /// and lets the user (re)bind or clear one. The view owns the modal's
-    /// state, since `map` here has no access to the live hotkey bindings.
-    /// Playlist hotkeys aren't handled by this modal at all: the view
-    /// intercepts backtick before it ever reaches `map` when a playlist is
-    /// selected on the Playlists screen, opening a standalone "press a key
-    /// to bind" modal for it instead — this `Action` is only ever produced
-    /// otherwise.
+    /// UI-local: open the built-ins remap menu.
     OpenHotkeyMenu,
     /// UI-local: rotate the shared embedded-pane dock through
     /// right+vertical -> bottom+horizontal -> left+vertical ->
@@ -52,31 +44,43 @@ pub enum Action {
     /// for the given track (`F`, a track selected) — the view owns the
     /// dialog; a "yes" answer is what actually dispatches `Command::Unlike`.
     ConfirmUnlike(TrackId),
+    /// UI-local: export the selected or open local playlist as M3U.
+    ExportPlaylist,
     /// Nothing bound.
     None,
 }
 
-/// Map a key name (as produced by [`crate::view`]) plus the currently selected
-/// track to an [`Action`]. `selected` is `None` when the cursor is on a
-/// non-track row (e.g. the playlist list). `hotkeys` is the live remap table
-/// (`Session::hotkeys`) — every [`BuiltinAction`] below is looked up against
-/// it (falling back to [`BuiltinAction::default_key`] when unremapped)
-/// instead of being a fixed key, so `:keys`/the hotkey menu can move it.
-/// `/`, `:`, `1`-`9`, `Enter`, `Space` stay hardcoded: they're structural
-/// (screen/focus navigation, not a "command"), not remappable commands.
-pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
+/// The keys with one meaning everywhere, which no hotkey can take.
+fn fixed(key: &str) -> Option<Action> {
     if let Ok(n @ 1..=9) = key.parse::<usize>() {
-        return Action::Tab(n - 1);
+        return Some(Action::Tab(n - 1));
     }
-    match key {
-        "/" => return Action::FocusSearch,
-        ":" => return Action::CommandLine,
-        "Space" => return Action::Command(Command::PlayPause),
-        // Fixed aliases regardless of whether `n`/`p` themselves were
-        // remapped — `>`/`<` are punctuation, not commands of their own.
-        ">" => return Action::Command(Command::Next),
-        "<" => return Action::Command(Command::Previous),
-        _ => {}
+    Some(match key {
+        "/" => Action::FocusSearch,
+        ":" => Action::CommandLine,
+        "Space" => Action::Command(Command::PlayPause),
+        ">" => Action::Command(Command::Next),
+        "<" => Action::Command(Command::Previous),
+        "x" => Action::ExportPlaylist,
+        _ => return None,
+    })
+}
+
+pub fn is_fixed(key: char) -> bool {
+    fixed(&key.to_string()).is_some()
+}
+
+/// The character a playlist can take by `key` being pressed on its row: not fixed, not a built-in's effective key.
+pub fn bindable(key: &str, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<char> {
+    let mut chars = key.chars();
+    let (Some(ch), None) = (chars.next(), chars.next()) else { return None };
+    (fixed(key).is_none() && builtin_at(hotkeys, ch).is_none()).then_some(ch)
+}
+
+/// What `key` means with `selected` under the cursor; built-ins answer to their effective key in `hotkeys`.
+pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
+    if let Some(action) = fixed(key) {
+        return action;
     }
     let mut chars = key.chars();
     let (Some(ch), None) = (chars.next(), chars.next()) else {
@@ -131,10 +135,7 @@ fn builtin_at(hotkeys: &HashMap<char, HotkeyTarget>, ch: char) -> Option<Builtin
     })
 }
 
-/// The raw (non-`:`) keybindings, for the `?`/`:help` shortcuts screen.
-/// `(key, description)`, in the same shape as `command::HELP`. Kept as a
-/// separate table (not derived from `map()`) since `map()` carries no
-/// description text — update this alongside `map()` when a binding changes.
+/// Each key and what it does, for the help screen.
 pub const RAW_KEYS: &[(&str, &str)] = &[
     ("/", "focus search (or fuzzy-filter the current list, outside Search)"),
     (":", "open the command line (:help)"),
@@ -154,7 +155,9 @@ pub const RAW_KEYS: &[(&str, &str)] = &[
     ("M", "move the focused window: tabbed, embedded, screen, float"),
     ("E", "clear the queue"),
     ("Q", "quit"),
-    ("`", "open the hotkeys menu (or, with a playlist selected, set its hotkey)"),
+    ("`", "open the hotkeys menu"),
+    ("x", "export the selected or open local playlist as M3U"),
+    ("other keys", "on a row of the Playlists list: bind that key to the playlist (Backspace clears it)"),
     ("?", "open this help/shortcuts screen"),
 ];
 

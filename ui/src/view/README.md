@@ -62,7 +62,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
     window is drawn unfocused: only docked and floating windows show the `[title]` focus marker.
   - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
-    `ToggleSetting(row)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
+    `ToggleSetting(row)`, `Bind`/`Unbind`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
@@ -72,7 +72,13 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
   (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
   double-click plays the row as `Command::PlayContext`, or opens the top-level playlist under the
-  cursor; Esc clears the filter, then backs out of an open playlist. A filter stays with its window
+  cursor; Esc clears the filter, then backs out of an open playlist. On a top-level playlist row of
+  any Playlists window a key that `keybindings::bindable` accepts — a single character that is not
+  `keybindings::fixed` (the one table `map` reads its structural keys from) and not a built-in's
+  effective key — is `Bind(target, key)`, and Backspace is `Unbind(target)`; every other key stays
+  `Ignored`, so it still does what it does everywhere. `MedleyView::bind_hotkey` refuses a fixed or
+  `Nav` key for any target, the `:keys` menu's included. Inside an open playlist a playlist key
+  toggles the selected track's membership as in any list. A filter stays with its window
   across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 
 ## Memos
@@ -175,7 +181,7 @@ on `revision` — it is read fresh or kept in its own small cache.
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
-   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`), so there is
+   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `Help`), so there is
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
    returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`).
@@ -191,7 +197,7 @@ on `revision` — it is read fresh or kept in its own small cache.
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
    user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
    it when ignored, and any key under a `Screen` window goes no further but for the `CyclePlacement`
-   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
+   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

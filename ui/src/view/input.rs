@@ -6,7 +6,7 @@ use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::view::Nameable;
 use cursive::views::{Dialog, ScrollView, TextView};
 
-use core::{Command, CoreEvent, Dispatch, PlaylistId, Plugin, SourceId, TrackId};
+use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId, TrackId};
 
 use crate::command;
 use crate::keybindings::Action;
@@ -235,6 +235,13 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::ConfirmUnlike(id) => self.confirm_unlike(id),
+            Action::ExportPlaylist => {
+                let target = self.with_session(|s| self.active_list().and_then(|list| list.selected_hotkey_target(s)));
+                match target {
+                    Some(HotkeyTarget::Local(id)) => self.run(Command::ExportM3u(id)),
+                    _ => EventResult::Ignored,
+                }
+            }
             Action::CyclePaneLayout => {
                 let cur = (self.pane_cfg.side, self.pane_cfg.stack);
                 let next = PANE_LAYOUT_CYCLE.iter().position(|&c| c == cur).map_or(0, |i| (i + 1) % PANE_LAYOUT_CYCLE.len());
@@ -301,16 +308,15 @@ impl MedleyView {
     }
 
     /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
-    pub(super) fn hint_line(&self, hotkey_target_selected: bool, help_key: Option<char>) -> String {
+    pub(super) fn hint_line(&self, assignable: bool, help_key: Option<char>) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
-                // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                if hotkey_target_selected {
-                    return "  [`] set hotkey".to_string();
+                if assignable {
+                    return "  [key] assign   [Backspace] clear   [Enter] open".to_string();
                 }
                 let help_key = help_key.map(String::from).unwrap_or_default();
                 format!("  [{help_key}] help")

@@ -37,10 +37,6 @@
   `ViewCache::toggle_remote_membership` (a source needs to say where an add lands — Spotify puts new
   likes first, not last) and add a liked marker to the shared row builder (`tracks_to_rows`,
   `ui/src/view/rows.rs`).
-- [ ] A playlist hotkey can be bound to a key a raw handler in `MedleyView::on_event`
-  (`ui/src/view.rs`) consumes first — seen with `x` (M3U export): the binding succeeds but the key
-  never toggles. Refuse such keys in `bind_hotkey` like built-ins, or move those raw keys into
-  `BuiltinAction` so the one table covers them.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
   (`ui/src/view/rows.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so

@@ -3,11 +3,13 @@ use cursive::event::{Event, Key};
 
 use core::{BindError, HotkeyTarget, Session};
 
+use crate::keybindings;
+
 use super::MedleyView;
 use super::input::key_name;
 use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
 use super::track_list::{top_row_name, top_rows};
-use super::scroll::{ListEvent, ListState};
+use super::scroll::{ListEvent, ListState, Nav};
 use super::text::{pad, truncate_ellipsis};
 
 /// The fullscreen Hotkeys menu: every `core::BuiltinAction`, plus the row awaiting a new key, if any.
@@ -22,7 +24,7 @@ fn menu_rows() -> Vec<core::BuiltinAction> {
 }
 
 /// A keypress while a target awaits its new key.
-pub(super) fn capture_event(event: &Event, target: &HotkeyTarget) -> ModalOutcome {
+fn capture_event(event: &Event, target: &HotkeyTarget) -> ModalOutcome {
     match event {
         Event::Key(Key::Esc) => ModalOutcome::Close,
         Event::Key(Key::Backspace) => ModalOutcome::Unbind(target.clone()),
@@ -35,16 +37,6 @@ pub(super) fn capture_event(event: &Event, target: &HotkeyTarget) -> ModalOutcom
             }
         }
     }
-}
-
-/// Standalone "press a key to bind" modal for the Playlists row `name`, currently bound to `current`.
-pub(super) fn draw_capture(printer: &Printer, rect: Rect, name: &str, current: Option<char>) {
-    let hint = match current {
-        Some(k) => format!("  currently '{k}'   [Backspace] clear   [Esc] cancel"),
-        None => "  [Esc] cancel".to_string(),
-    };
-    let body = draw_modal_frame(printer, rect, Some("Set Hotkey"), &hint);
-    body.print((0, 1), &format!("press a key to bind to {name:?}"));
 }
 
 impl HotkeyMenu {
@@ -110,12 +102,6 @@ impl MedleyView {
         self.modal = Some(Modal::HotkeyMenu(HotkeyMenu::default()));
     }
 
-    /// Opens the standalone "press a key" capture modal for a Playlists-screen row.
-    pub(super) fn open_hotkey_capture(&mut self, target: HotkeyTarget) {
-        let name = self.hotkey_row_name_for(&target);
-        self.modal = Some(Modal::HotkeyCapture(target, name));
-    }
-
     /// This row's display name, looked up fresh.
     fn hotkey_row_name_for(&self, target: &HotkeyTarget) -> String {
         match target {
@@ -129,6 +115,11 @@ impl MedleyView {
 
     /// Binds `key` to `target` and reports the result as feedback.
     pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) {
+        // A key the shell or a list reads first would never reach its binding.
+        if keybindings::is_fixed(key) || Nav::of(&Event::Char(key)).is_some() {
+            self.feedback = Some(format!("Can't bind '{key}': it means the same everywhere"));
+            return;
+        }
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
         let name = self.hotkey_row_name_for(&target);
         self.feedback = Some(match result {

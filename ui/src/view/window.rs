@@ -4,7 +4,7 @@ use std::sync::Arc;
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseEvent};
 
-use core::{Command, LogBuf, PaneLayoutConfig, Session};
+use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
 use crate::screen::{Kind, Placement, WINDOWS};
 use crate::vis::Vis;
@@ -51,6 +51,8 @@ pub(super) enum WindowOutcome {
     Run(Command),
     /// Toggle this row of `settings_entries`.
     ToggleSetting(usize),
+    Bind(HotkeyTarget, char),
+    Unbind(HotkeyTarget),
 }
 
 /// A window's session-derived draw data, taken under the frame's one lock.

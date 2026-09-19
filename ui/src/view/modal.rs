@@ -6,7 +6,7 @@ use core::{Command, HotkeyTarget, SetupKind};
 
 use super::{Focus, MedleyView};
 use super::help::HelpModal;
-use super::hotkeys::{HotkeyMenu, capture_event, draw_capture};
+use super::hotkeys::HotkeyMenu;
 use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
 use super::text::pad;
@@ -17,8 +17,6 @@ pub(super) enum Modal {
     Warnings(WarningsModal),
     Picker(PlaylistPicker),
     HotkeyMenu(HotkeyMenu),
-    /// "Press a key" for a Playlists row: the target and its display name.
-    HotkeyCapture(HotkeyTarget, String),
     Help(HelpModal),
 }
 
@@ -86,7 +84,7 @@ impl MedleyView {
             Some(Modal::Picker(picker)) => picker.relayout(resized, rect, &s),
             Some(Modal::HotkeyMenu(menu)) => menu.relayout(resized, rect),
             Some(Modal::Help(help)) => help.relayout(rect, &s),
-            Some(Modal::HotkeyCapture(..)) | None => {}
+            None => {}
         }
     }
 
@@ -112,10 +110,6 @@ impl MedleyView {
                 let keys = self.with_session(HotkeyMenu::keys);
                 menu.draw(printer, rect, &keys, self.feedback.as_deref());
             }
-            Modal::HotkeyCapture(target, name) => {
-                let current = self.with_session(|s| s.playlist_hotkey(target));
-                draw_capture(printer, rect, name, current);
-            }
             Modal::Help(help) => help.draw(printer, rect),
         }
     }
@@ -128,31 +122,18 @@ impl MedleyView {
             Some(Modal::Warnings(m)) => m.on_event(event, rect, &Warnings::read(&session.lock().unwrap())),
             Some(Modal::Picker(picker)) => picker.on_event(event, rect),
             Some(Modal::HotkeyMenu(menu)) => menu.on_event(event, rect),
-            Some(Modal::HotkeyCapture(target, _)) => capture_event(event, target),
             Some(Modal::Help(help)) => help.on_event(event, rect),
         };
-        let rebound = match outcome {
-            ModalOutcome::Stay => false,
+        match outcome {
+            ModalOutcome::Stay => {}
             ModalOutcome::Close => return self.close_modal(),
             ModalOutcome::Run(cmd) => {
                 self.close_modal();
                 return self.run(cmd);
             }
-            ModalOutcome::Setup(row) => {
-                self.activate_warning(row);
-                false
-            }
-            ModalOutcome::Bind(target, key) => {
-                self.bind_hotkey(target, key);
-                true
-            }
-            ModalOutcome::Unbind(target) => {
-                self.clear_hotkey(target);
-                true
-            }
-        };
-        if rebound && matches!(self.modal, Some(Modal::HotkeyCapture(..))) {
-            self.modal = None;
+            ModalOutcome::Setup(row) => self.activate_warning(row),
+            ModalOutcome::Bind(target, key) => self.bind_hotkey(target, key),
+            ModalOutcome::Unbind(target) => self.clear_hotkey(target),
         }
         EventResult::consumed()
     }
