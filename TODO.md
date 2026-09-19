@@ -165,6 +165,24 @@
   bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
+- [ ] After a restart the Playlists window shows only `[spotify] Liked Songs` — the user's Spotify
+  playlists are missing (they used to list). Reproduce with the real Spotify login and read
+  `medley.log` for the `GET /v1/me/playlists` call made at startup (status, item count, any
+  401/429/timeout) and what `ViewCache` did with the result. Suspects, in order: (1) the top-level
+  fetch is now kicked once right at startup (`Session::ensure_remote_playlists`, called from
+  `app/src/main.rs` after `set_hotkeys`, and on `CoreEvent::PluginStatusChanged`) — possibly before
+  the Spotify token has been refreshed/the source is fully wired, so the first fetch fails or comes
+  back with only the synthetic Liked Songs row, and `ViewCache::ensure_remote_playlists`
+  (`core/src/view_cache.rs`) then freezes the entry (`partial = false` whether the fetch landed
+  `Ok` or `Err`; every later kick returns early) — the known "failed fetch is final for the
+  session" bug above; nothing re-kicks when the Playlists window is opened any more; (2) the
+  source's `browse` root returning Liked Songs first with the real playlists on a later page that
+  the walk never requests or drops (`BrowsePage::partial`, `set_folders` replacing instead of
+  extending); (3) a persisted/cached folder list being preferred over the fresh one. Fix the
+  cause, and make it self-healing regardless: keep a failed or suspiciously short top-level fetch
+  retriable, retry when the Playlists window is shown and when the source's health returns to
+  `Ok`, with a floor between attempts. Hotkeys bound to remote playlists that aren't in the root
+  list (the user's `a` binding) should still resolve a name in the Playlists/Help windows.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
