@@ -23,28 +23,6 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
-- [ ] Rework the status-row hints of every window (`TrackList::idle` in `ui/src/view/track_list.rs`,
-  `HelpPane::idle`, the other windows' idle text). Every key shown comes from the effective bindings
-  through the status context, never a hard-coded letter; a key the user has unbound is omitted
-  together with its hint; the backspace key is always written `[Bksp]` (never `[Backspace]`, in
-  hints and in Help rows alike). Exact texts:
-  - Main Playlists tab, top level: the contextual assign OR clear hint — `[any key] assign` when the
-    selected playlist has no key, `[Bksp] clear` when it already has one — then the switch key
-    (`` [`] `` from `SwitchPlaylists`), and nothing else (no like, no `[M]`, no help).
-  - Main Playlists tab, inside a playlist (its track list): `[l] like`, the queue key (`[w] queue`
-    with the real binding), and `[<all playlist keys>] send to playlist` where the bracket holds
-    every key currently assigned to a playlist as a compact run (e.g. `[abcdx]`; it is fine to
-    truncate with an ellipsis when it does not fit). No `` [`] ``, no `[M]`.
-  - Popout playlist window (`playlist-keys`), top level: `[any key] assign` / `[Bksp] clear` (same
-    contextual rule), then `[Esc] close` and `[M] <next>`. Inside a playlist: `[<all playlist keys>]
-    playlist` (the same run of assigned keys), `[Esc] close`, `[M] <next>`.
-  - Now Playing (the first tab): `[?] help`, `[p/n] prev/next`, the queue keys (`[w/e] queue`, with
-    the real bindings — the defaults are Enqueue `q`, Wedge `w`, ClearQueue `E`, so confirm which
-    the owner wants shown), the select-playing-track key (`[0] show playing`, the real
-    `RevealPlaying` binding), and `[P] cycle layout` only when something is docked.
-  - Queue tab: mention the clear-queue key (`[E] clear queue`, the real `ClearQueue` binding).
-  - Sweep the remaining windows (Search, History, Log, Settings; Vis stays blank) into the same
-    `[key] action` style showing the few keys that matter in each.
 - [ ] Unify like and unlike into one key called "like" that works exactly like a playlist hotkey:
   it toggles the selected track's membership in Liked Songs (`Session::set_liked` through the same
   pending/settle path as `ViewCache::set_remote_membership`, with the italic pending dot), so a

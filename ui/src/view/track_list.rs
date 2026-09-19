@@ -17,7 +17,7 @@ use crate::screen::{ListKind, Placement};
 use super::memo::Memo;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
-use super::window::{Ctx, StatusCtx, WindowOutcome};
+use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
 /// Two clicks on the same row within this long count as a double-click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
@@ -96,6 +96,9 @@ fn rank_filter(matcher: &SkimMatcherV2, text: &str, query: &str) -> Option<Filte
     Some(FilterRank(tier, std::cmp::Reverse(score)))
 }
 
+/// Revision, view generation, scroll offset, cursor, body height, whether searching.
+type FrameKey = (u64, u64, usize, usize, usize, bool);
+
 /// One list window's rendered rows plus what the shell's readout shows about it.
 pub(super) struct ListFrame {
     title: String,
@@ -106,6 +109,8 @@ pub(super) struct ListFrame {
     unit: &'static str,
     /// A keypress binds the playlist row under the cursor.
     pub(super) assignable: bool,
+    /// The row under the cursor already has a key.
+    keyed: bool,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -127,7 +132,7 @@ pub(super) struct TrackList {
     last_click: Option<(Instant, usize)>,
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
     matches: Memo<(u64, u64), Arc<[TrackId]>>,
-    frame: Memo<(u64, u64, usize, usize, bool), Arc<ListFrame>>,
+    frame: Memo<FrameKey, Arc<ListFrame>>,
     /// The top-level rows in this window's order, keyed on the playlists, remote playlists and hotkeys generations.
     top: Memo<(u64, u64, u64), Arc<[TopRow]>>,
 }
@@ -489,33 +494,55 @@ impl TrackList {
     /// This window's rows for a `rect`-sized window, rebuilt only when something they read changed.
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<ListFrame> {
         let (s, view_h) = (ctx.s, Self::body(rect).height());
-        let key = (s.revision(), self.view_gen, self.state.offset, view_h, ctx.searching);
+        let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, ctx.searching);
         self.frame.get_or_build(key, || {
             let total = self.len(s);
+            let assignable = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel) && total > 0;
             Arc::new(ListFrame {
                 title: self.title(s, total, ctx.searching),
                 rows: self.rows(s, self.state.offset, view_h),
                 total,
                 loading: self.loading(s),
                 unit: self.unit(total),
-                assignable: self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel) && total > 0,
+                assignable,
+                keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
     }
 
-    /// The status row's text when nothing was reported: what a key does here.
-    pub(super) fn idle(&self, frame: &ListFrame, placement: Placement, status: &StatusCtx) -> String {
-        let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
-        let mut hints = match frame.assignable {
-            true => {
-                let like = status.like_key.map(|key| format!("[{key}] like"));
-                ["[key] assign".to_string(), "[Backspace] clear".into()].into_iter().chain(like).collect()
+    /// The status row's text when nothing was reported: what a key does here, in a row `fit` cells wide.
+    pub(super) fn idle(&self, frame: &ListFrame, placement: Placement, status: &StatusCtx, fit: usize) -> String {
+        let c = status.chrome;
+        let tab = placement == Placement::Tabbed;
+        let mut tail = status.tail(placement);
+        tail.retain(|_| !(tab && self.kind == ListKind::Playlists));
+        let hints: Vec<String> = match (self.kind, &self.open) {
+            (ListKind::Playlists, Open::TopLevel) => {
+                let assign = if frame.keyed { "[Bksp] clear" } else { "[any key] assign" };
+                let mut hints: Vec<String> = frame.assignable.then(|| assign.to_string()).into_iter().collect();
+                hints.extend(hint(&[c.keys_key], "playlist keys").filter(|_| tab));
+                hints
             }
-            false => vec![format!("[{}] help", key(status.help_key)), format!("[{}] playlist keys", key(status.keys_key))],
+            (ListKind::Playlists, _) if tab => {
+                let mut hints: Vec<String> = hint(&[c.like_key], "like").into_iter().chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).collect();
+                hints.extend(status.keys_run("send to playlist", &hints, fit));
+                hints
+            }
+            (ListKind::Playlists, _) => status.keys_run("playlist", &tail, fit).into_iter().collect(),
+            (ListKind::NowPlaying, _) => {
+                let transport = match (c.prev_key, c.next_key) {
+                    (Some(_), Some(_)) => hint(&[c.prev_key, c.next_key], "prev/next").into_iter().collect(),
+                    _ => hint(&[c.prev_key], "prev").into_iter().chain(hint(&[c.next_key], "next")).collect::<Vec<_>>(),
+                };
+                let layout = hint(&[c.layout_key], "cycle layout").filter(|_| status.docked);
+                let rest = [hint(&[c.help_key], "help")].into_iter().flatten().chain(transport);
+                rest.chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.reveal_key], "show playing")).chain(layout).collect()
+            }
+            (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
+            (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
         };
-        hints.extend(placement.closes_on_esc().then(|| "[Esc] close".to_string()));
-        hints.extend(status.place.clone());
-        hints.join("   ")
+        hints.into_iter().chain(tail).collect::<Vec<_>>().join("   ")
     }
 
     /// The cursor's place in the list, `cursor/total unit`; `None` when the list is empty.
@@ -590,7 +617,7 @@ impl TrackList {
         }
     }
 
-    /// On a top-level playlist row a free key binds that playlist and Backspace clears its key.
+    /// On a top-level playlist row a free key binds that playlist and Bksp clears its key.
     fn assign(&mut self, event: &Event, s: &Session) -> WindowOutcome {
         if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;

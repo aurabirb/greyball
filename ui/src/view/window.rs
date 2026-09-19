@@ -12,6 +12,7 @@ use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 use crate::screen::{Corners, Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
 
+use super::Chrome;
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
@@ -88,11 +89,39 @@ pub(super) struct StatusCtx<'a> {
     pub(super) flash: Option<&'a str>,
     /// The placement key's hint.
     pub(super) place: Option<String>,
-    pub(super) help_key: Option<char>,
-    pub(super) keys_key: Option<char>,
-    pub(super) like_key: Option<char>,
+    pub(super) chrome: &'a Chrome,
+    /// Some window is docked.
+    pub(super) docked: bool,
     /// Cells at the row's right end the shell draws over.
     pub(super) reserved: usize,
+}
+
+impl StatusCtx<'_> {
+    /// `[Esc] close` where Esc closes the window, then the placement hint.
+    pub(super) fn tail(&self, placement: Placement) -> Vec<String> {
+        let close = placement.closes_on_esc().then(|| "[Esc] close".to_string());
+        close.into_iter().chain(self.place.clone()).collect()
+    }
+
+    /// `[<assigned keys>] label`, the run cut with `…` to what `others` leave of a `fit`-wide row; `None` when no key fits.
+    pub(super) fn keys_run(&self, label: &str, others: &[String], fit: usize) -> Option<String> {
+        let used: usize = others.iter().map(|hint| hint.width() + 3).sum();
+        let room = fit.saturating_sub(used + label.width() + 3);
+        let keys = &self.chrome.assigned;
+        let run: String = match keys.len() {
+            0 => return None,
+            n if n <= room => keys.iter().collect(),
+            _ if room < 2 => return None,
+            _ => keys.iter().take(room - 1).chain(&['…']).collect(),
+        };
+        Some(format!("[{run}] {label}"))
+    }
+}
+
+/// `[a/b] label` over the keys that are bound; `None` when none is.
+pub(super) fn hint(keys: &[Option<char>], label: &str) -> Option<String> {
+    let keys: Vec<String> = keys.iter().flatten().map(char::to_string).collect();
+    (!keys.is_empty()).then(|| format!("[{}] {label}", keys.join("/")))
 }
 
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
@@ -185,18 +214,16 @@ impl Window {
     }
 
     /// The status row's text when nothing was reported; `placement` is the window's.
-    fn idle(&self, frame: &WindowFrame, placement: Placement, status: &StatusCtx) -> String {
+    fn idle(&self, frame: &WindowFrame, placement: Placement, status: &StatusCtx, fit: usize) -> String {
         let pane = |keys: &str| {
-            let mut hints: Vec<String> = Some(keys).filter(|keys| !keys.is_empty()).map(String::from).into_iter().collect();
-            hints.extend(placement.closes_on_esc().then(|| "[Esc] close".to_string()));
-            hints.extend(status.place.clone());
-            hints.join("   ")
+            let hints = Some(keys.to_string()).filter(|keys| !keys.is_empty()).into_iter().chain(status.tail(placement));
+            hints.collect::<Vec<_>>().join("   ")
         };
         match (&self.body, frame) {
-            (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, placement, status),
-            (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, placement),
-            (Body::Settings(_), _) => pane("[↑/↓ j/k] move   [Enter/Space] toggle"),
-            (Body::Log(_), _) => pane("[↑/↓ j/k PgUp/PgDn J/K] scroll"),
+            (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, placement, status, fit),
+            (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, placement, status),
+            (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
+            (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             _ => pane(""),
         }
     }
@@ -219,13 +246,14 @@ impl Window {
         }
         let message = self.status.message.clone().or_else(|| status.flash.map(|flash| (flash.to_string(), false)));
         let idle = message.is_none();
-        let (text, refused) = message.unwrap_or_else(|| (self.idle(frame, placement, status), false));
-        let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
         let room = printer.size.x.saturating_sub(status.reserved);
         let count = match (&self.body, frame) {
             (Body::List(list), WindowFrame::List(frame)) => list.count(frame),
             _ => None,
         };
+        let fit = room.saturating_sub(count.as_ref().map_or(0, |count| count.width() + 2));
+        let (text, refused) = message.unwrap_or_else(|| (self.idle(frame, placement, status, fit), false));
+        let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
         // A message keeps its room; the idle hint gives way to the count.
         let count = count.filter(|count| idle || text.width() + count.width() + 2 <= room);
         let left = count.as_ref().map_or(room, |count| room.saturating_sub(count.width() + 2));

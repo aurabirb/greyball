@@ -412,6 +412,7 @@ impl View for MedleyView {
         if !covered && self.open_in(Placement::Docked).next().is_some() {
             draw_separator(self.pane_cfg.side, printer, self.windows[self.main_id()].rect());
         }
+        let docked = self.open_in(Placement::Docked).next().is_some();
         for (placed, window_frame) in placed.iter().zip(&frame.windows) {
             let window = &self.windows[placed.id];
             // The active tab's window carries no focus marker.
@@ -426,9 +427,8 @@ impl View for MedleyView {
             let status = StatusCtx {
                 flash: self.flash().filter(|_| self.status_id() == placed.id),
                 place,
-                help_key: chrome.help_key,
-                keys_key: chrome.keys_key,
-                like_key: chrome.like_key,
+                chrome,
+                docked,
                 reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect.width()),
             };
             window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);

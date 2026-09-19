@@ -14,6 +14,15 @@ pub(super) struct Chrome {
     pub(super) keys_key: Option<char>,
     pub(super) place_key: Option<char>,
     pub(super) like_key: Option<char>,
+    pub(super) prev_key: Option<char>,
+    pub(super) next_key: Option<char>,
+    pub(super) enqueue_key: Option<char>,
+    pub(super) wedge_key: Option<char>,
+    pub(super) clear_queue_key: Option<char>,
+    pub(super) reveal_key: Option<char>,
+    pub(super) layout_key: Option<char>,
+    /// Every key bound to a playlist, sorted.
+    pub(super) assigned: Vec<char>,
 }
 
 /// One frame's render data: each visible window's frame, the chrome, and this tick's live status line.
@@ -30,13 +39,25 @@ impl MedleyView {
             let ctx = self.ctx(s);
             let windows = placed.iter().map(|placed| self.windows[placed.id].frame(&ctx)).collect();
             let chrome = self.chrome.get_or_build((s.revision(), s.warnings_revision()), || {
+                let key = |action| s.effective_hotkey(&HotkeyTarget::Builtin(action));
+                let mut assigned: Vec<char> =
+                    s.hotkeys().into_iter().filter(|(_, target)| !matches!(target, HotkeyTarget::Builtin(_))).map(|(key, _)| key).collect();
+                assigned.sort_unstable();
                 Arc::new(Chrome {
                     status: StatusCore::snapshot(s),
                     warn_count: s.warning_count(),
-                    help_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp)),
-                    keys_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::SwitchPlaylists)),
-                    place_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::CyclePlacement)),
-                    like_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::Like)),
+                    help_key: key(BuiltinAction::OpenHelp),
+                    keys_key: key(BuiltinAction::SwitchPlaylists),
+                    place_key: key(BuiltinAction::CyclePlacement),
+                    like_key: key(BuiltinAction::Like),
+                    prev_key: key(BuiltinAction::Previous),
+                    next_key: key(BuiltinAction::Next),
+                    enqueue_key: key(BuiltinAction::Enqueue),
+                    wedge_key: key(BuiltinAction::Wedge),
+                    clear_queue_key: key(BuiltinAction::ClearQueue),
+                    reveal_key: key(BuiltinAction::RevealPlaying),
+                    layout_key: key(BuiltinAction::CyclePaneLayout),
+                    assigned,
                 })
             });
             // Live per-tick data, never memoized.

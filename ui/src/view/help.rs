@@ -13,7 +13,7 @@ use super::memo::Memo;
 use super::scroll::{LIST_JUMP_STEP, Nav, bound_offset, draw_scrollbar};
 use super::text::{pad, wrap};
 use super::track_list::hotkey_target_name;
-use super::window::WindowOutcome;
+use super::window::{StatusCtx, WindowOutcome};
 
 /// Blank columns between the description and key lanes.
 const GAP: usize = 2;
@@ -214,16 +214,19 @@ impl HelpPane {
     }
 
     /// The status row's text when nothing was reported: the capture prompt, else what the row under the cursor allows; Tab is its own only over the view, and Esc closes it unless it is tabbed.
-    pub(super) fn idle(&self, built: &Built, placement: Placement) -> String {
+    pub(super) fn idle(&self, built: &Built, placement: Placement, status: &StatusCtx) -> String {
         if let Some((name, _)) = &self.capturing {
             return format!("press a key for {name:?} — [Esc] cancel");
         }
-        match built.rows.get(self.cursor) {
-            Some(Row { name, target: Target::Refused(why), .. }) => format!("{name}: {why}"),
-            _ if placement.over_view() => "[Enter] rebind   [Backspace] default   [Tab] next section   [Esc] close".to_string(),
-            _ if placement.closes_on_esc() => "[Enter] rebind   [Backspace] default   [Tab] next window   [Esc] close".to_string(),
-            _ => "[Enter] rebind   [Backspace] default   [Tab] next window   [?] leave".to_string(),
-        }
+        let keys = match built.rows.get(self.cursor) {
+            Some(Row { name, target: Target::Refused(why), .. }) => return format!("{name}: {why}"),
+            _ if placement.over_view() => "[Enter] rebind   [Bksp] default   [Tab] next section",
+            _ if placement.closes_on_esc() => "[Enter] rebind   [Bksp] default   [Tab] next window",
+            _ => "[Enter] rebind   [Bksp] default   [Tab] next window",
+        };
+        let leave = (!placement.closes_on_esc()).then(|| "[?] leave".to_string());
+        let close = placement.closes_on_esc().then(|| "[Esc] close".to_string());
+        [keys.to_string()].into_iter().chain(close).chain(leave).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
     }
 
     /// Moves to the next or previous section: cursor on its first item, its title at the top.
