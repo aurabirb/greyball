@@ -68,6 +68,25 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
+- [ ] In the Help/shortcuts window the shortcut lane is right-aligned and ends flush against the right
+  edge. Align the shortcuts to the left of their lane and leave some room between the lane's end and
+  the right edge (a few columns of padding on the right, in every placement — tab, docked, screen,
+  float), so the text never sits against the border or scrollbar gutter. The lane widths come from
+  the Help window's layout (`ui/src/view/help.rs`); judge it in a real-terminal screenshot.
+- [ ] Make the per-window status row a generic window feature and give `playlist-keys` one.
+  `playlist-keys` is not a separate implementation: it is the Playlists list (`ListKind::Playlists`,
+  one `TrackList`) with the instance flag `Startup::keyed_first` (`ui/src/screen.rs`), started
+  floating and closed as the Playlists tab's companion. What still special-cases it: the
+  assign/clear/open hint comes from `ListFrame::assignable` onto the shell's hint row instead of
+  from the window, and `switch_playlists` (`ui/src/view/panes.rs` ~216) and `input.rs` ~340 find it
+  by the `PLAYLIST_KEYS` name. Do: (1) lift Help's status row (`Window::set_status`, `Notice::Status`,
+  the reserved last inner row in the layout memo) into an option any window can turn on, so a list
+  window reserves the row and draws it the way Help does; (2) turn it on for Playlists-kind
+  windows, showing `[key] assign   [Backspace] clear` (and the closing key when it floats) there
+  instead of on the hint row, with bind results going to it like in Help; (3) replace the
+  `PLAYLIST_KEYS` name lookups with a `Startup` option on the companion (e.g. it opens keyed-first
+  at its top level) so no code names the window. Keep it one implementation: options on
+  `Startup`, no per-window branches.
 
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
