@@ -632,7 +632,7 @@ impl Session {
             Command::PlayPause => {
                 if let Some(p) = self.active_player() {
                     p.toggle();
-                    self.set_status(p.status());
+                    self.set_status(p.status(), None);
                 } else {
                     // Nothing loaded yet — start playback from the queue
                     // (current item if one is set, otherwise the first).
@@ -649,11 +649,10 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::ToggleScan => {
-                let mode = self.scan.as_ref().map_or(crate::scan::ScanMode::Disabled, |scan| {
+                Ok(self.scan.as_ref().map_or(Dispatch::Ok, |scan| {
                     scan.set_mode(scan.mode().cycle());
-                    scan.mode()
-                });
-                Ok(Dispatch::ScanMode(mode))
+                    Dispatch::ScanMode(scan.mode())
+                }))
             }
             Command::ToggleShuffle => {
                 let on = !self.queue.get_shuffle();
@@ -681,7 +680,7 @@ impl Session {
                     let cur = p.status();
                     let target = (cur.position_ms as i64 + delta).max(0) as u32;
                     p.seek(target);
-                    self.set_status(p.status());
+                    self.set_status(p.status(), None);
                 }
                 Ok(Dispatch::Ok)
             }
@@ -963,9 +962,11 @@ impl Session {
                         scan.prioritize(t.id);
                     }
                 }
-                self.refresh_status();
-                if matches!(pe, PlayerEvent::Playing { .. }) {
-                    self.shown.write().player_state = PlayerState::Playing;
+                let playing = matches!(pe, PlayerEvent::Playing { .. }).then_some(PlayerState::Playing);
+                if let Some(p) = self.active_player() {
+                    self.set_status(p.status(), playing);
+                } else if let Some(state) = playing {
+                    self.shown.write().player_state = state;
                 }
                 Ok(true)
             }
@@ -1560,7 +1561,7 @@ impl Session {
         }
         p.load(r, false, 0, true);
         self.shown.write().now_playing = Some(track.id);
-        self.set_status(p.status());
+        self.set_status(p.status(), None);
         self.now_playing_player = Some(p);
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
@@ -1722,7 +1723,7 @@ impl Session {
     /// than one track, so refilling never immediately replays what just
     /// finished.
     fn deal_shuffle_bag(&mut self) {
-        let ctx = self.shown.write().context.as_mut().unwrap();
+        let ctx = self.shown.context.as_ref().unwrap();
         if ctx.shuffle_bag.is_empty() {
             let mut bag: Vec<usize> = (0..ctx.tracks.len()).collect();
             bag.shuffle(&mut rand::rng());
@@ -1731,7 +1732,7 @@ impl Session {
             {
                 bag.swap(pos, 0);
             }
-            ctx.shuffle_bag = bag;
+            self.shown.write().context.as_mut().unwrap().shuffle_bag = bag;
         }
     }
 
@@ -1779,14 +1780,9 @@ impl Session {
         self.players.values().find(|p| p.accepts(r)).cloned()
     }
 
-    fn refresh_status(&mut self) {
-        if let Some(p) = self.active_player() {
-            self.set_status(p.status());
-        }
-    }
-
-    fn set_status(&mut self, status: PlayerStatus) {
-        self.shown.write().player_state = status.state;
+    /// `state` overrides a player whose own status lags the event that reported it.
+    fn set_status(&mut self, status: PlayerStatus, state: Option<PlayerState>) {
+        self.shown.write().player_state = state.unwrap_or(status.state);
         self.progress = (status.position_ms, status.duration_ms);
     }
 
