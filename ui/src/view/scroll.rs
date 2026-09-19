@@ -15,6 +15,11 @@ fn stepped_cursor(cur: usize, len: usize, up: bool, step: usize) -> usize {
     }
 }
 
+/// Whether a revision-stamped snapshot (Help's lines, the playlist picker's list) needs rebuilding.
+pub(super) fn stale(built_at: u64, revision: u64) -> bool {
+    built_at != revision
+}
+
 /// A list's selected row plus the first visible row of the window that follows it.
 #[derive(Clone, Copy, Default)]
 pub(super) struct ListState {

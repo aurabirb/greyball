@@ -3,7 +3,7 @@ use cursive::theme::ColorStyle;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, PlayerState, Session};
+use core::{Command, PlayerState, Session, TrackId};
 
 use super::text::{in_span, ms, pad, scroll_title};
 use super::transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
@@ -11,7 +11,37 @@ use super::transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
 /// The scrubber's width.
 const BAR_WIDTH: usize = 24;
 
-/// The player-status line's content for one frame, snapshotted from the session.
+/// The revision-cacheable part of the status line — everything but the
+/// per-tick position/duration and the bpm tag (which can change from a
+/// background scan with no event, so it's read live too — see `StatusLine::assemble`).
+pub(super) struct StatusCore {
+    now_playing: String,
+    now_playing_id: Option<TrackId>,
+    state: PlayerState,
+    shuffle: bool,
+}
+
+impl StatusCore {
+    pub(super) fn snapshot(s: &Session) -> Self {
+        let id = s.now_playing_id();
+        Self {
+            now_playing: s
+                .now_playing()
+                .map(|t| format!("{} - {}", t.display_artist(), t.title))
+                .unwrap_or_else(|| "nothing playing".to_string()),
+            now_playing_id: id,
+            state: s.player_status().state,
+            shuffle: s.shuffle(),
+        }
+    }
+
+    pub(super) fn now_playing_id(&self) -> Option<TrackId> {
+        self.now_playing_id
+    }
+}
+
+/// The player-status line's content for one frame: `StatusCore` (cached on
+/// `Session::revision`) plus this frame's live position/duration/bpm.
 pub(super) struct StatusLine {
     /// "artist - title" of the playing track.
     pub(super) now_playing: String,
@@ -35,18 +65,21 @@ struct Layout {
 
 impl StatusLine {
     pub(super) fn snapshot(s: &Session) -> Self {
-        let track = s.now_playing();
+        let core = StatusCore::snapshot(s);
         let st = s.player_status();
+        let bpm_tag = bpm_status_tag(s, core.now_playing_id);
+        Self::assemble(&core, st.position_ms, st.duration_ms, bpm_tag)
+    }
+
+    /// Combines a cached `StatusCore` with this frame's freshly-read per-tick data.
+    pub(super) fn assemble(core: &StatusCore, position_ms: u32, duration_ms: u32, bpm_tag: String) -> Self {
         Self {
-            now_playing: track
-                .as_ref()
-                .map(|t| format!("{} - {}", t.display_artist(), t.title))
-                .unwrap_or_else(|| "nothing playing".to_string()),
-            state: st.state,
-            position_ms: st.position_ms,
-            duration_ms: st.duration_ms,
-            bpm_tag: bpm_status_tag(s, track.as_ref()),
-            shuffle: s.shuffle(),
+            now_playing: core.now_playing.clone(),
+            state: core.state,
+            position_ms,
+            duration_ms,
+            bpm_tag,
+            shuffle: core.shuffle,
         }
     }
 
@@ -124,8 +157,10 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
 }
 
-/// Bracketed BPM-scan status tag shown next to the status line's scrubber.
-fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
+/// Bracketed BPM-scan status tag shown next to the status line's scrubber —
+/// read fresh every frame (not cached on revision): a scan's in-flight
+/// status can change with no bus event to bump it.
+pub(super) fn bpm_status_tag(s: &Session, now_playing: Option<TrackId>) -> String {
     let Some(scan) = s.scan.as_ref() else {
         return "[bd]".to_string();
     };
@@ -135,7 +170,7 @@ fn bpm_status_tag(s: &Session, track: Option<&core::Track>) -> String {
         core::ScanMode::Active => 'B',
     };
     // Purely a plugin-status indicator, never the resolved value itself.
-    let status_letter = match track.and_then(|t| scan.status("bpm", t.id)) {
+    let status_letter = match now_playing.and_then(|id| scan.status("bpm", id)) {
         Some(core::ScanStatus::Downloading) => 'd',
         Some(core::ScanStatus::Error) => 'e',
         Some(core::ScanStatus::Skipped) => 's',

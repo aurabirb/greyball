@@ -29,8 +29,18 @@ A component is a plain struct owning only its own UI state — never the session
 
 - Reads: `with_session(|s| …)` locks, extracts owned values, unlocks. The mutex is non-reentrant:
   never nest, never call a locking `MedleyView` method inside the closure — methods that need session
-  data take `s: &Session` instead. The main frame in `draw` takes one lock, pulls a tuple of rows,
-  titles, `StatusLine::snapshot(s)` and counts, then renders unlocked.
+  data take `s: &Session` instead. The main frame in `draw` (`frame.rs`) builds a `Frame`: a
+  `CachedFrame` (rows, titles, settings entries, warning count, …) memoized on `FrameKey`
+  (`Session::revision` plus every UI input that shapes it — screen, list identity, filter query,
+  offsets/heights, open panes, `want_settings`, cursor, editing state) and shared out of the cache
+  behind an `Arc`, plus this frame's live per-tick data (playback position/duration, the bpm tag) read
+  fresh every time. `Session::revision` is a monotonic counter bumped by every session mutation that
+  can change what the UI renders (see its doc in `core/src/app.rs`) — a cache hit takes one short lock
+  to read `revision` and the live data; a miss rebuilds `CachedFrame` under that same lock. Per-tick
+  data (playback position, the `Marquee` clock, Vis levels, the Log pane) is deliberately never keyed
+  on `revision` — it's read fresh or kept in its own small cache instead. Anything that changes
+  UI-visible session state and doesn't already go through `dispatch`/`on_event` must bump `revision`
+  itself, or the screen goes stale until the next keypress forces a cache miss.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
   runs on a spawned thread and reports through the `Bus`.
@@ -61,8 +71,17 @@ one component's outcome and mutates another (`ListEvent::Activate` from the pick
 `run(AddToPlaylist)`; closing a modal → `fallback_focus()`). `MedleyView` hands a component its data
 and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling, never locks the
 session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
-deliberate exception). Interior mutability in `draw` is limited to clocks and caches (`Marquee`,
-`LocalFilter::cache`, `MedleyView::follow_sig` — dedupes `ScanDriver::follow_view` reports).
+deliberate exception; `HelpModal`'s lines and `PlaylistPicker`'s playlist list are snapshots too, but
+self-heal — see below). Interior mutability in `draw` is limited to clocks and caches (`Marquee`,
+`LocalFilter::cache` — keyed on `revision`, not a source length, so a same-length content swap still
+recomputes — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
+`MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`).
+
+A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) stamps itself
+with the `revision` it was built at and is rebuilt from `MedleyView::required_size` — never per-draw —
+when `Session::revision` has since moved on (`scroll::stale`, `MedleyView::refresh_help`/
+`refresh_playlist_picker`); `PlaylistPicker::refresh` also re-clamps its cursor onto the same playlist
+id, or clamps it to the new length if that playlist is gone.
 
 ## Adding a component
 

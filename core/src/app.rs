@@ -450,6 +450,19 @@ pub struct Session {
     /// `membership_feedback`, since the command can block (an OAuth browser
     /// flow) just like `Plugin::setup`.
     plugin_command_result: Arc<Mutex<Option<String>>>,
+
+    /// Bumped on every call that may change anything the UI renders from
+    /// this session — the UI keys its derived-data caches on it instead of
+    /// rebuilding every frame. Invariant: every `pub fn(&mut self)` on
+    /// `Session` bumps it (first line), so forgetting one is a grep away
+    /// (`grep -n "pub fn .*&mut self" core/src/app.rs`) rather than a silent
+    /// gap. Off-thread mutations (scan writes, remote-playlist background
+    /// loads, membership toggles) go through `Catalog`/`ViewCache`, which
+    /// already report themselves on the `Bus` — `on_event` bumps once per
+    /// event regardless of which one, so those are covered too. Per-tick
+    /// data (playback position, marquee clock, Vis levels) is deliberately
+    /// NOT covered — the UI reads it fresh every frame instead.
+    revision: u64,
 }
 
 impl Session {
@@ -542,12 +555,24 @@ impl Session {
             last_setup: HashMap::new(),
             plugin_health: Vec::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
+            revision: 0,
         };
         session.refresh_plugin_health();
         session
     }
 
+    /// Monotonic counter the UI keys its derived-data caches on — see the field doc.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Bumps `revision` — called first thing by every `&mut self` pub fn here.
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
+        self.touch();
         match cmd {
             Command::Search(text) => {
                 self.view.clear_results();
@@ -724,6 +749,11 @@ impl Session {
     }
 
     pub fn on_event(&mut self, ev: &CoreEvent) -> Result<bool> {
+        // `Progress` is per-tick playback position, deliberately excluded —
+        // the UI reads it live every frame instead of caching on `revision`.
+        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. })) {
+            self.touch();
+        }
         match ev {
             CoreEvent::SearchHit(tid) => {
                 self.push_result(*tid);
@@ -805,6 +835,7 @@ impl Session {
     /// `open_warnings`, and by `CoreEvent::PluginStatusChanged`'s handler,
     /// which already knows something changed.
     pub fn refresh_plugin_health(&mut self) {
+        self.touch();
         let probed: Vec<(SourceId, PluginHealth)> = self.plugins.iter().map(|p| (p.id(), p.probe())).collect();
         self.plugin_health = self.overlay_setup(probed);
     }
@@ -821,6 +852,7 @@ impl Session {
             return false;
         }
         self.plugin_health = health;
+        self.touch();
         true
     }
 
@@ -829,6 +861,7 @@ impl Session {
     /// `CoreEvent::PluginStatusChanged` right after; that event's handler
     /// does the actual re-probe, so this only needs to update `last_setup`.
     pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
+        self.touch();
         self.last_setup.insert(id, health);
     }
 
@@ -878,6 +911,7 @@ impl Session {
     /// removing it — a `setup()` that only fixes, say, the player, mustn't
     /// silently drop an already-working source.
     pub fn apply_wiring(&mut self, id: &SourceId, wiring: crate::plugin::Wiring) {
+        self.touch();
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
             self.prune_synthetic_hotkeys();
@@ -1372,6 +1406,7 @@ impl Session {
         key: char,
         target: HotkeyTarget,
     ) -> std::result::Result<Option<HotkeyTarget>, BindError> {
+        self.touch();
         if let HotkeyTarget::Remote(source, node) = &target
             && self.is_synthetic_playlist(source, node)
         {
@@ -1384,12 +1419,14 @@ impl Session {
 
     /// Clears `target`'s hotkey, if it has one.
     pub fn unbind_hotkey(&mut self, target: &HotkeyTarget) {
+        self.touch();
         self.hotkeys.retain(|_, p| p != target);
         self.invalidate_hotkey_memberships();
     }
 
     /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
+        self.touch();
         self.hotkeys = hotkeys;
         self.prune_synthetic_hotkeys();
     }
@@ -1413,11 +1450,13 @@ impl Session {
 
     /// Sets a source's persisted `enabled` bit; takes effect next restart, like editing config.toml.
     pub fn set_source_enabled(&mut self, source: &str, enabled: bool) {
+        self.touch();
         Arc::make_mut(&mut self.cfg).set_source_enabled(source, enabled);
     }
 
     /// Live scan on/off — reaches `ScanMode::Disabled`, which `B` deliberately never does.
     pub fn set_scan_enabled(&mut self, enabled: bool) {
+        self.touch();
         if let Some(scan) = &self.scan {
             scan.set_mode(if enabled { crate::scan::ScanMode::CacheOnly } else { crate::scan::ScanMode::Disabled });
         }
@@ -1431,7 +1470,8 @@ impl Session {
 
     /// Clears the async toggle-result message — called when the hotkey menu
     /// (re)opens, mirroring how the UI's own `hotkey_feedback` is cleared.
-    pub fn clear_membership_feedback(&self) {
+    pub fn clear_membership_feedback(&mut self) {
+        self.touch();
         *self.membership_feedback.lock().unwrap() = None;
     }
 
@@ -2178,6 +2218,7 @@ impl Session {
             return Ok(Dispatch::Ok);
         }
         let feedback = self.membership_feedback.clone();
+        let bus = self.bus.clone();
         std::thread::spawn(move || {
             for (src, node, uri) in targets {
                 let result = if like {
@@ -2195,6 +2236,9 @@ impl Session {
                     }
                 };
                 *feedback.lock().unwrap() = Some(msg);
+                // No event fired this without a keypress before — the UI only
+                // noticed by polling `membership_feedback` on every redraw.
+                bus.send(CoreEvent::PlaylistsChanged);
             }
         });
         Ok(Dispatch::Ok)

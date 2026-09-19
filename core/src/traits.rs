@@ -158,7 +158,7 @@ pub trait MediaProvider: Send + Sync {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlayerState {
     Stopped,
     Playing,

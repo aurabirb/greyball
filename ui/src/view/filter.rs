@@ -21,12 +21,15 @@ pub(super) struct LocalFilter {
 }
 
 /// The last `filtered_tracks` result, plus the key it was computed under.
+/// Keyed on `revision` rather than a source length, so a same-length content
+/// swap (e.g. a second search returning as many results as the first) still
+/// recomputes instead of serving stale matches.
 struct FilterCache {
+    revision: u64,
     screen: usize,
     /// `PlaylistNav::list_id`, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
-    source_len: usize,
     /// `Arc` so callers can hand out the whole matched list without cloning every `Track` in it.
     result: Arc<[core::Track]>,
 }
@@ -63,25 +66,6 @@ impl MedleyView {
         }
     }
 
-    /// Cheap count of `all_tracks_for_screen`'s source list.
-    fn filterable_source_len(&self, s: &Session, screen: usize) -> usize {
-        match screen {
-            NOW_PLAYING => s.playing_context_len(),
-            QUEUE => s.queue_len(),
-            HIST => s.queue.history_len(),
-            PLAYLISTS => {
-                if let Some(id) = self.playlists.open {
-                    s.playlist_len(id)
-                } else if let Some((sid, _, node)) = &self.playlists.remote {
-                    s.remote_playlist_len(sid, node)
-                } else {
-                    0
-                }
-            }
-            _ => 0,
-        }
-    }
-
     /// Whether `/` on `screen` should filter it locally rather than jump to Search.
     pub(super) fn filterable_screen(&self, screen: usize) -> bool {
         match screen {
@@ -105,14 +89,14 @@ impl MedleyView {
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;
         }
-        let source_len = self.filterable_source_len(s, screen);
+        let revision = s.revision();
         let list_id = self.playlists.list_id();
 
         if let Some(cache) = self.filter.cache.lock().unwrap().as_ref()
+            && cache.revision == revision
             && cache.screen == screen
             && cache.list_id == list_id
             && cache.query == query
-            && cache.source_len == source_len
         {
             return Some(cache.result.clone());
         }
@@ -126,10 +110,10 @@ impl MedleyView {
         let result: Arc<[core::Track]> = ranked.into_iter().map(|(t, _)| t).collect();
 
         *self.filter.cache.lock().unwrap() = Some(FilterCache {
+            revision,
             screen,
             list_id,
             query: query.to_string(),
-            source_len,
             result: result.clone(),
         });
         Some(result)

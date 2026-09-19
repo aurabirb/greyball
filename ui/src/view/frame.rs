@@ -1,40 +1,97 @@
-use std::collections::HashMap;
+use std::sync::Arc as Rc;
 
 use cursive::Rect;
 
-use core::{BuiltinAction, HotkeyTarget, Session};
+use core::{BrowseNode, BuiltinAction, HotkeyTarget, PlaylistId, Session, SourceId};
 
 use crate::command::Pane;
 
 use super::MedleyView;
+use super::input::Editing;
 use super::rows::Row;
 use super::settings::{SettingsEntry, settings_entries};
-use super::status_line::StatusLine;
+use super::status_line::{StatusCore, StatusLine, bpm_status_tag};
 
-/// One docked list-pane's rendered rows, keyed by `Pane` in `Frame::pane_rows`.
+/// One docked list-pane's rendered rows.
 pub(super) struct PaneFrame {
     pub(super) title: String,
     pub(super) rows: Vec<Row>,
     pub(super) total: usize,
 }
 
-/// Everything `draw`'s no-modal path reads from the session, snapshotted under one lock.
-pub(super) struct Frame {
+/// Every UI-side input that shapes `CachedFrame`, plus the session
+/// `revision` it was built under — equality here is the whole cache-hit
+/// test, so a new input that shapes the frame and isn't added here would
+/// silently serve a stale frame instead of a wrong one.
+#[derive(Clone, PartialEq)]
+pub(super) struct FrameKey {
+    revision: u64,
+    screen: usize,
+    list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
+    query: Option<String>,
+    editing: Editing,
+    last_query: Option<String>,
+    cursor: usize,
+    offset: usize,
+    list_h: usize,
+    /// `(pane, screen, offset, height)` per open list pane, in draw order.
+    panes: Vec<(Pane, usize, usize, usize)>,
+    want_settings: bool,
+    pane_cfg: core::PaneLayoutConfig,
+}
+
+/// Everything `draw`'s no-modal path reads from the session that's cheap to
+/// hold across frames — rebuilt only when `FrameKey` changes, shared out of
+/// the cache behind an `Rc` so a cache hit costs no cloning.
+pub(super) struct CachedFrame {
     pub(super) rows: Vec<Row>,
     pub(super) total: usize,
-    pub(super) status: StatusLine,
+    status: StatusCore,
     pub(super) settings: Vec<SettingsEntry>,
     pub(super) warn_count: usize,
-    pub(super) pane_rows: HashMap<Pane, PaneFrame>,
+    pub(super) panes: Vec<PaneFrame>,
     pub(super) membership_feedback: Option<String>,
     pub(super) main_title: String,
     pub(super) list_loading: bool,
-    /// The effective Help hotkey, for the hint line's fallback text.
     pub(super) help_key: Option<char>,
+    pub(super) hotkey_target_selected: bool,
+}
+
+/// One frame's worth of render data: `CachedFrame` (memoized on `FrameKey`,
+/// shared via `Rc`) plus this frame's live status line (position/duration/
+/// bpm tag — see `StatusCore`'s doc for why those aren't cached).
+pub(super) struct Frame {
+    pub(super) cached: Rc<CachedFrame>,
+    pub(super) status: StatusLine,
 }
 
 impl MedleyView {
-    /// One session lock for the whole frame: every session-derived value `draw` needs, then unlocked.
+    fn frame_key(
+        &self,
+        revision: u64,
+        list_h: usize,
+        offset: usize,
+        list_panes: &[(Pane, Rect, usize, usize, usize)],
+        want_settings: bool,
+    ) -> FrameKey {
+        FrameKey {
+            revision,
+            screen: self.screen,
+            list_id: self.playlists.list_id(),
+            query: self.active_filter().map(str::to_string),
+            editing: self.editing.clone(),
+            last_query: self.last_query.clone(),
+            cursor: self.lists[self.screen].cursor,
+            offset,
+            list_h,
+            panes: list_panes.iter().map(|&(pane, _, screen, offset, h)| (pane, screen, offset, h)).collect(),
+            want_settings,
+            pane_cfg: self.panes.cfg,
+        }
+    }
+
+    /// One session lock for a cache miss, one cheap lock (revision + this
+    /// frame's live data) for a hit.
     pub(super) fn frame(
         &self,
         list_h: usize,
@@ -42,17 +99,30 @@ impl MedleyView {
         list_panes: &[(Pane, Rect, usize, usize, usize)],
         want_settings: bool,
     ) -> Frame {
-        self.with_session(|s| self.snapshot(s, list_h, offset, list_panes, want_settings))
+        self.with_session(|s| {
+            let key = self.frame_key(s.revision(), list_h, offset, list_panes, want_settings);
+            let mut cache = self.frame_cache.lock().unwrap();
+            if cache.as_ref().map(|(k, _)| k) != Some(&key) {
+                let built = self.build_cached_frame(s, list_h, offset, list_panes, want_settings);
+                *cache = Some((key, Rc::new(built)));
+            }
+            let cached = cache.as_ref().unwrap().1.clone();
+            // Live per-tick data: cheap, no extra I/O beyond what's already locked.
+            let ps = s.player_status();
+            let bpm_tag = bpm_status_tag(s, cached.status.now_playing_id());
+            let status = StatusLine::assemble(&cached.status, ps.position_ms, ps.duration_ms, bpm_tag);
+            Frame { cached, status }
+        })
     }
 
-    fn snapshot(
+    fn build_cached_frame(
         &self,
         s: &Session,
         list_h: usize,
         offset: usize,
         list_panes: &[(Pane, Rect, usize, usize, usize)],
         want_settings: bool,
-    ) -> Frame {
+    ) -> CachedFrame {
         let rows = self.rows(s, self.screen, offset, list_h);
         let total = self.list_len(s, self.screen);
         let main_title = self.list_title(s, self.screen);
@@ -71,26 +141,27 @@ impl MedleyView {
         if let Some(scan) = &s.scan {
             self.follow_scan(s, scan, self.active_screen());
         }
-        let pane_rows = list_panes
+        let panes = list_panes
             .iter()
-            .map(|&(pane, _, screen, offset, pane_h)| {
+            .map(|&(_pane, _, screen, offset, pane_h)| {
                 let rows = self.rows(s, screen, offset, pane_h);
                 let total = self.list_len(s, screen);
-                (pane, PaneFrame { title: self.list_title(s, screen), rows, total })
+                PaneFrame { title: self.list_title(s, screen), rows, total }
             })
             .collect();
         let help_key = s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp));
-        Frame {
+        CachedFrame {
             rows,
             total,
-            status: StatusLine::snapshot(s),
+            status: StatusCore::snapshot(s),
             settings,
             warn_count,
-            pane_rows,
+            panes,
             membership_feedback: s.membership_feedback(),
             main_title,
             list_loading,
             help_key,
+            hotkey_target_selected: self.selected_hotkey_target(s).is_some(),
         }
     }
 }

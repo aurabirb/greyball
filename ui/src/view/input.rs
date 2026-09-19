@@ -11,7 +11,6 @@ use crate::command::{self, Pane};
 use crate::keybindings::Action;
 
 use super::{HIST, MedleyView, PLAYLISTS, SEARCH};
-use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
 
@@ -71,7 +70,7 @@ impl MedleyView {
                 };
                 let open = self.playlists.open;
                 if parsed == command::Parsed::Help {
-                    self.help = Some(HelpModal::new(self.help_lines()));
+                    self.open_help();
                     return EventResult::consumed();
                 }
                 // `Screen` mode: fullscreen, one at a time.
@@ -261,12 +260,12 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.help = Some(HelpModal::new(self.help_lines()));
+                self.open_help();
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                let playlists = self.with_session(|s| s.playlists());
-                self.playlist_picker = Some(PlaylistPicker::new(id, playlists));
+                let (playlists, revision) = self.with_session(|s| (s.playlists(), s.revision()));
+                self.playlist_picker = Some(PlaylistPicker::new(id, playlists, revision));
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {
@@ -332,8 +331,13 @@ impl MedleyView {
     }
 
     /// The command/hint row: the text being typed, else transient feedback, else a key hint.
-    /// `total` and `help_key` come from the frame snapshot so this never locks the session itself.
-    pub(super) fn hint_line(&self, membership_feedback: Option<String>, total: usize, help_key: Option<char>) -> String {
+    /// `hotkey_target_selected` and `help_key` come from the frame snapshot so this never locks the session itself.
+    pub(super) fn hint_line(
+        &self,
+        membership_feedback: Option<String>,
+        hotkey_target_selected: bool,
+        help_key: Option<char>,
+    ) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
@@ -347,7 +351,7 @@ impl MedleyView {
                 .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                    if self.screen == PLAYLISTS && self.has_hotkey_target_selected(total) {
+                    if self.screen == PLAYLISTS && hotkey_target_selected {
                         return "  [`] set hotkey".to_string();
                     }
                     let help_key = help_key.map(String::from).unwrap_or_default();

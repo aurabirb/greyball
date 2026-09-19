@@ -142,11 +142,6 @@ impl MedleyView {
         self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor).map(|r| r.target())
     }
 
-    /// Same condition as `selected_hotkey_target(s).is_some()`, from the frame's already-known `total` — no `top_rows` call.
-    pub(super) fn has_hotkey_target_selected(&self, total: usize) -> bool {
-        self.playlists.open.is_some() || self.playlists.remote.is_some() || self.lists[PLAYLISTS].cursor < total
-    }
-
     /// `:open <url-or-path>`'s remote-link case.
     fn open_playlist_uri(&mut self, uri: String) -> EventResult {
         let found = self.with_session(|s| {

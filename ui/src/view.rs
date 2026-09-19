@@ -18,10 +18,10 @@ use crate::command::Pane;
 use crate::keybindings::Action;
 
 use filter::LocalFilter;
+use frame::{CachedFrame, FrameKey};
 use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
-use lists::FollowSignature;
 use log::LogPane;
 use panes::{PaneLayout, list_screen_for_pane};
 use playlist_picker::PlaylistPicker;
@@ -120,7 +120,9 @@ pub struct MedleyView {
     playlist_picker: Option<PlaylistPicker>,
     marquee: Marquee,
     /// What `follow_scan` last reported to the scan walk — a cache, not view state; see its doc.
-    follow_sig: Mutex<Option<FollowSignature>>,
+    follow_sig: Mutex<Option<lists::FollowKey>>,
+    /// Revision-keyed memo of `frame()`'s cached part — see `frame.rs`.
+    frame_cache: Mutex<Option<(FrameKey, Arc<CachedFrame>)>>,
 }
 
 impl MedleyView {
@@ -151,11 +153,14 @@ impl MedleyView {
             playlist_picker: None,
             marquee: Marquee::new(),
             follow_sig: Mutex::new(None),
+            frame_cache: Mutex::new(None),
         }
     }
 
-    /// `Main`, then each open pane (in stack order), then the warnings button.
-    fn focus_order(&self) -> Vec<Focus> {
+    /// `Main`, then each open pane (in stack order), then the warnings button —
+    /// `warn_count` passed in so a layout pass can share one session lock
+    /// instead of `focus_order` taking its own (see `required_size`).
+    fn focus_order_given(&self, warn_count: usize) -> Vec<Focus> {
         // `panes.open` only ever holds docked panes (see `toggle_pane`).
         let mut order = if self.panes.open.is_empty() {
             vec![Focus::Main]
@@ -164,10 +169,14 @@ impl MedleyView {
                 .chain(self.panes.open.iter().map(|&p| Focus::Pane(p)))
                 .collect()
         };
-        if self.warn_count() > 0 {
+        if warn_count > 0 {
             order.push(Focus::Warnings);
         }
         order
+    }
+
+    fn focus_order(&self) -> Vec<Focus> {
+        self.focus_order_given(self.warn_count())
     }
 
     fn cycle_focus(&mut self) {
@@ -176,10 +185,14 @@ impl MedleyView {
         self.focus = order[(idx + 1) % order.len()];
     }
 
-    fn clamp_focus(&mut self) {
-        if !self.focus_order().contains(&self.focus) {
+    fn clamp_focus_given(&mut self, warn_count: usize) {
+        if !self.focus_order_given(warn_count).contains(&self.focus) {
             self.focus = Focus::Main;
         }
+    }
+
+    fn clamp_focus(&mut self) {
+        self.clamp_focus_given(self.warn_count());
     }
 
     /// Where focus should land when it can no longer stay on the warnings button.
@@ -242,7 +255,9 @@ impl View for MedleyView {
         // One lock for the whole frame: pull every session-derived value out here, then render without the guard.
         let want_settings = panes.iter().any(|(p, _)| *p == Pane::Settings);
         let frame = self.frame(list_h, offset, &list_panes, want_settings);
+        let cached = &frame.cached;
 
+        let mut list_pane_frames = cached.panes.iter();
         for &(pane, rect) in &panes {
             let focused = self.focus == Focus::Pane(pane);
             if pane == Pane::Vis {
@@ -250,7 +265,8 @@ impl View for MedleyView {
                 continue;
             }
             if let Some(screen) = list_screen_for_pane(pane) {
-                let Some(pf) = frame.pane_rows.get(&pane) else { continue };
+                // Built from this same `panes` list filtered the same way — always in lockstep.
+                let pf = list_pane_frames.next().expect("a list pane always has a PaneFrame");
                 // `[...]` is the focus marker every pane title uses.
                 let title = if focused { format!("[{}]", pf.title) } else { pf.title.clone() };
                 draw_row_list(
@@ -264,7 +280,7 @@ impl View for MedleyView {
                 continue;
             }
             if pane == Pane::Settings {
-                self.settings.draw(&printer.windowed(rect), &frame.settings, focused);
+                self.settings.draw(&printer.windowed(rect), &cached.settings, focused);
                 continue;
             }
             self.log.draw(&printer.windowed(rect), focused);
@@ -277,23 +293,23 @@ impl View for MedleyView {
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
         TabBar { active: self.screen, state: &frame.status.state }
             .draw(printer, &frame.status.now_playing, marquee_offset);
-        draw_row_list(&printer.windowed(main_rect), &frame.main_title, &frame.rows, offset, sel, frame.total);
+        draw_row_list(&printer.windowed(main_rect), &cached.main_title, &cached.rows, offset, sel, cached.total);
 
         // command / hint line (row above the status line).
         let bottom = printer.size.y.saturating_sub(2);
-        let line = self.hint_line(frame.membership_feedback, frame.total, frame.help_key);
+        let line = self.hint_line(cached.membership_feedback.clone(), cached.hotkey_target_selected, cached.help_key);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let warn_w = if frame.warn_count > 0 {
-            warnings_label(frame.warn_count).chars().count().min(printer.size.x)
+        let warn_w = if cached.warn_count > 0 {
+            warnings_label(cached.warn_count).chars().count().min(printer.size.x)
         } else {
             0
         };
-        if frame.total > 0 {
-            let more = if frame.list_loading { "+" } else { "" };
-            let unit = self.row_unit(self.screen, frame.total);
-            let readout = format!("{}/{}{more} {unit}", sel.min(frame.total - 1) + 1, frame.total);
+        if cached.total > 0 {
+            let more = if cached.list_loading { "+" } else { "" };
+            let unit = self.row_unit(self.screen, cached.total);
+            let readout = format!("{}/{}{more} {unit}", sel.min(cached.total - 1) + 1, cached.total);
             let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
             if x >= line.width() + 2 {
                 printer.print((x, bottom), &readout);
@@ -304,8 +320,8 @@ impl View for MedleyView {
         frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
         // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
-        if frame.warn_count > 0 {
-            let label = warnings_label(frame.warn_count);
+        if cached.warn_count > 0 {
+            let label = warnings_label(cached.warn_count);
             let label_w = label.chars().count().min(printer.size.x);
             let bx = printer.size.x - label_w;
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
@@ -320,25 +336,40 @@ impl View for MedleyView {
 
     fn required_size(&mut self, constraint: Vec2) -> Vec2 {
         // The one layout hook that gets `&mut self` with the resolved screen size.
-        self.clamp_focus();
         let screen_size_changed = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
-        if self.warnings.is_some() {
-            let statuses = self.with_session(|s| s.plugin_statuses().to_vec());
-            if let Some(modal) = &mut self.warnings {
-                modal.relayout(screen_size_changed, constraint, &statuses);
-            }
+        let (main_h_changed, pane_bodies) = self.panes.relayout(constraint);
+        let list_h = self.list_h();
+        let list_screens: Vec<usize> =
+            pane_bodies.iter().filter_map(|&(pane, _, _)| list_screen_for_pane(pane)).collect();
+        let want_statuses = self.warnings.is_some();
+
+        // One shared lock for everything this layout pass needs from the
+        // session, instead of `clamp_focus`/each `relayout_list` taking their own.
+        let (warn_count, statuses, main_len, pane_lens, revision) = self.with_session(|s| {
+            let warn_count = s.plugin_warning_count();
+            let statuses = want_statuses.then(|| s.plugin_statuses().to_vec());
+            let main_len = self.list_len(s, self.screen);
+            let pane_lens: Vec<usize> = list_screens.iter().map(|&scr| self.list_len(s, scr)).collect();
+            (warn_count, statuses, main_len, pane_lens, s.revision())
+        });
+
+        self.clamp_focus_given(warn_count);
+        self.refresh_help(revision);
+        self.refresh_playlist_picker(revision);
+        if let (Some(modal), Some(statuses)) = (&mut self.warnings, statuses) {
+            modal.relayout(screen_size_changed, constraint, &statuses);
         }
         self.hotkeys.relayout(screen_size_changed, constraint);
         if let Some(picker) = &mut self.playlist_picker {
             picker.relayout(screen_size_changed, constraint);
         }
-        let (main_h_changed, pane_bodies) = self.panes.relayout(constraint);
-        let list_h = self.list_h();
-        self.relayout_list(self.screen, main_h_changed, list_h);
+        self.lists[self.screen].relayout(main_h_changed, main_len, list_h);
+        let mut pane_lens = pane_lens.into_iter();
         for (pane, h, changed) in pane_bodies {
             if let Some(screen) = list_screen_for_pane(pane) {
-                self.relayout_list(screen, changed, h);
+                let len = pane_lens.next().expect("one length per list pane, built from the same list");
+                self.lists[screen].relayout(changed, len, h);
             }
         }
         constraint
@@ -359,7 +390,7 @@ impl View for MedleyView {
         if !is_mouse_followup {
             self.queue_feedback = None;
             self.hotkeys.feedback = None;
-            self.with_session(|s| s.clear_membership_feedback());
+            self.with_session_mut(|s| s.clear_membership_feedback());
         }
 
         if let Some(result) = self.on_edit_event(&event) {

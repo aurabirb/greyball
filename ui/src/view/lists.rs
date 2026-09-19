@@ -13,12 +13,14 @@ use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
 use super::tab_bar::screen_name;
 
 /// What `MedleyView::follow_scan` last fed `ScanDriver::follow_view` under, to dedupe re-reports.
+/// Keyed on `revision` (not a list length) so a same-length content swap — e.g. a second search
+/// with a different set of same-count results — still re-reports instead of stalling on stale ids.
 #[derive(PartialEq, Eq)]
-pub(super) struct FollowSignature {
+pub(super) struct FollowKey {
+    revision: u64,
     screen: usize,
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: Option<String>,
-    len: usize,
     highlighted: usize,
 }
 
@@ -291,27 +293,21 @@ impl MedleyView {
         }
     }
 
-    /// Layout-pass upkeep for `screen`'s list window, shown `list_h` rows tall.
-    pub(super) fn relayout_list(&mut self, screen: usize, resized: bool, list_h: usize) {
-        let len = self.with_session(|s| self.list_len(s, screen));
-        self.lists[screen].relayout(resized, len, list_h);
-    }
-
-    /// Feeds the scan walk the visible list, but only rebuilds/re-reports it when `sig` changed.
+    /// Feeds the scan walk the visible list, but only rebuilds/re-reports it when `key` changed.
     pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: usize) {
         let highlighted = self.lists[screen].cursor;
-        let sig = FollowSignature {
+        let key = FollowKey {
+            revision: s.revision(),
             screen,
             list_id: self.playlists.list_id(),
             query: self.active_filter().map(str::to_string),
-            len: self.list_len(s, screen),
             highlighted,
         };
         let mut last = self.follow_sig.lock().unwrap();
-        if last.as_ref() == Some(&sig) {
+        if last.as_ref() == Some(&key) {
             return;
         }
         scan.follow_view(self.visible_track_ids(s, screen), highlighted);
-        *last = Some(sig);
+        *last = Some(key);
     }
 }

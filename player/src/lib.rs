@@ -46,7 +46,7 @@ impl Default for Snapshot {
 impl Snapshot {
     fn status(&self) -> PlayerStatus {
         PlayerStatus {
-            state: self.state.clone(),
+            state: self.state,
             position_ms: self.position_ms,
             duration_ms: self.duration_ms,
             volume: self.volume,
