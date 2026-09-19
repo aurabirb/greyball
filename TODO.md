@@ -29,6 +29,15 @@
   liked track pressed again is removed. Remove the separate `BuiltinAction::Unlike` (default `L`),
   its Help row and its own confirm; the unlike direction asks for confirmation the way the
   playlist-key removal item below describes (one shared confirm path). `Like` stays `l`.
+- [ ] Show the approximate position of the now-playing track on the scrollbar: a small marker in
+  the scrollbar gutter (`draw_scrollbar`, `ui/src/view/scroll.rs`) at the proportional row
+  `playing_row * list_h / total`, drawn only in a list that contains the playing track (the row from
+  `Session::playing_row`, so a duplicated track marks only its playing position) — a distinct glyph
+  and colour from the red thumb (e.g. a `◂`/`•` in the now-playing colour), visible even when the
+  playing row is scrolled out of view, and still visible when it overlaps the thumb. It follows the
+  same paginated-list rule as the rest: if the playing row is not loaded, no marker. Every list and
+  Help/Log go through the one scrollbar function; the marker input is optional so windows with no
+  playing row draw exactly as before.
 ### Bugs
 - [ ] The top bar's now-playing title can overlap the player controls (the transport buttons on the
   left of row 0) since it became a scrubber (`TabBar::draw`, `ui/src/view/tab_bar.rs`, and the
