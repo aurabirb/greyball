@@ -403,7 +403,7 @@ impl View for MedleyView {
             // The active tab's window carries no focus marker.
             let marked = placed.id != self.main_id() && self.focus == Focus::Window(placed.id);
             if self.windows.placement(placed.id) == Placement::Floating {
-                draw_float_frame(printer, placed.frame, marked);
+                draw_float_frame(printer, placed.frame);
             }
             window.draw(printer, marked, window_frame);
         }

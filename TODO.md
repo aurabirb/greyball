@@ -47,34 +47,6 @@
   no-argument command's item carries its built-in, which this item needs anyway), and let
   `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
   owner decision, do not make it a fixed-size array.
-- [ ] Move the assigned key on Playlists top-level rows from the left gutter (the tags column before
-  the name) to the right-hand hotkeys column, where track rows show their playlist letters
-  (`Column::Hotkeys` in `render_cell`, `ui/src/view/rows.rs`; the top-level rows are built in
-  `ui/src/view/track_list.rs` from `TrackList::top()`), same alignment and style as on track rows so
-  the two read as one column when switching between a playlist's tracks and the playlist list. Applies
-  to every Playlists-kind window (the tab and `playlist-keys`). Check it in a real-terminal
-  screenshot of the `playlist-keys` float at its default size: the key must stay visible when the
-  name is truncated in a narrow rect (the key column keeps its width; the name gives way).
-- [ ] Floating windows get a real top border, in the normal text colour. Today `draw_float_frame`
-  (`ui/src/view/panes.rs`) draws left, right and bottom lines plus corners but no top line — the
-  window's own title row sits on the box's top edge (`float_body` starts at the frame's top row) —
-  and colours the whole border `ColorStyle::title_primary()` (red) when focused. Change: draw the
-  top `─` line like the other three sides and move the window body one row down inside it
-  (`float_body` insets the top by 1 like the sides; `float_rect`'s minimum height grows by one), so
-  the title row sits under the border as the first inner row; border always in
-  `ColorStyle::primary()` (normal text colour), focused or not — focus stays visible through the
-  title's existing `[title]`/highlight styling, not the border. Hit-testing keeps using the same
-  `Placed.frame`/body rects as drawing (a press on the top border focuses/raises, like the other
-  sides). Same two rules for the remaining fullscreen modals' frame (`draw_modal_frame`,
-  `ui/src/view/modal.rs`) if they are ever drawn boxed; share one box-drawing helper between the
-  two rather than keeping two. Padding: a floating window's content gets one blank column between
-  the side borders and the text (left and right) and one blank row above the bottom border, so text
-  never touches the box — most visible in the Help/hotkey window, whose command lane starts at the
-  border and whose right-aligned shortcut lane ends on it. Do it in `float_body` (one inset for
-  every floating window; windows still don't know they float) rather than per window; the Help
-  window's lane widths and the lists' scrollbar gutter then derive from the padded rect. Judge the
-  result in a real-terminal screenshot with two cascaded floats (one of them Help) over a list and
-  over a docked pane.
 - [ ] A focused floating window must own the keyboard: every key press goes to it and nothing falls
   through to the window or tab beneath. Seen: with the Help/hotkey window (or `playlist-keys`)
   floating and focused, pressing a playlist hotkey letter went through to the track list underneath

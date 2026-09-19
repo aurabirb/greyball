@@ -119,27 +119,27 @@ const CASCADE: Vec2 = Vec2 { x: 4, y: 2 };
 /// A floating window's border box: three fifths of the area between the fixed rows, cascaded from the centre by `slot`.
 pub(super) fn float_rect(total: Vec2, slot: usize) -> Rect {
     let band_h = total.y.saturating_sub(TAB_BAR_ROWS + BOTTOM_BAR_ROWS);
-    let size = Vec2::new((total.x * 3 / 5).max(40).min(total.x), (band_h * 3 / 5).max(10).min(band_h));
+    let size = Vec2::new((total.x * 3 / 5).max(40).min(total.x), (band_h * 3 / 5).max(11).min(band_h));
     let room = Vec2::new(total.x, band_h) - size;
     let origin = (room / 2 + CASCADE * slot).or_min(room);
     Rect::from_size(origin + (0, TAB_BAR_ROWS), size)
 }
 
-/// The window's rect in its border box: its own title row takes the top border's place.
+/// The window's rect in its border box: inside the border, one blank column each side and one blank row below.
 pub(super) fn float_body(frame: Rect) -> Rect {
-    Rect::from_size(frame.top_left() + (1, 0), frame.size().saturating_sub((2, 1)))
+    Rect::from_size(frame.top_left() + (2, 1), frame.size().saturating_sub((4, 3)))
 }
 
-/// Clears `frame` and boxes it, leaving the top edge between the corners to the window's title row.
-pub(super) fn draw_float_frame(printer: &Printer, frame: Rect, focused: bool) {
+/// Clears `frame` and boxes it in the normal text colour.
+pub(super) fn draw_float_frame(printer: &Printer, frame: Rect) {
     let blank = " ".repeat(frame.width());
     for y in frame.top()..=frame.bottom() {
         printer.print((frame.left(), y), &blank);
     }
     // `Printer::print_box` would force the theme's border colour, and draw nothing under `borders = none`.
-    let style = if focused { ColorStyle::title_primary() } else { ColorStyle::primary() };
-    printer.with_color(style, |p| {
+    printer.with_color(ColorStyle::primary(), |p| {
         let (l, t, r, b) = (frame.left(), frame.top(), frame.right(), frame.bottom());
+        p.print_hline((l, t), frame.width(), "─");
         p.print_hline((l, b), frame.width(), "─");
         p.print_vline((l, t), frame.height(), "│");
         p.print_vline((r, t), frame.height(), "│");

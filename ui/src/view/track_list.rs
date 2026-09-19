@@ -444,7 +444,7 @@ impl TrackList {
                             TopRow::Remote(sid, name, _) => plain_row(format!("[{sid}] {name}")),
                         };
                         let key = s.playlist_hotkey(&row.target());
-                        r.tags = Cell::plain(key.map(String::from).unwrap_or_default());
+                        r.hotkeys = Cell::plain(key.map(String::from).unwrap_or_default());
                         r
                     })
                     .collect()
