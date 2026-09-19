@@ -317,6 +317,9 @@ struct Shown {
 
 const MAX_BACKGROUND_FAILURES: usize = 20;
 
+/// Tracks in a row that may fail to load before playback stops instead of advancing.
+const MAX_LOAD_FAILURES: usize = 3;
+
 /// The list `Command::PlayContext` last started playing from (search
 /// results, a playlist, Liked Songs, ...) — consulted as a fallback once the
 /// manual queue (`Session::queue`) has nothing left, so playback keeps
@@ -420,6 +423,8 @@ pub struct Session {
     /// reset per `play_track`, so `LoadFailed` can retry the next-best
     /// rendition instead of the one that just failed.
     failed_playback_sources: Vec<SourceId>,
+    /// Tracks in a row that failed to load with none playing in between.
+    load_failures: usize,
     /// Where the play-history M3U log lives — one entry appended per play,
     /// see `append_history_entry`. The whole `Session` already lives behind
     /// one `Arc<Mutex<Session>>` in `main.rs`, so every call in here is
@@ -537,6 +542,7 @@ impl Session {
             media_cache,
             pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
+            load_failures: 0,
             history_path,
             shown: Revised::new(shown),
             progress: (0, 0),
@@ -988,6 +994,9 @@ impl Session {
                         scan.prioritize(t.id);
                     }
                 }
+                if matches!(pe, PlayerEvent::Playing { .. }) {
+                    self.load_failures = 0;
+                }
                 let playing = matches!(pe, PlayerEvent::Playing { .. }).then_some(PlayerState::Playing);
                 if let Some(p) = self.active_player() {
                     self.set_status(p.status(), playing);
@@ -1058,7 +1067,15 @@ impl Session {
                             self.pending_cache_fallback = None;
                             if !self.play_from_cache(&t, true) {
                                 self.warn(source.as_str(), &format!("playback failed for {:?} ({uri})", t.title));
-                                self.advance(false);
+                                self.load_failures += 1;
+                                // One dead source or network would otherwise walk the whole queue.
+                                if self.load_failures < MAX_LOAD_FAILURES {
+                                    self.advance(false);
+                                } else {
+                                    self.load_failures = 0;
+                                    self.queue.stop();
+                                    self.warn("playback", &format!("stopped: {MAX_LOAD_FAILURES} tracks in a row failed to load"));
+                                }
                             }
                         }
                     }

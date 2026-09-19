@@ -157,7 +157,11 @@ impl MedleyView {
             };
             let health = plugin.setup(input);
             let succeeded = health.is_ok();
-            let failure = health.message().map(|msg| format!("{id} setup: {msg}"));
+            // A degraded-but-usable result stays a warnings row.
+            let failure = match &health {
+                PluginHealth::Fail(msg) => Some(format!("{id} setup: {msg}")),
+                PluginHealth::Ok | PluginHealth::Warn(_) => None,
+            };
             let wiring = plugin.wiring();
             let mut guard = session.lock().unwrap();
             guard.apply_wiring(&id, wiring);

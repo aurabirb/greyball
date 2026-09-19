@@ -3,7 +3,8 @@ use std::thread;
 
 use cursive::Cursive;
 use cursive::event::{Event, EventResult, Key, MouseEvent};
-use cursive::views::Dialog;
+use cursive::view::Nameable;
+use cursive::views::{Dialog, ScrollView, TextView};
 
 use core::{Command, CoreEvent, Dispatch, PlaylistId, Plugin, SourceId, TrackId};
 
@@ -29,6 +30,9 @@ pub(super) enum Editing {
     /// Screen-local fuzzy filter (`/` on any track-list screen other than Search itself).
     Filter,
 }
+
+/// The open notice dialog's text view, which further popup notices append to.
+const NOTICE_TEXT: &str = "notice";
 
 pub(super) fn key_name(event: &Event) -> Option<String> {
     match event {
@@ -156,8 +160,12 @@ impl MedleyView {
                 self.feedback = Some(text);
                 EventResult::consumed()
             }
+            // One notice dialog at most: a batch of failures reads as one list, dismissed once.
             Notice::Popup(msg) => EventResult::with_cb(move |c: &mut Cursive| {
-                c.add_layer(Dialog::info(msg.clone()));
+                if c.call_on_name(NOTICE_TEXT, |text: &mut TextView| text.append(format!("\n\n{msg}"))).is_none() {
+                    let text = ScrollView::new(TextView::new(msg.clone()).with_name(NOTICE_TEXT));
+                    c.add_layer(Dialog::around(text).dismiss_button("Ok"));
+                }
             }),
         }
     }
