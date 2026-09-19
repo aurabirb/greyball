@@ -33,24 +33,6 @@
   Help/Log go through the one scrollbar function; the marker input is optional so windows with no
   playing row draw exactly as before.
 ### Bugs
-- [ ] The top bar's now-playing title can overlap the player controls (the transport buttons on the
-  left of row 0) since it became a scrubber (`TabBar::draw`, `ui/src/view/tab_bar.rs`, and the
-  span function shared with the click hit-test): a long title that is not clipped to the space right
-  of the transport draws over the buttons, and its underline and click span cover them. Bound the
-  title (and its scrub span) to the columns between the end of the transport/tabs cluster plus a
-  gap and the right edge, truncating or marquee-scrolling inside that width; the buttons' click
-  targets must win. Check narrow widths, the collapsed-tabs layout and a very long title. Fix
-  together with the waveform item below, which shares the same space budget.
-- [ ] The waveform never shows up: the top bar (`TabBar::draw`, `ui/src/view/tab_bar.rs`) should draw it
-  in the second row between the player controls and the title on every wide enough terminal, and
-  drop it entirely on small widths (no shrunken stub). Investigate why nothing is drawn: no
-  envelope stored yet for the playing track (`WaveformPlugin`, `sources/waveform`; scan paused or
-  cache-only mode `B`, the now-playing priority path, tracks that are streamed and never scanned),
-  the available width between transport and title being too small because the title takes
-  priority (at 120 columns the widget was 8 cells), or a draw/layout bug. Decide the layout rule
-  (e.g. a minimum width below which it disappears, the title truncating to leave the waveform a
-  reasonable share) and make it show for the currently playing track, including a track that is
-  still being analysed (draw nothing until buckets exist).
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
   event is dropped, so a stuck track with no such line in the Log pane means the player never sent

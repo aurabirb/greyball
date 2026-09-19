@@ -18,6 +18,15 @@ const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
 /// The resampled waveform of the last (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
 
+/// Narrower than this the waveform is not drawn.
+const WAVE_MIN: usize = 12;
+
+/// Bars narrower than this draw no waveform.
+const WAVE_MIN_BAR: usize = 80;
+
+/// The least the title keeps when a waveform shares its room.
+const TITLE_MIN: usize = 16;
+
 /// Bars from one to eight eighths tall.
 const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
@@ -68,8 +77,10 @@ struct Layout {
     tabs: Vec<(usize, usize, usize)>,
     /// Empty when the buttons don't fit.
     transport: Vec<(Transport, usize, usize)>,
-    /// `(start, width)` left for the marquee.
-    detail: (usize, usize),
+    /// `(start, width)` of the title, right-aligned in the room right of the buttons.
+    title: (usize, usize),
+    /// `(start, width)` of the waveform, when there is an envelope and room for it.
+    wave: Option<(usize, usize)>,
 }
 
 impl TabBar<'_> {
@@ -111,14 +122,23 @@ impl TabBar<'_> {
         } else {
             (Vec::new(), transport_start)
         };
-        Layout { collapsed, tabs, transport, detail: (detail_start, content_w.saturating_sub(detail_start)) }
+        let detail_w = content_w.saturating_sub(detail_start);
+        let want = self.status.now_playing.width();
+        let has_wave = total_w >= WAVE_MIN_BAR && !self.status.waveform.is_empty() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
+        let title_w = if has_wave { want.min((detail_w / 2).max(TITLE_MIN)).min(detail_w - TRANSPORT_GAP - WAVE_MIN) } else { want.min(detail_w) };
+        let wave = has_wave.then(|| (detail_start, detail_w - title_w - if title_w > 0 { TRANSPORT_GAP } else { 0 }));
+        let title = (detail_start + detail_w - title_w, title_w);
+        Layout { collapsed, tabs, transport, title, wave }
     }
 
-    /// The visible title and its start column, right-aligned in the room the layout leaves.
+    /// The visible title and its start column, clipped to the layout's title width.
     fn title(&self, layout: &Layout) -> (usize, String) {
-        let (detail_start, detail_w) = layout.detail;
-        let text = scroll_title(&self.status.now_playing, detail_w, self.marquee_offset);
-        (detail_start + detail_w - text.width(), text)
+        let (start, w) = layout.title;
+        let mut text = scroll_title(&self.status.now_playing, w, self.marquee_offset);
+        while text.width() > w {
+            text.pop();
+        }
+        (start + w - text.width(), text)
     }
 
     /// Draws the bar across `printer`, the marquee right-aligned in whatever room is left.
@@ -137,10 +157,7 @@ impl TabBar<'_> {
             printer.print((start, 0), label);
         }
         let (start, text) = self.title(&layout);
-        let wave_start = layout.detail.0;
-        let wave_end = if text.is_empty() { layout.detail.0 + layout.detail.1 } else { start.saturating_sub(TRANSPORT_GAP) };
-        let wave_w = wave_end.saturating_sub(wave_start);
-        if wave_w > 0 && !self.status.waveform.is_empty() {
+        if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
             let levels = levels_memo
                 .get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || resample(envelope, wave_w));
