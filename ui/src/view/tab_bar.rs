@@ -57,11 +57,11 @@ pub(super) enum TabBarHit {
     /// The tab at this index of `TabBar::tabs`.
     Tab(usize),
     Transport(Transport),
-    /// A seek along the now-playing title.
-    Title(Command),
+    /// A seek along the waveform, or along the title when there is none.
+    Seek(Command),
 }
 
-/// The top row: a tab per tabbed window, the transport buttons and the now-playing marquee (a scrubber too), with the track's waveform between them.
+/// The top row: a tab per tabbed window, the transport buttons and the now-playing marquee, with the track's waveform between them; the waveform is the scrubber when shown, else the marquee.
 pub(super) struct TabBar<'a> {
     /// The tabbed windows' names, in tab order.
     pub(super) tabs: &'a [String],
@@ -165,7 +165,7 @@ impl TabBar<'_> {
         }
         if !text.is_empty() {
             let played = match self.status.duration_ms {
-                0 => 0,
+                d if d == 0 || layout.wave.is_some() => 0,
                 d => text.width() * self.status.position_ms.min(d) as usize / d as usize,
             };
             let (mut split, mut cells) = (0, 0);
@@ -190,9 +190,13 @@ impl TabBar<'_> {
             d => levels.len() * self.status.position_ms.min(d) as usize / d as usize,
         };
         for (x, &level) in levels.iter().enumerate() {
-            let style = if x < played { ColorStyle::title_primary() } else { ColorStyle::primary() };
             if level > 0 {
-                printer.with_color(style, |p| p.print((start + x, 0), GLYPHS[level as usize - 1]));
+                let glyph = GLYPHS[level as usize - 1];
+                if x < played {
+                    printer.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
+                } else {
+                    printer.print((start + x, 0), glyph);
+                }
             }
         }
     }
@@ -206,12 +210,18 @@ impl TabBar<'_> {
         if let Some(&(i, ..)) = layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Tab(i));
         }
-        let (start, text) = self.title(&layout);
-        let (duration, width) = (self.status.duration_ms, text.width());
+        let (start, width) = match layout.wave {
+            Some(wave) => wave,
+            None => {
+                let (start, text) = self.title(&layout);
+                (start, text.width())
+            }
+        };
+        let duration = self.status.duration_ms;
         if duration == 0 || !in_span(x, (start, width)) {
             return None;
         }
         let target_ms = ((x - start) as f64 / width as f64 * duration as f64).round() as i64;
-        Some(TabBarHit::Title(Command::Seek(target_ms - self.status.position_ms as i64)))
+        Some(TabBarHit::Seek(Command::Seek(target_ms - self.status.position_ms as i64)))
     }
 }

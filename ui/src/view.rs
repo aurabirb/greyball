@@ -534,7 +534,7 @@ impl MedleyView {
                 if let Some(TabBarHit::Transport(button)) = hit {
                     return self.run(button.command());
                 }
-                if let Some(TabBarHit::Title(cmd)) = hit {
+                if let Some(TabBarHit::Seek(cmd)) = hit {
                     return self.run(cmd);
                 }
                 self.focus = Focus::Window(self.main_id());
