@@ -311,6 +311,20 @@
   otherwise) and move the cursor there the way `click_row` does (`self.cursor[screen] = idx;
   self.clamp_scroll();`, which scrolls it into view) — no-op when the playing track isn't in the list
   on screen. Don't do it for mouse scrubber seeks.
+- [ ] Scrollbar: draw only the red thumb and not the white vertical track lines. In `draw_scrollbar`
+  (`ui/src/view/scroll.rs` ~163) drop the `│` track loop; the thumb (`┃` in `ColorStyle::highlight()`)
+  stays, and when everything fits (`total <= list_h`) nothing is drawn. The gutter column must still be
+  blanked each frame (print spaces where there is no thumb) so no stale cells remain — see the stale
+  rightmost-column bug — and every window that draws a scrollbar (lists, Log, Help) goes through
+  this one function.
+- [ ] Add a hard-redraw key (a `BuiltinAction` with a default key and a Help row in `ui/src/items.rs`,
+  rebindable like the other built-ins; no `:` command, e.g. Ctrl-L if the key table can carry a
+  control key, else a plain letter) that clears the whole screen (`Cursive::clear`, so nothing stale
+  survives a garbled terminal) and makes every UI element refresh: the frame snapshot and per-window
+  layout memos are invalidated (`Session::revision` bump or an explicit "everything dirty" flag),
+  `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
+  status lines from scratch. The window-resize handler needs exactly this too (see the stale
+  rightmost-column bug), so share one function between the two.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
