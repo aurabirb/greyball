@@ -72,15 +72,15 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
   re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
   to the top), so focus leaves it by `?`, Esc, a tab digit or the mouse; tabbed or docked, Tab and
-  Shift-Tab cycle focus as anywhere and Esc does nothing (`Window::hint(over)` words the hint to
-  match). Enter on a row with a bindable
+  Shift-Tab cycle focus as anywhere and Esc does nothing (its status row words the keys to match). Enter on a row with a bindable
   target stores that target and its name in `capturing`, so what the next character binds is what the
   prompt named whatever rebuilt meanwhile; every key is consumed while capturing, a non-character
   cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
   Backspace is `Unbind`: a playlist loses its key, a built-in returns to its default, which
-  `clear_hotkey` refuses while another binding holds that default. Other rows answer Enter with a
-  `Flash` saying why they have no key. `Window::hint` puts the window's keys, or the capture prompt, on
-  the hint row (the footer of a `Screen` placement) while it has focus.
+  `clear_hotkey` refuses while another binding holds that default. Its last row is its own status row, so the body is two rows shorter than the window (title, status):
+  the capture prompt, else the last bind result (`Notice::Status`, styled as a warning when refused, until
+  the next key in the window), else what the row under the cursor allows or why it has no key.
+  `Notice::Status` goes to the focused window's `Window::set_status` when it has such a row, else to the hint row.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
@@ -109,13 +109,13 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
     list and re-follows it when the height changed.
   - `frame(ctx) -> WindowFrame`: the window's session-derived draw data, taken under the frame's one
     lock and memoized inside the component (`ListFrame` rows, Settings entries; Log and Vis are `Live`).
-  - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
+  - `draw(printer, focused, frame, over)`: windows the shell's printer to its own rect. The active tab's
     window is drawn unfocused: only docked and floating windows show the `[title]` focus marker.
   - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
-    `ToggleSetting(row)`, `Bind`/`Unbind`, `Flash(text)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
+    `ToggleSetting(row)`, `Bind`/`Unbind`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
-  - `blur()` when the window closes or another takes focus, and `hint() -> Option<String>`, the hint
-    row's text while it has focus; only Help has state to drop or keys of its own to name.
+  - `blur()` when the window closes or another takes focus, and `set_status(text, refused)`, a message
+    for the window's own status row; only Help has state to drop or such a row.
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
@@ -236,8 +236,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
   mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included.
   A modal's keys, its closing one included, leave it, so a result that lands behind the picker is
-  readable after Esc. A window or modal never writes it: it returns an outcome (a window's own
-  message is `WindowOutcome::Flash`) and the shell notifies.
+  readable after Esc. A window or modal never writes it: it returns an outcome and the shell notifies.
 - Inbound: `app/src/main.rs` loops `siv.step()` → `bus.drain()` → `Session::on_event` →
   `ui::deliver(events)` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
   `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by

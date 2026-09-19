@@ -23,9 +23,9 @@ impl MedleyView {
         let held = |by: &HotkeyTarget, view: &Self| format!("Can't bind '{key}': already used by built-in {}", view.hotkey_row_name_for(by));
         // A key the shell or a list reads first would never reach its binding.
         match self.with_session(|s| keybindings::taken(key, &s.hotkeys().into_iter().collect())) {
-            Some(Taken::Fixed) => return self.notify(Notice::Flash(format!("Can't bind '{key}': it is a fixed key"))),
+            Some(Taken::Fixed) => return self.refuse(format!("Can't bind '{key}': it is a fixed key")),
             Some(Taken::Builtin(action)) if target != HotkeyTarget::Builtin(action) => {
-                return self.notify(Notice::Flash(held(&HotkeyTarget::Builtin(action), self)));
+                return self.refuse(held(&HotkeyTarget::Builtin(action), self));
             }
             _ => {}
         }
@@ -49,35 +49,40 @@ impl MedleyView {
         let held = |by: &HotkeyTarget, view: &Self| format!("Can't bind '{key}': already used by built-in {}", view.hotkey_row_name_for(by));
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
         let name = self.hotkey_row_name_for(&target);
-        self.notify(Notice::Flash(match result {
+        match result {
             Ok(Some(stolen_from)) => {
                 let stolen_name = self.hotkey_row_name_for(&stolen_from);
-                format!("Bound '{key}' to {name} (moved from {stolen_name})")
+                self.notify(Notice::Status { text: format!("Bound '{key}' to {name} (moved from {stolen_name})"), refused: false })
             }
-            Ok(None) => format!("Bound '{key}' to {name}"),
-            Err(BindError::BuiltinKey(blocking)) => held(&blocking, self),
+            Ok(None) => self.notify(Notice::Status { text: format!("Bound '{key}' to {name}"), refused: false }),
+            Err(BindError::BuiltinKey(blocking)) => self.refuse(held(&blocking, self)),
             Err(BindError::SyntheticPlaylist) => {
-                format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead")
+                self.refuse(format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead"))
             }
-        }))
+        }
     }
 
-    pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) {
+    fn refuse(&mut self, text: String) -> EventResult {
+        self.notify(Notice::Status { text, refused: true })
+    }
+
+    pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
         // A built-in falling back onto a default that a playlist took meanwhile would be shadowed by it.
         if let HotkeyTarget::Builtin(action) = &target
             && let Some(holder) = self.with_session(|s| s.hotkey_for(action.default_key())).filter(|holder| holder != &target)
         {
             let (default, holder) = (action.default_key(), self.hotkey_row_name_for(&holder));
-            self.feedback = Some(format!("Can't restore '{default}': it is bound to {holder}, clear that first"));
-            return;
+            return self.refuse(format!("Can't restore '{default}': it is bound to {holder}, clear that first"));
         }
         let key = self.with_session(|s| s.playlist_hotkey(&target));
         self.with_session_mut(|s| s.unbind_hotkey(&target));
         // A built-in without its own entry answers to its default again.
         let default = self.with_session(|s| s.effective_hotkey(&target));
-        self.feedback = key.map(|k| match default {
-            Some(default) => format!("Unbound '{k}': back on '{default}'"),
-            None => format!("Unbound '{k}'"),
-        });
+        let Some(key) = key else { return EventResult::consumed() };
+        let text = match default {
+            Some(default) => format!("Unbound '{key}': back on '{default}'"),
+            None => format!("Unbound '{key}'"),
+        };
+        self.notify(Notice::Status { text, refused: false })
     }
 }

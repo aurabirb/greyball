@@ -279,10 +279,8 @@ impl MedleyView {
             }
             WindowOutcome::Bind(target, key) => self.bind_hotkey(target, key),
             WindowOutcome::Unbind(target) => {
-                self.clear_hotkey(target);
-                EventResult::consumed()
+                self.clear_hotkey(target)
             }
-            WindowOutcome::Flash(text) => self.notify(Notice::Flash(text)),
         }
     }
 
@@ -407,7 +405,7 @@ impl View for MedleyView {
             if self.windows.placement(placed.id) == Placement::Floating {
                 draw_float_frame(printer, placed.frame);
             }
-            window.draw(printer, marked, window_frame);
+            window.draw(printer, marked, window_frame, self.over_view(placed.id));
         }
 
         let chrome = &frame.chrome;

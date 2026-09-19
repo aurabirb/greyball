@@ -47,22 +47,6 @@
   no-argument command's item carries its built-in, which this item needs anyway), and let
   `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
   owner decision, do not make it a fixed-size array.
-- [ ] Give the Help/hotkey window its own status bar: the last inner row of the window (above the
-  bottom border/padding, inside its rect in every placement) shows the key instructions and the
-  binding feedback, instead of borrowing the shell's hint row underneath the float. Idle: the
-  instructions for the row under the cursor (`[Enter] rebind   [Backspace] default   [Tab] next
-  section   [Esc] close`, or why this row can't be bound). Capturing: `press a key for <name> —
-  [Esc] cancel`. After a bind attempt: the result — bound, moved from, refused (`'x' is a fixed
-  key`, `already used by built-in …`), restored default — styled as a warning when it is a
-  refusal, staying until the next key press in the window. Today these come from `Window::hint()`
-  and `WindowOutcome::Flash` → the shell's single feedback slot (`ui/src/view/help.rs`,
-  `notice.rs`, `hint_line`); route the Help window's own bind/refusal messages to its status bar
-  (the window returns the outcome, the shell hands the formatted text back, or the window formats
-  it itself — whichever keeps `notice.rs` the one place that words messages) and keep the shell
-  slot for everything else. The window's layout memo reserves the row (list height = body − 1);
-  draw and click hit-test share that layout. If the generic float frame later grows a footer slot
-  any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
-  it once there rather than per window.
 - [ ] A track whose duration is unknown (shown as 0:00, no scrubber) doesn't auto-advance when it
   ends — playback just stops and the next track never starts. Suspects, by reading: end-of-track
   detection that depends on `duration_ms` (a position ≥ duration check that can never fire when

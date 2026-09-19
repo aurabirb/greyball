@@ -54,8 +54,6 @@ pub(super) enum WindowOutcome {
     ToggleSetting(usize),
     Bind(HotkeyTarget, char),
     Unbind(HotkeyTarget),
-    /// Show this on the hint row.
-    Flash(String),
 }
 
 /// A window's session-derived draw data, taken under the frame's one lock.
@@ -119,12 +117,13 @@ impl Window {
         }
     }
 
-    /// The hint row's text while this window has focus, if it has keys of its own to name.
-    pub(super) fn hint(&self, over: bool) -> Option<String> {
-        match &self.body {
-            Body::Help(help) => Some(help.hint(over)),
-            _ => None,
+    /// Puts a message on the window's own status row; false when it has none.
+    pub(super) fn set_status(&mut self, text: &str, refused: bool) -> bool {
+        match &mut self.body {
+            Body::Help(help) => help.set_status(text.to_string(), refused),
+            _ => return false,
         }
+        true
     }
 
     /// Brings a list's scroll window back around its cursor.
@@ -143,15 +142,15 @@ impl Window {
         }
     }
 
-    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`.
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame) {
+    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `over` that it is shown over the view.
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, over: bool) {
         let printer = &printer.windowed(self.rect);
         match (&self.body, frame) {
             (Body::List(list), WindowFrame::List(frame)) => list.draw(printer, focused, frame),
             (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(printer, entries, focused),
             (Body::Log(log), _) => log.draw(printer, focused),
             (Body::Vis(vis), _) => vis.draw(printer, focused),
-            (Body::Help(help), WindowFrame::Help(built)) => help.draw(printer, focused, built),
+            (Body::Help(help), WindowFrame::Help(built)) => help.draw(printer, focused, built, over),
             (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
         }
     }

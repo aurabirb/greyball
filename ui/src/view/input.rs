@@ -172,6 +172,13 @@ impl MedleyView {
                 self.feedback = Some(text);
                 EventResult::consumed()
             }
+            Notice::Status { text, refused } => {
+                let focused = self.focused_id();
+                if !self.windows[focused].set_status(&text, refused) {
+                    self.feedback = Some(text);
+                }
+                EventResult::consumed()
+            }
             // One notice dialog at most: a batch of failures reads as one list, dismissed once.
             Notice::Popup(msg) => EventResult::with_cb(move |c: &mut Cursive| {
                 if c.call_on_name(NOTICE_TEXT, |text: &mut TextView| text.append(format!("\n\n{msg}"))).is_none() {
@@ -324,11 +331,6 @@ impl MedleyView {
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
-                if let Focus::Window(id) = self.focus
-                    && let Some(hint) = self.windows[id].hint(self.over_view(id))
-                {
-                    return format!("  {hint}");
-                }
                 if let Some(hint) = self.screen_hint() {
                     return format!("  {hint}");
                 }
