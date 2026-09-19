@@ -97,7 +97,7 @@ pub struct MedleyView {
     marquee: Marquee,
     /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
     follow_sig: Memo<(WindowId, u64, (u64, usize))>,
-    chrome: Memo<u64, Arc<Chrome>>,
+    chrome: Memo<(u64, u64), Arc<Chrome>>,
 }
 
 impl MedleyView {

@@ -294,6 +294,10 @@ struct Shown {
     player_state: PlayerState,
     volume: f32,
     context: Option<PlaybackContext>,
+}
+
+/// What the warnings button counts; kept apart from `Shown` so a warning moves only `warnings_revision`, never a list's rows.
+struct Warned {
     /// Cache of `plugin_statuses`: a probe can do disk or network I/O, so it never runs per frame.
     plugin_health: Vec<(SourceId, PluginHealth)>,
     failures: Vec<(String, String)>,
@@ -418,6 +422,7 @@ pub struct Session {
     history_path: PathBuf,
 
     shown: Revised<Shown>,
+    warned: Revised<Warned>,
     /// Per-tick (position, duration) in ms; outside `shown` so a tick never moves `revision`.
     progress: (u32, u32),
     /// The `Player` actually driving `now_playing`, set in `start_playback` —
@@ -503,8 +508,6 @@ impl Session {
             player_state: PlayerStatus::default().state,
             volume: cfg.volume.clamp(0.0, 1.0),
             context,
-            plugin_health: Vec::new(),
-            failures: Vec::new(),
         };
         let mut plugin_commands = HashMap::new();
         for p in &plugins {
@@ -531,6 +534,7 @@ impl Session {
             load_failures: 0,
             history_path,
             shown: Revised::new(shown),
+            warned: Revised::new(Warned { plugin_health: Vec::new(), failures: Vec::new() }),
             progress: (0, 0),
             now_playing_player: None,
             link_pick: None,
@@ -547,6 +551,11 @@ impl Session {
     /// Monotonic; moves on any UI-visible change. Each list also has its own generation, held by its owner.
     pub fn revision(&self) -> u64 {
         self.shown.revision()
+    }
+
+    /// Monotonic; moves when the warnings button's count or the plugin health behind it may have changed.
+    pub fn warnings_revision(&self) -> u64 {
+        self.warned.revision()
     }
 
     pub fn context_gen(&self) -> u64 {
@@ -840,26 +849,26 @@ impl Session {
     /// Every registered plugin's id + cached health — see `plugin_health`.
     /// Cheap: just a clone of the cache, no probing.
     pub fn plugin_statuses(&self) -> &[(SourceId, PluginHealth)] {
-        &self.shown.plugin_health
+        &self.warned.plugin_health
     }
 
     /// What the warnings button counts: plugins not `Ok`, plus this session's background failures.
     pub fn warning_count(&self) -> usize {
-        self.shown.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count() + self.shown.failures.len()
+        self.warned.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count() + self.warned.failures.len()
     }
 
     /// This session's background failures, oldest first, as `(context, message)`.
     pub fn background_failures(&self) -> &[(String, String)] {
-        &self.shown.failures
+        &self.warned.failures
     }
 
     /// Lists a background failure under the warnings; a repeat is not listed twice and the oldest makes room.
     pub fn warn(&mut self, context: &str, message: &str) {
         log::warn!("{context}: {message}");
-        if self.shown.failures.iter().any(|(c, m)| c == context && m == message) {
+        if self.warned.failures.iter().any(|(c, m)| c == context && m == message) {
             return;
         }
-        let failures = &mut self.shown.write().failures;
+        let failures = &mut self.warned.write().failures;
         if failures.len() == MAX_BACKGROUND_FAILURES {
             failures.remove(0);
         }
@@ -887,7 +896,7 @@ impl Session {
     pub fn refresh_plugin_health(&mut self) {
         let probed: Vec<(SourceId, PluginHealth)> = self.plugins.iter().map(|p| (p.id(), p.probe())).collect();
         let health = self.overlay_setup(probed);
-        self.shown.write().plugin_health = health;
+        self.warned.write().plugin_health = health;
     }
 
     /// Applies health values already probed off the session lock — by
@@ -898,10 +907,10 @@ impl Session {
     /// differs, so an unchanged tick causes no rewire/redraw.
     pub fn apply_probed_plugin_health(&mut self, probed: Vec<(SourceId, PluginHealth)>) -> bool {
         let health = self.overlay_setup(probed);
-        if health == self.shown.plugin_health {
+        if health == self.warned.plugin_health {
             return false;
         }
-        self.shown.write().plugin_health = health;
+        self.warned.write().plugin_health = health;
         true
     }
 
@@ -1375,7 +1384,7 @@ impl Session {
     pub fn ensure_remote_playlists(&self) {
         let ctx = self.remote_ctx();
         for source in self.source_ids() {
-            if self.shown.plugin_health.iter().any(|(id, health)| *id == source && !health.is_ok()) {
+            if self.warned.plugin_health.iter().any(|(id, health)| *id == source && !health.is_ok()) {
                 continue;
             }
             self.view.ensure_remote_playlists(&source, ctx);
@@ -1387,7 +1396,7 @@ impl Session {
     fn ensure_liked_lists(&self) {
         let ctx = self.remote_ctx();
         for (id, source) in &self.sources {
-            let healthy = self.shown.plugin_health.iter().any(|(pid, health)| pid == id && health.is_ok());
+            let healthy = self.warned.plugin_health.iter().any(|(pid, health)| pid == id && health.is_ok());
             if let Some(node) = source.liked_songs_node().filter(|_| healthy) {
                 self.view.ensure_remote_playlist_loading(id, &node, ctx);
             }

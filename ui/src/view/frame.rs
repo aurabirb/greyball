@@ -28,7 +28,7 @@ impl MedleyView {
         self.with_session(|s| {
             let ctx = self.ctx(s);
             let windows = placed.iter().map(|placed| self.windows[placed.id].frame(&ctx)).collect();
-            let chrome = self.chrome.get_or_build(s.revision(), || {
+            let chrome = self.chrome.get_or_build((s.revision(), s.warnings_revision()), || {
                 Arc::new(Chrome {
                     status: StatusCore::snapshot(s),
                     warn_count: s.warning_count(),
