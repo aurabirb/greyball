@@ -260,9 +260,9 @@ fn save_state(
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
     }
     if !hotkeys.is_empty() {
-        text.push_str("\n[hotkeys]\n");
-        for (k, target) in hotkeys {
-            text.push_str(&format!("\"{k}\" = \"{}\"\n", hotkey_target_to_string(target)));
+        let table: toml::Table = hotkeys.iter().map(|(k, target)| (k.to_string(), hotkey_target_to_string(target).into())).collect();
+        if let Ok(table) = toml::to_string(&toml::Table::from_iter([("hotkeys".to_string(), toml::Value::Table(table))])) {
+            text.push_str(&format!("\n{table}"));
         }
     }
     if !source_overrides.is_empty() {
