@@ -158,7 +158,15 @@ impl MedleyView {
         let open_tab = open.iter().any(|id| tabs.contains(id));
         // A second open fullscreen window would sit unseen under the first.
         let screens = placed.iter().filter(|(id, placement)| *placement == Placement::Screen && open.contains(id)).count();
-        if repeats(&all) || all.len() != self.windows.ids().count() || repeats(&open) || open_tab || screens > 1 {
+        let placed_right = |id: WindowId| {
+            if self.windows.is_startup_tab(id) {
+                tabs.contains(&id)
+            } else {
+                !self.windows.is_companion(id) || !tabs.contains(&id)
+            }
+        };
+        let fixed = self.windows.ids().all(placed_right);
+        if !fixed || repeats(&all) || all.len() != self.windows.ids().count() || repeats(&open) || open_tab || screens > 1 {
             return None;
         }
         for &id in &tabs {
@@ -192,15 +200,9 @@ impl MedleyView {
         self.fullscreen().unwrap_or(self.active)
     }
 
-    /// Each tab's name in tab order; a second tab of one kind is numbered.
+    /// Each tab's name in tab order.
     fn tab_names(&self) -> Vec<String> {
-        let kind = |id: WindowId| self.windows[id].kind;
-        (0..self.tabs.len())
-            .map(|i| match self.tabs[..i].iter().filter(|&&tab| kind(tab) == kind(self.tabs[i])).count() {
-                0 => kind(self.tabs[i]).label().to_string(),
-                earlier => format!("{} {}", kind(self.tabs[i]).label(), earlier + 1),
-            })
-            .collect()
+        self.tabs.iter().map(|&id| self.windows[id].kind.label().to_string()).collect()
     }
 
     fn active_tab(&self) -> usize {

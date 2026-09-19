@@ -237,6 +237,21 @@ impl Windows {
         WINDOWS.iter().position(|startup| startup.name == name).map(WindowId)
     }
 
+    /// The companion of a startup tab.
+    pub(super) fn companion(&self, id: WindowId) -> Option<WindowId> {
+        let name = WINDOWS[id.0].name;
+        WINDOWS.iter().position(|startup| startup.companion_of == Some(name)).map(WindowId)
+    }
+
+    pub(super) fn is_companion(&self, id: WindowId) -> bool {
+        WINDOWS[id.0].companion_of.is_some()
+    }
+
+    /// A startup tab: it stays in the tab bar.
+    pub(super) fn is_startup_tab(&self, id: WindowId) -> bool {
+        WINDOWS[id.0].home == Home::Tab
+    }
+
     pub(super) fn name(&self, id: WindowId) -> &'static str {
         WINDOWS[id.0].name
     }

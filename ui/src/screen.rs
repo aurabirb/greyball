@@ -97,10 +97,16 @@ pub struct Startup {
     pub home: Home,
     /// A Playlists list puts the playlists that have a key first.
     pub keyed_first: bool,
+    /// The startup tab this window is the companion of: it opens and cycles in the tab's place, and never joins the tab bar.
+    pub companion_of: Option<&'static str>,
 }
 
 const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {
-    Startup { name, kind, home, keyed_first: false }
+    Startup { name, kind, home, keyed_first: false, companion_of: None }
+}
+
+const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str) -> Startup {
+    Startup { companion_of: Some(of), ..startup(name, kind, home) }
 }
 
 /// The window the `TogglePlaylistKeys` key opens over whatever is shown.
@@ -109,8 +115,8 @@ pub const PLAYLIST_KEYS: &str = "playlist-keys";
 /// The window the `OpenHelp` key and `:help` open over whatever is shown.
 pub const HELP: &str = "help";
 
-/// Every window startup builds, tabs first in tab order; Queue, History and Playlists each have two instances.
-pub const WINDOWS: [Startup; 12] = [
+/// Every window startup builds, tabs first in tab order; each tab has a companion instance.
+pub const WINDOWS: [Startup; 14] = [
     startup("now-playing", Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
@@ -119,8 +125,10 @@ pub const WINDOWS: [Startup; 12] = [
     startup("log", Kind::Log, Home::Pane),
     startup("settings", Kind::Settings, Home::Pane),
     startup("vis", Kind::Vis, Home::Pane),
-    startup("queue", Kind::List(ListKind::Queue), Home::Pane),
-    startup("history", Kind::List(ListKind::History), Home::Pane),
-    Startup { keyed_first: true, ..startup(PLAYLIST_KEYS, Kind::List(ListKind::Playlists), Home::Float) },
+    companion("playing", Kind::List(ListKind::NowPlaying), Home::Pane, "now-playing"),
+    companion("results", Kind::List(ListKind::Search), Home::Pane, "search"),
+    companion("queue", Kind::List(ListKind::Queue), Home::Pane, "queue-tab"),
+    companion("history", Kind::List(ListKind::History), Home::Pane, "history-tab"),
+    Startup { keyed_first: true, ..companion(PLAYLIST_KEYS, Kind::List(ListKind::Playlists), Home::Float, "playlists") },
     startup(HELP, Kind::Help, Home::Float),
 ];

@@ -79,21 +79,6 @@
   draw and click hit-test share that layout. If the generic float frame later grows a footer slot
   any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
   it once there rather than per window.
-- [ ] The five startup tabs (Now Playing, Playlists, Search, History, Queue) are static: the
-  placement key (`M`, `BuiltinAction::CyclePlacement`) on one of them never removes it from the tab
-  bar. Instead it opens a SECOND window of the same kind and cycles that one: first press → the
-  companion opens embedded (docked) and takes focus, further presses → screen → float, and the step
-  that would make it tabbed closes it instead (focus returns to the tab). Pressing `M` again on the
-  tab re-opens the companion where the cycle starts. `M` with the companion focused continues its
-  cycle the same way. The companion is its own instance (own cursor, filter, open playlist, memos),
-  like today's `queue`/`history` pane windows — those ARE the Queue/History tabs' companions;
-  Now Playing, Playlists and Search each get one in `screen::WINDOWS` (for Playlists see the
-  backtick item below — one companion, not two). `:panes <tab-window> <mode>` follows the same
-  rule (a startup tab can't leave the tab bar; the command targets its companion) and the
-  "last tab stays tabbed" refusal becomes unreachable for them. Non-startup windows (Log,
-  Settings, Vis, Help) keep today's behaviour: `M` moves the window itself, including into and out
-  of the tab bar. Layout persistence (`state.toml [layout]`) keeps working; a saved layout that has
-  a startup tab elsewhere → default layout.
 - [ ] A track whose duration is unknown (shown as 0:00, no scrubber) doesn't auto-advance when it
   ends — playback just stops and the next track never starts. Suspects, by reading: end-of-track
   detection that depends on `duration_ms` (a position ≥ duration check that can never fire when

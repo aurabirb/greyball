@@ -250,15 +250,26 @@ impl MedleyView {
 
     /// Moves `id`, keeping a shown window shown and a focused one focused; only `cover` lets it take the whole screen.
     pub(super) fn set_placement(&mut self, id: WindowId, placement: Placement, cover: bool) -> bool {
+        // A startup tab never moves: its companion does, and opens if it was closed.
+        let id = match self.windows.companion(id) {
+            Some(companion) => {
+                let opens = placement != Placement::Tabbed && (cover || placement != Placement::Screen);
+                if opens && !self.open.iter().any(|&(open, _)| open == companion) {
+                    self.open.push((companion, self.focus));
+                }
+                companion
+            }
+            None => id,
+        };
+        if placement == Placement::Tabbed && self.windows.is_companion(id) {
+            self.close_window(id);
+            return true;
+        }
         let (from, focused) = (self.windows.placement(id), self.focus == Focus::Window(id));
         if from == placement {
             return true;
         }
         let shown = match self.tabs.iter().position(|&tab| tab == id) {
-            Some(_) if self.tabs.len() == 1 => {
-                self.feedback = Some(format!("{}: the last tab stays tabbed", self.windows[id].kind.label()));
-                return false;
-            }
             Some(i) => {
                 self.tabs.remove(i);
                 let active = self.active == id;
@@ -288,6 +299,18 @@ impl MedleyView {
     /// `Action::CyclePlacement`: the focused window moves on one placement, and the hint row names it.
     pub(super) fn cycle_placement(&mut self) {
         let id = self.focused_id();
+        if let Some(companion) = self.windows.companion(id) {
+            if self.set_placement(id, Placement::Docked, true) {
+                self.focus_window(companion);
+                self.feedback = Some(format!("{}: {}", self.windows[id].kind.label(), Placement::Docked.word()));
+            }
+            return;
+        }
+        if self.windows.is_companion(id) && self.windows.placement(id) == Placement::Floating {
+            self.close_window(id);
+            self.feedback = Some(format!("{}: closed", self.windows[id].kind.label()));
+            return;
+        }
         let at = Placement::CYCLE.iter().position(|&placement| placement == self.windows.placement(id)).unwrap_or(0);
         let next = Placement::CYCLE[(at + 1) % Placement::CYCLE.len()];
         if self.set_placement(id, next, true) {

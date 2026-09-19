@@ -16,8 +16,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Log`, `Settings`, `Vis`, `Help`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
   `ListKind`s). Startup adds one window per entry of `screen::WINDOWS`, which gives each the name
   `:panes`, `:window` and `state.toml` know it by: the five tabs (`now-playing`, `playlists`, `search`,
-  `history-tab`, `queue-tab`), the five panes (`log`, `settings`, `vis`, `queue`, `history`) and the two
-  that start floating and closed, `playlist-keys` and `help`. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
+  `history-tab`, `queue-tab`), the three panes (`log`, `settings`, `vis`), the tabs' companions (`playing`, `results`,
+  `queue`, `history`, and `playlist-keys` for Playlists) and `help`; `playlist-keys` and `help` start floating and closed. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
   placed by `Config::panes`, or floating) and carries its instance settings. The Queue
   tab and the Queue pane are two instances of one kind, each with its own cursor, scroll window, filter
   and memos; nothing may assume a window is the only instance of its kind, that it is a list, that it
@@ -28,15 +28,17 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   so a `Ctx` can lend the Settings pane all of them while one window is borrowed mutably;
   `Windows::place` is its one write and bumps `Placements::generation`. `MedleyView::set_placement` is
   the one caller: it keeps `tabs` and `open` in step, keeps a shown window shown and a focused one
-  focused, and refuses to move the last tab (a flash). `:panes [<window>] <placement>` goes through it
+  focused. A startup tab never moves: a `Startup::companion_of` window is its companion, an instance of
+  its own (cursor, filter, memos) that never joins the tab bar, and every placement asked of the tab
+  (`M`, `:panes <tab>`) goes to the companion, opening it if closed; `tabbed` closes it. `:panes [<window>] <placement>` goes through it
   (without a name: every window that is not a tab right now, but for a `Home::Float` one, whose job is
   to float; to `screen` it only closes an open window), and so does the
   `CyclePlacement` key (`M`), which moves the focused window Tabbed → Docked → Screen → Floating and
-  flashes the new placement.
+  flashes the new placement; on a startup tab it opens and focuses its companion docked, on a
+  companion it goes Docked → Screen → Floating → closed (focus back to what it opened over).
 - The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
   appended, never empty. `active` is the one shown; when it moves away its right neighbour takes over.
-  `1`-`9` and a tab click select by position (`Action::Tab`); `tab_names` numbers a second tab of one
-  kind ("Queue 2"). `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
+  `1`-`9` and a tab click select by position (`Action::Tab`); `tab_names` labels them by kind. `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
   order and z-order, each with the focus it opened over. `show(id)` brings any window into view (its
   tab, else opened and focused) and is what `/`, `:hist` and `:open <playlist link>` use; `toggle_window`
   (`:window <name>`, `:log`, …) opens or closes a non-tab window and switches to a tabbed one.
@@ -94,7 +96,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
-  windows with at least one tab and at most one open `screen` window. The default
+  windows, every startup tab tabbed and no companion, with at most one open `screen` window. The default
   layout starts on its first tab.
 - A floating window sits inside the padded box the shell draws around it
   (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window

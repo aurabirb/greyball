@@ -110,7 +110,7 @@ pub const ITEMS: &[Item] = &[
         &["panes", "p"],
         "[<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
-        "Window names as for :window; without one, every window that is not a tab moves. The last tab stays tabbed.",
+        "Window names as for :window; without one, every window that is not a tab moves. A startup tab stays tabbed: naming it moves its companion window (tabbed closes it).",
     ),
     keyed(command(&["togglescan", "ts"], "", "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."), BuiltinAction::ToggleScan),
     keyed(command(&["toggleshuffle", "sh"], "", "toggle queue shuffle", ""), BuiltinAction::ToggleShuffle),
