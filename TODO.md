@@ -170,7 +170,9 @@
   whose `bpm` attr is within a tolerance of the reference (the BPM scan's values live in the track
   attrs, `t.attrs["bpm"]`) — but keep the comparison behind one function so other attributes can be
   added later. Only tracks that are cached count; results sort by distance and open as a normal
-  track list window (same paths as Search results).
+  track list window (same paths as Search results). It must work in any placement — docked next to
+  the playing track's list is the main use: keep playing, watch the similar tracks follow the
+  playing track, and queue the ones you like with the normal queue keys.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
