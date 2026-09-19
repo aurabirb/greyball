@@ -1725,6 +1725,20 @@ impl Session {
         Arc::make_mut(&mut self.cfg).auto_update = on;
     }
 
+    /// Validates and stores the media cache directory for the next launch; returns the absolute path.
+    pub fn set_media_cache_dir(&mut self, text: &str) -> std::result::Result<PathBuf, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("cache directory is empty".into());
+        }
+        let dir = std::path::absolute(crate::config::expand_home(text)).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        tempfile::NamedTempFile::new_in(&dir).map_err(|e| format!("{} is not writable: {e}", dir.display()))?;
+        self.touch();
+        Arc::make_mut(&mut self.cfg).media_cache_dir = dir.clone();
+        Ok(dir)
+    }
+
     /// Downloads a newer release in the background; a failure is a warning, being current or not ready is silent.
     pub fn check_for_update(&self) {
         if !self.cfg.auto_update || INSTALLED.load(Ordering::Relaxed) {

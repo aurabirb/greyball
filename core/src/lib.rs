@@ -34,7 +34,7 @@ pub use app::{
 pub use view_cache::PendingRows;
 pub use catalog::Catalog;
 pub use config::{
-    Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
+    expand_home, tilde, Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
     SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES, VisConfig,
 };
 pub use audio_decode::decode_and_cache;

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use cursive::{Printer, Rect};
@@ -8,6 +9,7 @@ use core::{PaneLayoutConfig, ScanMode, Session, TOGGLABLE_SOURCES};
 use crate::screen::Kind;
 
 use super::MedleyView;
+use super::input::Editing;
 use super::memo::Memo;
 use super::scroll::ListState;
 use super::text::pad;
@@ -27,6 +29,8 @@ pub(super) enum SettingsEntry {
     StatusLine(bool),
     ShowHints(bool),
     AutoUpdate(bool),
+    /// Media cache directory — Enter edits it; applies at the next launch.
+    CacheDir(PathBuf),
 }
 
 const VIS_FPS_STEPS: [u32; 6] = [10, 15, 20, 30, 45, 60];
@@ -41,6 +45,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::StatusLine(shown) => format!("[{}] status line", if *shown { "x" } else { " " }),
         SettingsEntry::ShowHints(shown) => format!("[{}] hints", if *shown { "x" } else { " " }),
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
+        SettingsEntry::CacheDir(dir) => format!("cache.dir:        {}", core::tilde(dir)),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
     }
@@ -66,6 +71,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     v.push(SettingsEntry::StatusLine(cfg.status_line));
     v.push(SettingsEntry::ShowHints(cfg.show_hints));
     v.push(SettingsEntry::AutoUpdate(cfg.auto_update));
+    v.push(SettingsEntry::CacheDir(cfg.media_cache_dir.clone()));
     v.push(SettingsEntry::Info(String::new()));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
     v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
@@ -144,6 +150,10 @@ impl MedleyView {
                 self.show_hints = !shown;
             }
             SettingsEntry::AutoUpdate(on) => self.with_session_mut(|s| s.set_auto_update(!on)),
+            SettingsEntry::CacheDir(dir) => {
+                self.editing = Editing::CacheDir;
+                self.buffer = core::tilde(&dir);
+            }
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
         }
     }

@@ -25,6 +25,8 @@ pub(super) enum Editing {
     CommandLine,
     /// Collecting a `SetupKind::TextInput` value for the warnings-panel plugin selected.
     PluginSetup(SourceId),
+    /// Typing the media cache directory (Settings).
+    CacheDir,
     /// Screen-local fuzzy filter (`/` on any track-list screen other than Search itself).
     Filter,
 }
@@ -138,6 +140,10 @@ impl MedleyView {
                 self.run_plugin_setup(id, Some(text));
                 EventResult::consumed()
             }
+            Editing::CacheDir => match self.with_session_mut(|s| s.set_media_cache_dir(&text)) {
+                Ok(dir) => self.notify(Notice::Flash(format!("cache dir {}: restart to use it (old cache not moved)", core::tilde(&dir)))),
+                Err(e) => self.notify(Notice::failed(e)),
+            },
             Editing::Filter => {
                 self.set_filter(Some(text.as_str()).filter(|t| !t.trim().is_empty()));
                 EventResult::consumed()
@@ -362,6 +368,7 @@ impl MedleyView {
             Editing::Search | Editing::Filter => Some(format!("/{}", self.buffer)),
             Editing::CommandLine => Some(format!(":{}", self.buffer)),
             Editing::PluginSetup(_) => Some(format!("> {}", self.buffer)),
+            Editing::CacheDir => Some(format!("cache dir> {}", self.buffer)),
             Editing::None => None,
         }
     }

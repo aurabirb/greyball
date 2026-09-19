@@ -2,6 +2,7 @@
 //! passes a `Config` value in.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,8 @@ pub struct Config {
     pub show_hints: bool,
     /// Whether a newer release is downloaded in the background at startup.
     pub auto_update: bool,
+    /// Media cache directory; changing it applies at the next launch.
+    pub media_cache_dir: PathBuf,
     pub theme: String,
     /// Persisted player volume, 0.0..=1.0.
     pub volume: f32,
@@ -43,6 +46,25 @@ pub struct Config {
 
 /// Sources the Settings pane / `state.toml` can toggle by name.
 pub const TOGGLABLE_SOURCES: [&str; 4] = ["http", "spotify", "soundcloud", "soulseek"];
+
+/// `~` and `~/x` expanded against `$HOME`.
+pub fn expand_home(text: &str) -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    match text.strip_prefix('~') {
+        Some("") => home,
+        Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        _ => PathBuf::from(text),
+    }
+}
+
+/// `path` with a leading `$HOME` shown as `~`.
+pub fn tilde(path: &std::path::Path) -> String {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    match path.strip_prefix(&home) {
+        Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
+        _ => path.display().to_string(),
+    }
+}
 
 impl Config {
     /// `enabled` bit for one of `TOGGLABLE_SOURCES`, `None` for any other name.
@@ -256,6 +278,7 @@ impl Default for Config {
             status_line: true,
             show_hints: true,
             auto_update: true,
+            media_cache_dir: PathBuf::new(),
             theme: "default".to_string(),
             volume: 1.0,
         }

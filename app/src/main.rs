@@ -249,6 +249,12 @@ fn save_last_played(last: &LastPlayed) {
     }
 }
 
+fn load_media_cache_dir() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("media_cache_dir")?.as_str().map(PathBuf::from)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn save_state(
     last_played: Option<&LastPlayed>,
@@ -257,6 +263,7 @@ fn save_state(
     status_line: Option<bool>,
     show_hints: Option<bool>,
     auto_update: Option<bool>,
+    media_cache_dir: Option<&std::path::Path>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
@@ -275,6 +282,9 @@ fn save_state(
     }
     if let Some(on) = auto_update {
         text.push_str(&format!("auto_update = {on}\n"));
+    }
+    if let Some(dir) = media_cache_dir {
+        text.push_str(&format!("media_cache_dir = {}\n", toml::Value::String(dir.to_string_lossy().into_owned())));
     }
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
@@ -450,6 +460,13 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(on) = load_auto_update() {
         cfg.auto_update = on;
     }
+    if cfg.media_cache_dir.as_os_str().is_empty() {
+        cfg.media_cache_dir = data_dir().join("media-cache");
+    }
+    let config_media_cache_dir = cfg.media_cache_dir.clone();
+    if let Some(dir) = load_media_cache_dir() {
+        cfg.media_cache_dir = dir;
+    }
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
     }
@@ -526,7 +543,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // re-decrypting/re-decoding it. Takes `store` only to resolve a
     // human-readable filename and to prune entries for tracks the store no
     // longer has — never to originate a fetch.
-    let media_cache = Arc::new(MediaCache::new(data_dir().join("media-cache"), store.clone()));
+    let media_cache = Arc::new(MediaCache::new(cfg.media_cache_dir.clone(), store.clone()));
     {
         let media_cache = media_cache.clone();
         std::thread::spawn(move || media_cache.prune_orphans());
@@ -736,7 +753,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
     let show_hints = Some(s.cfg.show_hints).filter(|&shown| shown != config_show_hints);
     let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
-    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, media_cache_dir, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())
