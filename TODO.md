@@ -253,9 +253,14 @@
   row starts with none; `effective_target_at`, `builtin_at`, `effective_hotkey` and `default_key`
   follow), `keybindings::map` runs the action, and `command::parse` can return the item's built-in for
   a no-argument command instead of one arm per word. Remove each from `fixed` as it becomes a built-in
-  so `keybindings::taken` keeps knowing every taken key. Undecided: `>`/`<` and the arrows seek are
-  second keys for next/previous/seek, which one-key-per-target `Hotkeys` cannot hold — drop them, keep
-  them fixed (today; the rows say so in their detail line), or let a target hold several keys. A new
+  so `keybindings::taken` keeps knowing every taken key. Commands that TAKE an argument are bindable
+  too: pressing the bound key opens the command line with the command's long name and a trailing
+  space typed in (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the argument, Enter runs it
+  and Esc cancels — the path `+` already uses for `newplaylist ` (`Action::NewPlaylistPrompt`);
+  generalize that one action to "prompt for item N" instead of adding one per command. A command
+  with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
+  run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
+  (the rows say so in their detail line). `o` becomes the default key for `:open`. A new
   default key can collide with a persisted playlist hotkey, so land the `set_hotkeys` validation (Bugs:
   "A playlist hotkey persisted in `state.toml` can shadow a built-in key") with or before it.
 - [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
