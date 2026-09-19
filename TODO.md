@@ -61,6 +61,17 @@
   `ui/src/items.rs`): the no-argument `:`-commands first, as the "bindable Help rows" item above
   describes; leave the argument commands and Space/`x` to that item.
 ### Bugs
+- [ ] Playback sometimes sticks on the last second of a track and never advances, and some tracks
+  show 0:00 with an empty scrubber. Investigate and fix both, assuming they may share a cause
+  (position/duration reporting: the player's `Progress`, the catalog duration, the end-of-track
+  detection — `Session::on_player_event`, `RodioPlayer::tick`, `player/src/rodio_player.rs`, the
+  Spotify player's `EndOfTrack` — and how the UI treats duration 0). Collect evidence first from
+  `~/.local/share`/`~/.local/state/medley/medley.log` (`RUST_LOG=debug`): which source and player
+  handled each stuck or 0:00 track, cached vs streamed, whether the file's real length differs from
+  the catalog duration, and what the last `PlayerEvent`s were. Cover both a track that stops
+  advancing within its last second (position stops short of `duration_ms`, sink never drains or
+  `Finished` is swallowed by the generation guard) and a track whose duration stays 0 while it
+  plays.
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
   query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag

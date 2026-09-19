@@ -101,7 +101,7 @@ impl BuiltinAction {
         (BuiltinAction::Unlike, 'L'),
         (BuiltinAction::SwitchPlaylists, '`'),
         (BuiltinAction::OpenHelp, '?'),
-        (BuiltinAction::RevealPlaying, 'c'),
+        (BuiltinAction::RevealPlaying, '0'),
     ];
 
     /// This action's hardcoded default key — panics only if `ALL` is missing
