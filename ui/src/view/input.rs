@@ -50,13 +50,11 @@ pub(super) fn key_name(event: &Event) -> Option<String> {
 impl MedleyView {
     /// Run a plugin-registered `:`-command (e.g. `:spotify addlogin`) on a background thread.
     fn run_plugin_command(&self, plugin: Arc<dyn Plugin>, word: String, arg: Option<String>) -> EventResult {
-        let feedback = self.with_session(|s| s.plugin_command_result_handle());
         let bus = self.with_session(|s| s.bus.clone());
         thread::spawn(move || {
             let msg = plugin.run_command(&word, arg);
             bus.send(CoreEvent::PluginStatusChanged);
-            *feedback.lock().unwrap() = Some(msg);
-            bus.send(CoreEvent::PluginCommandResult);
+            bus.send(CoreEvent::PluginCommandResult(msg));
         });
         EventResult::consumed()
     }
@@ -149,7 +147,7 @@ impl MedleyView {
         }
     }
 
-    pub(super) fn run(&mut self, cmd: Command) -> EventResult {
+    pub(crate) fn run(&mut self, cmd: Command) -> EventResult {
         match self.with_session_mut(|s| s.dispatch(cmd)) {
             Ok(Dispatch::Quit) => EventResult::with_cb(|c: &mut Cursive| c.quit()),
             Ok(outcome) => Notice::of_dispatch(outcome).map_or_else(EventResult::consumed, |n| self.notify(n)),
@@ -157,7 +155,7 @@ impl MedleyView {
         }
     }
 
-    pub(super) fn notify(&mut self, notice: Notice) -> EventResult {
+    pub(crate) fn notify(&mut self, notice: Notice) -> EventResult {
         match notice {
             Notice::Flash(text) => {
                 self.feedback = Some(text);
@@ -173,14 +171,12 @@ impl MedleyView {
             .with_session(|s| s.store.get_track(id).ok().flatten())
             .map(|t| format!("{} - {}", t.display_artist(), t.title))
             .unwrap_or_else(|| "this track".to_string());
-        let session = self.session.clone();
         EventResult::with_cb(move |c: &mut Cursive| {
-            let session = session.clone();
             let dialog = Dialog::text(format!("Remove {name:?} from Liked Songs?"))
                 .title("Unlike")
                 .button("Remove", move |c| {
-                    let _ = session.lock().unwrap().dispatch(Command::Unlike(id));
                     c.pop_layer();
+                    crate::on_root(c, |view| view.run(Command::Unlike(id)));
                 })
                 .dismiss_button("Cancel");
             c.add_layer(dialog);
@@ -303,30 +299,20 @@ impl MedleyView {
     }
 
     /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
-    pub(super) fn hint_line(
-        &self,
-        membership_feedback: Option<String>,
-        hotkey_target_selected: bool,
-        help_key: Option<char>,
-    ) -> String {
+    pub(super) fn hint_line(&self, hotkey_target_selected: bool, help_key: Option<char>) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
-            Editing::None => self
-                .feedback
-                .clone()
-                .or(membership_feedback)
-                .map(|m| format!("  {m}"))
-                .unwrap_or_else(|| {
-                    // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                    if self.screen == Screen::Playlists && hotkey_target_selected {
-                        return "  [`] set hotkey".to_string();
-                    }
-                    let help_key = help_key.map(String::from).unwrap_or_default();
-                    format!("  [{help_key}] help")
-                }),
+            Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
+                // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
+                if self.screen == Screen::Playlists && hotkey_target_selected {
+                    return "  [`] set hotkey".to_string();
+                }
+                let help_key = help_key.map(String::from).unwrap_or_default();
+                format!("  [{help_key}] help")
+            }),
         }
     }
 

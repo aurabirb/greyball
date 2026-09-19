@@ -1,7 +1,7 @@
-use core::{Dispatch, ScanMode};
+use core::{CoreEvent, Dispatch, ScanMode};
 
 /// Where a message is shown; the one place that decides.
-pub(super) enum Notice {
+pub(crate) enum Notice {
     /// The hint row, until the next input event.
     Flash(String),
     /// A dialog the user dismisses.
@@ -24,6 +24,15 @@ impl Notice {
                 }
             )),
             Dispatch::Report(msg) => Notice::Popup(msg),
+            Dispatch::Refused(msg) => Notice::Flash(msg),
         })
+    }
+
+    pub(crate) fn of_event(event: &CoreEvent) -> Option<Notice> {
+        match event {
+            CoreEvent::MembershipResult(msg) => Some(Notice::Flash(msg.clone())),
+            CoreEvent::PluginCommandResult(msg) => Some(Notice::Popup(msg.clone())),
+            _ => None,
+        }
     }
 }

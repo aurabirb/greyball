@@ -43,10 +43,10 @@ pub enum CoreEvent {
     /// cursive's own diffed redraw, so the front-end forces a full repaint
     /// on this instead of its usual incremental one.
     PluginLoginSucceeded,
-    /// A plugin-registered `:`-command (see `crate::Plugin::run_command`)
-    /// just finished on a background thread — the front-end's cue to show
-    /// the result (`Session::take_plugin_command_result`) as a modal.
-    PluginCommandResult,
+    /// What a background like/unlike or remote-playlist toggle came to.
+    MembershipResult(String),
+    /// What a plugin's `:`-command (`Plugin::run_command`) returned.
+    PluginCommandResult(String),
 }
 
 #[derive(Clone, Debug)]

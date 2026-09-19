@@ -10,7 +10,6 @@ use super::window::{WindowFrame, WindowId};
 pub(super) struct Chrome {
     status: StatusCore,
     pub(super) warn_count: usize,
-    pub(super) membership_feedback: Option<String>,
     pub(super) help_key: Option<char>,
 }
 
@@ -31,7 +30,6 @@ impl MedleyView {
                 Arc::new(Chrome {
                     status: StatusCore::snapshot(s),
                     warn_count: s.plugin_warning_count(),
-                    membership_feedback: s.membership_feedback(),
                     help_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp)),
                 })
             });

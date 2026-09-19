@@ -16,8 +16,11 @@
 
 use std::sync::{Arc, Mutex};
 
+use cursive::event::EventResult;
+use cursive::view::Nameable;
+use cursive::views::NamedView;
 use cursive::{Cursive, CursiveRunner};
-use core::{LogBuf, Session};
+use core::{CoreEvent, LogBuf, Session};
 
 pub mod command;
 mod filebrowser;
@@ -58,6 +61,22 @@ pub fn create_cursive() -> Result<CursiveRunner<Cursive>, Box<dyn std::error::Er
 /// Build the root view for the three screens, seeded with the configured
 /// initial screen. `log` backs the optional Log pane (`:log`) — shared with
 /// whatever sink `app` installs for the `log` crate.
-pub fn root_view(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> MedleyView {
-    MedleyView::new(session, initial_screen, log)
+pub fn root_view(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> NamedView<MedleyView> {
+    MedleyView::new(session, initial_screen, log).with_name(ROOT)
+}
+
+const ROOT: &str = "medley";
+
+/// Runs `f` on the shell from outside its own `on_event`, then the callback it returns.
+pub(crate) fn on_root(siv: &mut Cursive, f: impl FnOnce(&mut MedleyView) -> EventResult) {
+    if let Some(EventResult::Consumed(Some(cb))) = siv.call_on_name(ROOT, f) {
+        cb(siv);
+    }
+}
+
+/// Shows whatever the drained `events` carry for the user; `app` calls it once per batch.
+pub fn deliver(siv: &mut Cursive, events: &[CoreEvent]) {
+    for notice in events.iter().filter_map(view::Notice::of_event) {
+        on_root(siv, |view| view.notify(notice));
+    }
 }

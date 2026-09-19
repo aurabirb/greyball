@@ -52,7 +52,7 @@ build closure against its key.
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config | config, volume, scan mode |
-| `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, membership feedback, help key |
+| `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
 | `HelpModal::built` | hotkeys, playlists and remote-playlists generations | hotkeys, playlist names (plugin commands are fixed at startup) |
 | `PlaylistPicker::built` | playlists generation | the playlists |
@@ -90,9 +90,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
   frame. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
   an off-thread writer must send a `CoreEvent`, since nothing else will notice its mutation. An input
-  event is not itself such a change: `on_event` only bumps `revision` when it actually clears something
-  (`clear_membership_feedback` checks the slot first), so a keypress that changes nothing rebuilds
-  nothing.
+  event is not itself such a change and takes no mutable lock of its own, so a keypress that changes
+  nothing rebuilds nothing.
 - A library scan's flood of `TrackUpdated`s moves `revision` only, so it redraws the visible rows but
   never re-filters, re-follows or rebuilds Help; nor does a remote page landing re-filter another list.
 - A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
@@ -102,18 +101,27 @@ on `revision` — it is read fresh or kept in its own small cache.
   `Session::ensure_remote_playlists` from two points, never from the getter or the view: once at
   startup (`app/src/main.rs`) and on `CoreEvent::PluginStatusChanged`. A landed fetch, clean or failed,
   is final for the session unless the source reported a partial page.
-- Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
-  `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
-  runs on a spawned thread and reports through the `Bus`.
-- Inbound: nothing is pushed into the view. `app/src/main.rs` loops `siv.step()` → `bus.drain()` →
-  `Session::on_event` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
-  `cb_sink`. The next `draw` re-reads the session. `set_fps(BASELINE_FPS)` is the idle redraw floor
+- Writes: `run(cmd)` → `Session::dispatch` → a `Dispatch` saying what happened (`Queued(n)`,
+  `ShuffleSet(on)`, `Refused(why)`, …); `run` never re-reads the session to find out.
+  `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow work runs on a
+  spawned thread and reports as a `CoreEvent` carrying its result (`MembershipResult`,
+  `PluginCommandResult`); core keeps no message for the UI to poll.
+- Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
+  is shown — `Flash` on the hint row or a `Popup` dialog — and `MedleyView::notify` the one way to
+  show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
+  mouse hold/release); the hotkey menu's footer shows the same slot. A window or modal never writes
+  it: it returns an outcome and the shell notifies.
+- Inbound: `app/src/main.rs` loops `siv.step()` → `bus.drain()` → `Session::on_event` →
+  `ui::deliver(events)` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
+  `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by
+  `on_root`, which dialog buttons also use to `run` a command); everything else is re-read from the
+  session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
   (clock, marquee, title flush); `vis_fps_cb` raises it to `vis::FPS` while the Vis window is shown
   and must never go below the floor. `Event::Refresh` is ignored by `on_event`.
 
 ## Routing in `MedleyView::route`
 
-1. Clear one-keypress feedback (not on mouse hold/release).
+1. Clear the `feedback` slot (not on mouse hold/release).
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one

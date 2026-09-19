@@ -426,10 +426,8 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item below or under Features): (1) dispatch
-  outcomes + single feedback slot + mailboxes as event payloads (the last two sub-bullets of the
-  event-driven item), before the playlist hotkey rework and the merged Help/hotkey window since
-  both consume feedback; (2) per-window modes stages B and C; (3) those two features, the status-row
+- [ ] UI architecture work order (each step is an item below or under Features): (1) per-window
+  modes stages B and C; (2) the playlist hotkey rework, the merged Help/hotkey window, the status-row
   widget, the title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis
   levels lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use
@@ -445,14 +443,6 @@
   - While the Vis pane is open, the `Vis` worker's `session.lock().unwrap().audio_levels()`
     (`ui/src/vis.rs`) contends with the main session lock at 30 Hz; move audio levels behind their
     own lock/atomic instead of sharing the `Session` mutex.
-  - Feedback text lives in three places with three lifetimes: `MedleyView::queue_feedback`,
-    `MedleyView::hotkey_feedback`, `Session::membership_feedback` (cleared by the UI through a lock on every
-    keypress). Fold into one UI-side `Feedback` slot; deliver the async membership result as a
-    `CoreEvent` payload rather than a polled `Mutex<Option<String>>`. Same for
-    `take_plugin_command_result` in `app/src/main.rs`.
-  - `run` (`input.rs`) infers feedback by matching the `Command` before dispatch and diffing
-    `queue_len` after it; have `Session::dispatch` return the outcome (`Dispatch::Queued(n)`,
-    `ShuffleSet(bool)`, `ScanMode(..)`) so the UI only formats it.
 - [ ] `commit_edit` (`ui/src/view/input.rs`) handles `command::Parsed` through a ladder of `if parsed ==`
   checks, several of which only forward to `handle_action` (`Parsed::History`, `Parsed::Keys`,
   `Parsed::Help`). Map UI-level `Parsed` variants to `Action` and keep one `match`.

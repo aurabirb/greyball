@@ -108,7 +108,6 @@ impl HotkeyMenu {
 impl MedleyView {
     pub(super) fn open_hotkey_menu(&mut self) {
         self.modal = Some(Modal::HotkeyMenu(HotkeyMenu::default()));
-        self.with_session_mut(|s| s.clear_membership_feedback());
     }
 
     /// Opens the standalone "press a key" capture modal for a Playlists-screen row.

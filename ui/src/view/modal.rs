@@ -155,12 +155,7 @@ impl MedleyView {
                 return match event {
                     Event::Key(Key::Esc) => self.close_modal(),
                     Event::Mouse { .. } => EventResult::consumed(),
-                    _ => {
-                        if let Some((_, outcome)) = self.send(&[id], event) {
-                            self.apply(outcome);
-                        }
-                        EventResult::consumed()
-                    }
+                    _ => self.send(&[id], event).map_or_else(EventResult::consumed, |(_, outcome)| self.apply(outcome)),
                 };
             }
         };

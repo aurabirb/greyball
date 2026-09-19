@@ -538,19 +538,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         let force_full_redraw =
             events.iter().any(|ev| matches!(ev, medley_core::CoreEvent::PluginLoginSucceeded));
         let mut dirty = false;
-        let mut plugin_command_result = None;
         if !events.is_empty() {
             let mut s = session.lock().unwrap();
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             let prev_track = s.now_playing_id();
             for ev in &events {
                 dirty |= s.on_event(ev).unwrap_or(false);
-            }
-            // Read here (still under the lock) — `s` drops just below, and a
-            // plugin command's result (e.g. `:spotify addlogin`) is shown
-            // as a modal via `siv` directly, once per result.
-            if events.iter().any(|ev| matches!(ev, medley_core::CoreEvent::PluginCommandResult)) {
-                plugin_command_result = s.take_plugin_command_result();
             }
             // For the terminal window title's marquee — read here, applied
             // to `siv` below once `s` is released.
@@ -607,10 +600,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             let inner = siv.into_inner();
             siv = cursive::CursiveRunner::new(inner, cursive::backends::try_default()?);
         }
-        if let Some(msg) = plugin_command_result {
-            siv.add_layer(cursive::views::Dialog::info(msg));
-            dirty = true;
-        }
+        ui::deliver(&mut siv, &events);
         if dirty {
             siv.refresh();
         }

@@ -294,6 +294,8 @@ pub enum Dispatch {
     ScanMode(crate::scan::ScanMode),
     /// A result the user asked for and should acknowledge.
     Report(String),
+    /// A toggle that did nothing, and why.
+    Refused(String),
     Quit,
 }
 
@@ -427,15 +429,6 @@ pub struct Session {
     /// `view_cache::ViewCache`.
     view: ViewCache,
 
-    /// Latest result of an in-flight remote-playlist hotkey toggle (add/
-    /// remove over the network, see `toggle_remote_playlist_membership`),
-    /// if any — `Arc<Mutex<_>>` so the background thread that runs the
-    /// actual `Source` call can report back without holding `Session`'s own
-    /// lock across the network round trip. Polled (not pushed) by the UI's
-    /// hotkey-menu footer on every redraw — cheap, since it's just reading
-    /// whatever string (if any) already landed here.
-    membership_feedback: Arc<Mutex<Option<String>>>,
-
     /// Memoized hotkeys-column lookup — see `hotkey_memberships`.
     hotkey_memberships: Mutex<HotkeyMemo>,
 
@@ -451,13 +444,6 @@ pub struct Session {
     /// and this used to run under the session lock on every frame/layout/
     /// mouse event.
     plugin_health: Vec<(SourceId, PluginHealth)>,
-
-    /// Latest plugin-command result (`ui::run_plugin_command`'s off-thread
-    /// `Plugin::run_command` call), if any, waiting to be shown as a modal
-    /// — same `Arc<Mutex<_>>`-report-without-the-session-lock shape as
-    /// `membership_feedback`, since the command can block (an OAuth browser
-    /// flow) just like `Plugin::setup`.
-    plugin_command_result: Arc<Mutex<Option<String>>>,
 
     /// Bumped by every UI-visible mutation — the catch-all "redraw something"; see `view/README.md`.
     revision: u64,
@@ -550,11 +536,9 @@ impl Session {
             context,
             hotkeys: Hotkeys::default(),
             view: ViewCache::default(),
-            membership_feedback: Arc::new(Mutex::new(None)),
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
             plugin_health: Vec::new(),
-            plugin_command_result: Arc::new(Mutex::new(None)),
             revision: 0,
             context_gen: 0,
         };
@@ -845,7 +829,8 @@ impl Session {
             }
             CoreEvent::SourceError { .. }
             | CoreEvent::PluginLoginSucceeded
-            | CoreEvent::PluginCommandResult => Ok(true),
+            | CoreEvent::MembershipResult(_)
+            | CoreEvent::PluginCommandResult(_) => Ok(true),
         }
     }
 
@@ -936,20 +921,6 @@ impl Session {
     /// `plugin`/`run_plugin_setup`.
     pub fn plugin_for_command(&self, word: &str) -> Option<Arc<dyn Plugin>> {
         self.plugin_commands.get(word).cloned()
-    }
-
-    /// A cloned handle to `plugin_command_result` — `ui::run_plugin_command`
-    /// clones this out before running the (possibly blocking) command, so
-    /// its background thread can report the result without re-taking the
-    /// session lock.
-    pub fn plugin_command_result_handle(&self) -> Arc<Mutex<Option<String>>> {
-        self.plugin_command_result.clone()
-    }
-
-    /// The last plugin-command result, if any, clearing it — called once per
-    /// event-loop iteration so a result is shown (as a modal) exactly once.
-    pub fn take_plugin_command_result(&self) -> Option<String> {
-        self.plugin_command_result.lock().unwrap().take()
     }
 
     /// Install whatever `wiring` a plugin currently offers into the live
@@ -1518,19 +1489,6 @@ impl Session {
         }
     }
 
-    /// Latest async remote-playlist-toggle result, if any — see
-    /// `membership_feedback`'s field doc.
-    pub fn membership_feedback(&self) -> Option<String> {
-        self.membership_feedback.lock().unwrap().clone()
-    }
-
-    /// Clears the async toggle-result message — called when the hotkey menu
-    /// (re)opens, mirroring how the UI's own `hotkey_feedback` is cleared.
-    pub fn clear_membership_feedback(&mut self) {
-        if self.membership_feedback.lock().unwrap().take().is_some() {
-            self.touch();
-        }
-    }
 
     /// Whether pressing play on `track` right now would be instant — any of
     /// its renditions already has a `MediaCache` entry (the same lookup
@@ -2139,52 +2097,41 @@ impl Session {
         }
     }
 
-    /// Local playlists flip synchronously in the store; a remote one settles on a background
-    /// thread (`ViewCache::toggle_remote_membership`). Both announce via `PlaylistsChanged`.
+    /// A local playlist flips in the store now; a remote one settles on a background thread.
     fn toggle_playlist_membership(&mut self, track: TrackId, target: HotkeyTarget) -> Result<Dispatch> {
         match target {
             HotkeyTarget::Local(playlist) => {
                 let mut p = self.store.get_playlist(playlist)?.ok_or(Error::NotFound)?;
                 toggle_membership(&mut p.items, track);
                 self.save_playlist(&p)?;
+                Ok(Dispatch::Ok)
             }
-            HotkeyTarget::Remote(source, node) => self.toggle_remote_playlist_membership(track, source, node),
-            HotkeyTarget::Builtin(_) => {}
+            HotkeyTarget::Remote(source, node) => Ok(self.toggle_remote_playlist_membership(track, source, node)),
+            HotkeyTarget::Builtin(_) => Ok(Dispatch::Ok),
         }
-        Ok(Dispatch::Ok)
     }
 
-    fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode) {
+    fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode) -> Dispatch {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
-            return;
+            return Dispatch::Ok;
         };
         let Some(src) = self.sources.get(&source).cloned() else {
-            return;
+            return Dispatch::Ok;
         };
         let name = t.display_name();
-        let refusal = if src.is_synthetic(&node) {
+        if src.is_synthetic(&node) {
             // A toggle could silently unlike; Liked Songs only changes through Like/Unlike.
-            Some(format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use like/unlike"))
-        } else if !t.renditions.iter().any(|r| r.source == source) {
-            Some(format!("Can't toggle {name:?}: track isn't on {source}"))
-        } else {
-            None
+            let msg = format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use like/unlike");
+            return refused("toggle_playlist_membership", msg);
+        }
+        let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {
+            return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: track isn't on {source}"));
         };
-        if let Some(msg) = refusal {
-            log::error!("toggle_playlist_membership: {msg}");
-            *self.membership_feedback.lock().unwrap() = Some(msg);
-            return;
+        if !self.view.toggle_remote_membership(t, uri, src, node, self.remote_ctx()) {
+            return Dispatch::Refused(format!("Still updating {name:?} in that playlist"));
         }
-        let uri = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()).unwrap_or_default();
-        let feedback = self.membership_feedback.clone();
-        let started = self.view.toggle_remote_membership(t, uri, src, node, self.remote_ctx(), move |msg| {
-            *feedback.lock().unwrap() = Some(msg);
-        });
-        if started {
-            self.invalidate_hotkey_memberships();
-        } else {
-            *self.membership_feedback.lock().unwrap() = Some(format!("Still updating {name:?} in that playlist"));
-        }
+        self.invalidate_hotkey_memberships();
+        Dispatch::Ok
     }
 
     /// Tracks with an add/remove still in flight on this remote playlist — its rows render as pending.
@@ -2260,26 +2207,17 @@ impl Session {
             .collect()
     }
 
-    /// `Command::Like`/`Command::Unlike`'s shared dispatch: auto-discovers
-    /// `track`'s liked/favorites target(s) (`liked_targets`) instead of
-    /// taking one from a hotkey-bound `HotkeyTarget`, then adds (`like`) or
-    /// removes it there on a background thread — otherwise the same
-    /// never-block-the-UI-thread, report-through-`membership_feedback`
-    /// pattern as `toggle_remote_playlist_membership`.
+    /// Adds `track` to (or removes it from) each of its sources' liked list, off the UI thread.
     fn set_liked(&mut self, track: TrackId, like: bool) -> Result<Dispatch> {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
         let targets = self.liked_targets(&t);
         let name = t.display_name();
+        let verb = if like { "like" } else { "unlike" };
         if targets.is_empty() {
-            let verb = if like { "like" } else { "unlike" };
-            let msg = format!("Can't {verb} {name:?}: no liked-songs source for this track");
-            log::error!("set_liked: {msg}");
-            *self.membership_feedback.lock().unwrap() = Some(msg);
-            return Ok(Dispatch::Ok);
+            return Ok(refused("set_liked", format!("Can't {verb} {name:?}: no liked-songs source for this track")));
         }
-        let feedback = self.membership_feedback.clone();
         let bus = self.bus.clone();
         std::thread::spawn(move || {
             for (src, node, uri) in targets {
@@ -2288,19 +2226,14 @@ impl Session {
                 } else {
                     src.remove_from_playlist(&node, &uri)
                 };
-                let msg = match result {
+                bus.send(CoreEvent::MembershipResult(match result {
                     Ok(()) if like => format!("Liked {name:?}"),
                     Ok(()) => format!("Removed {name:?} from Liked Songs"),
                     Err(e) => {
                         log::error!("set_liked[{}]: {e}", src.id());
-                        let verb = if like { "like" } else { "unlike" };
                         format!("Can't {verb} {name:?}: {e}")
                     }
-                };
-                *feedback.lock().unwrap() = Some(msg);
-                // No event fired this without a keypress before — the UI only
-                // noticed by polling `membership_feedback` on every redraw.
-                bus.send(CoreEvent::PlaylistsChanged);
+                }));
             }
         });
         Ok(Dispatch::Ok)
@@ -2433,6 +2366,11 @@ fn load_history_file(path: &Path) -> Vec<(TrackId, DateTime<Utc>)> {
         .into_iter()
         .filter_map(|e| e.track_id.map(|tid| (TrackId(tid), e.played_at.unwrap_or_else(Utc::now))))
         .collect()
+}
+
+fn refused(what: &str, msg: String) -> Dispatch {
+    log::error!("{what}: {msg}");
+    Dispatch::Refused(msg)
 }
 
 /// `Command::TogglePlaylistMembership`'s core logic, pulled out so it's

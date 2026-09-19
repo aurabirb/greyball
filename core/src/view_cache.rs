@@ -496,7 +496,6 @@ impl ViewCache {
         source: Arc<dyn Source>,
         node: BrowseNode,
         ctx: RemoteCtx,
-        report: impl FnOnce(String) + Send + 'static,
     ) -> bool {
         let key = (source.id(), node.clone());
         let guess_add = self.remote_membership(&key.0, &node, track.id) == Membership::NotMember;
@@ -561,15 +560,15 @@ impl ViewCache {
             {
                 log::warn!("remote playlist cache: failed to persist {cache_key}: {e}");
             }
-            report(match outcome {
+            deps.bus.send(CoreEvent::PlaylistsChanged);
+            deps.bus.send(CoreEvent::MembershipResult(match outcome {
                 Ok(true) => format!("Removed {name:?} from playlist"),
                 Ok(false) => format!("Added {name:?} to playlist"),
                 Err(e) => {
                     log::error!("toggle_playlist_membership[{cache_key}]: {e}");
                     format!("Can't toggle {name:?}: {e}")
                 }
-            });
-            deps.bus.send(CoreEvent::PlaylistsChanged);
+            }));
         });
         true
     }

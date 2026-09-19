@@ -50,6 +50,7 @@ mod transport;
 mod warnings;
 mod window;
 
+pub(crate) use notice::Notice;
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
 pub use status_line::window_title_track_text;
@@ -307,7 +308,7 @@ impl View for MedleyView {
         };
         let bottom = printer.size.y.saturating_sub(2);
         let hotkey_target = main.is_some_and(|list| list.hotkey_target);
-        let line = self.hint_line(chrome.membership_feedback.clone(), hotkey_target, chrome.help_key);
+        let line = self.hint_line(hotkey_target, chrome.help_key);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.
@@ -380,7 +381,6 @@ impl MedleyView {
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
         if !is_mouse_followup {
             self.feedback = None;
-            self.with_session_mut(|s| s.clear_membership_feedback());
         }
 
         if let Some(result) = self.on_edit_event(event) {
