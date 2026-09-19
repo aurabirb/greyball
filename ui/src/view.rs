@@ -1,6 +1,6 @@
 //! `MedleyView` — the whole TUI in one snapshot-rendered cursive view.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use cursive::{Printer, Rect, Vec2, View};
@@ -23,6 +23,7 @@ use help::HelpModal;
 use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
 use log::LogPane;
+use memo::Memo;
 use panes::{PaneLayout, list_screen_for_pane};
 use playlist_picker::PlaylistPicker;
 use playlists::PlaylistNav;
@@ -41,6 +42,7 @@ mod hotkeys;
 mod input;
 mod lists;
 mod log;
+mod memo;
 mod mouse;
 mod panes;
 mod playlist_picker;
@@ -120,9 +122,9 @@ pub struct MedleyView {
     playlist_picker: Option<PlaylistPicker>,
     marquee: Marquee,
     /// What `follow_scan` last reported to the scan walk — a cache, not view state; see its doc.
-    follow_sig: Mutex<Option<lists::FollowKey>>,
+    follow_sig: Memo<lists::FollowKey>,
     /// Revision-keyed memo of `frame()`'s cached part — see `frame.rs`.
-    frame_cache: Mutex<Option<(FrameKey, Arc<CachedFrame>)>>,
+    frame_cache: Memo<FrameKey, Arc<CachedFrame>>,
 }
 
 impl MedleyView {
@@ -152,8 +154,8 @@ impl MedleyView {
             help: None,
             playlist_picker: None,
             marquee: Marquee::new(),
-            follow_sig: Mutex::new(None),
-            frame_cache: Mutex::new(None),
+            follow_sig: Memo::default(),
+            frame_cache: Memo::default(),
         }
     }
 

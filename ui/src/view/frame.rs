@@ -93,12 +93,9 @@ impl MedleyView {
     ) -> Frame {
         self.with_session(|s| {
             let key = self.frame_key(s.revision(), list_h, offset, list_panes, want_settings);
-            let mut cache = self.frame_cache.lock().unwrap();
-            if cache.as_ref().map(|(k, _)| k) != Some(&key) {
-                let built = self.build_cached_frame(s, list_h, offset, list_panes, want_settings);
-                *cache = Some((key, Rc::new(built)));
-            }
-            let cached = cache.as_ref().unwrap().1.clone();
+            let cached = self.frame_cache.get_or_build(key, || {
+                Rc::new(self.build_cached_frame(s, list_h, offset, list_panes, want_settings))
+            });
             // Live per-tick data: cheap, no extra I/O beyond what's already locked.
             let ps = s.player_status();
             let bpm_tag = bpm_status_tag(s, cached.status.now_playing_id());

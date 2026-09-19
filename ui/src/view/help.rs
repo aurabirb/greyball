@@ -7,33 +7,27 @@ use core::HotkeyTarget;
 use crate::{command, keybindings};
 
 use super::MedleyView;
+use super::memo::Memo;
 use super::playlists::top_row_name;
-use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset, stale};
+use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset};
 use super::text::pad;
 
 /// Row the help screen's content starts on (row 0 = title).
 const LIST_TOP: usize = 1;
 
-/// The help/shortcuts screen (`?`/`:help`); rebuilt on a `list_revision` drift — see `refresh_help`.
+/// The help/shortcuts screen (`?`/`:help`); opens empty, `refresh_help` fills it on the next layout pass.
+#[derive(Default)]
 pub(super) struct HelpModal {
     scroll: usize,
     lines: Vec<String>,
-    list_revision: u64,
+    /// The `list_revision` that `lines` were built under.
+    built: Memo<u64>,
 }
 
 impl HelpModal {
-    pub(super) fn new(lines: Vec<String>, list_revision: u64) -> Self {
-        Self { scroll: 0, lines, list_revision }
-    }
-
-    pub(super) fn list_revision(&self) -> u64 {
-        self.list_revision
-    }
-
     /// Replaces the lines in place and re-clamps `scroll`, so a rebuild never jumps to the top.
-    fn refresh(&mut self, lines: Vec<String>, list_revision: u64, size: Vec2) {
+    fn refresh(&mut self, lines: Vec<String>, size: Vec2) {
         self.lines = lines;
-        self.list_revision = list_revision;
         self.scroll = bound_offset(self.scroll, self.lines.len(), Self::view_h(size));
     }
 
@@ -112,8 +106,7 @@ fn build_help_lines(
 }
 
 impl MedleyView {
-    /// The help screen's content lines plus the `list_revision` they were built under.
-    fn help_lines(&self) -> (Vec<String>, u64) {
+    fn help_lines(&self) -> Vec<String> {
         self.with_session(|s| {
             let plugin_commands = s.plugin_command_help();
             let playlists = s.playlists();
@@ -134,25 +127,18 @@ impl MedleyView {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let lines = build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands);
-            (lines, s.list_revision())
+            build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
         })
-    }
-
-    /// Opens the Help modal, built for the current `list_revision`.
-    pub(super) fn open_help(&mut self) {
-        let (lines, list_revision) = self.help_lines();
-        self.help = Some(HelpModal::new(lines, list_revision));
     }
 
     /// Rebuilds Help's content once `list_revision` drifts — called from `required_size`, never per-draw.
     pub(super) fn refresh_help(&mut self, list_revision: u64, size: Vec2) {
-        if !self.help.as_ref().is_some_and(|h| stale(h.list_revision(), list_revision)) {
+        if !self.help.as_ref().is_some_and(|h| h.built.changed(list_revision)) {
             return;
         }
-        let (lines, list_revision) = self.help_lines();
+        let lines = self.help_lines();
         if let Some(help) = &mut self.help {
-            help.refresh(lines, list_revision, size);
+            help.refresh(lines, size);
         }
     }
 

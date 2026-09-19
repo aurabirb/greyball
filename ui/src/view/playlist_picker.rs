@@ -5,7 +5,8 @@ use cursive::theme::ColorStyle;
 use core::{Command, Playlist, TrackId};
 
 use super::MedleyView;
-use super::scroll::{ListEvent, ListState, modal_list_rect, stale};
+use super::memo::Memo;
+use super::scroll::{ListEvent, ListState, modal_list_rect};
 use super::text::pad;
 
 /// Row the picker's list starts on (row 0 = title, row 1 = blank spacer).
@@ -16,25 +17,21 @@ pub(super) struct PlaylistPicker {
     list: ListState,
     /// Captured when the picker opens, so it stays fixed if the underlying list scrolls.
     track: TrackId,
-    /// Rebuilt when `built_at` drifts from `Session::list_revision` — see `refresh_playlist_picker`.
+    /// Opens empty; `refresh_playlist_picker` fills it on the next layout pass.
     playlists: Vec<Playlist>,
-    built_at: u64,
+    /// The `list_revision` that `playlists` was read under.
+    built: Memo<u64>,
 }
 
 impl PlaylistPicker {
-    pub(super) fn new(track: TrackId, playlists: Vec<Playlist>, list_revision: u64) -> Self {
-        Self { list: ListState::default(), track, playlists, built_at: list_revision }
-    }
-
-    pub(super) fn built_at(&self) -> u64 {
-        self.built_at
+    pub(super) fn new(track: TrackId) -> Self {
+        Self { list: ListState::default(), track, playlists: Vec::new(), built: Memo::default() }
     }
 
     /// Replaces `playlists`, keeps the cursor on the same playlist, and keeps it in view.
-    pub(super) fn refresh(&mut self, playlists: Vec<Playlist>, list_revision: u64, size: Vec2) {
+    pub(super) fn refresh(&mut self, playlists: Vec<Playlist>, size: Vec2) {
         let selected = self.playlists.get(self.list.cursor).map(|p| p.id);
         self.playlists = playlists;
-        self.built_at = list_revision;
         self.list.cursor = selected
             .and_then(|id| self.playlists.iter().position(|p| p.id == id))
             .unwrap_or_else(|| self.list.cursor.min(self.playlists.len().saturating_sub(1)));
@@ -70,12 +67,12 @@ impl PlaylistPicker {
 impl MedleyView {
     /// Rebuilds the picker's playlist list once `list_revision` drifts — called from `required_size`.
     pub(super) fn refresh_playlist_picker(&mut self, list_revision: u64, size: Vec2) {
-        if !self.playlist_picker.as_ref().is_some_and(|p| stale(p.built_at(), list_revision)) {
+        if !self.playlist_picker.as_ref().is_some_and(|p| p.built.changed(list_revision)) {
             return;
         }
         let playlists = self.with_session(|s| s.playlists());
         if let Some(picker) = &mut self.playlist_picker {
-            picker.refresh(playlists, list_revision, size);
+            picker.refresh(playlists, size);
         }
     }
 

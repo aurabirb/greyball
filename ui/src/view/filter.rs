@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -9,6 +9,7 @@ use crate::row::RowItem;
 
 use super::{HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE};
 use super::input::Editing;
+use super::memo::Memo;
 
 /// The screen-local `/`-filter: fuzzy-narrows the viewed list without touching `Session`.
 #[derive(Default)]
@@ -16,19 +17,17 @@ pub(super) struct LocalFilter {
     /// Committed query (Enter); while still typing, `active_filter` reads the edit buffer instead.
     pub(super) query: Option<String>,
     matcher: SkimMatcherV2,
-    /// Filtering and ranking a whole list is too slow to redo per redraw; a `Mutex` only because `draw` takes `&self`.
-    cache: Mutex<Option<FilterCache>>,
+    /// Filtering and ranking a whole list is too slow to redo per redraw; ids (not `Track`s) so an attrs patch can't go stale in it.
+    cache: Memo<FilterKey, Arc<[TrackId]>>,
 }
 
-/// The last `filtered_ids` result; ids (not `Track`s) so a `TrackUpdated` attrs patch can't go stale in it.
-struct FilterCache {
+#[derive(PartialEq)]
+struct FilterKey {
     list_revision: u64,
     screen: usize,
     /// `PlaylistNav::list_id`, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
-    /// `Arc` so callers can hand out the whole matched list without cloning it.
-    result: Arc<[TrackId]>,
 }
 
 /// The `/`-filter's rank for one row against `query`, low-to-high, `None` if it doesn't match at all.
@@ -86,34 +85,21 @@ impl MedleyView {
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;
         }
-        let list_revision = s.list_revision();
-        let list_id = self.playlists.list_id();
-
-        if let Some(cache) = self.filter.cache.lock().unwrap().as_ref()
-            && cache.list_revision == list_revision
-            && cache.screen == screen
-            && cache.list_id == list_id
-            && cache.query == query
-        {
-            return Some(cache.result.clone());
-        }
-
-        let tracks = self.all_tracks_for_screen(s, screen);
-        let mut ranked: Vec<(TrackId, FilterRank)> = tracks
-            .into_iter()
-            .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t.id, r)))
-            .collect();
-        ranked.sort_by(|a, b| a.1.cmp(&b.1));
-        let result: Arc<[TrackId]> = ranked.into_iter().map(|(id, _)| id).collect();
-
-        *self.filter.cache.lock().unwrap() = Some(FilterCache {
-            list_revision,
+        let key = FilterKey {
+            list_revision: s.list_revision(),
             screen,
-            list_id,
+            list_id: self.playlists.list_id(),
             query: query.to_string(),
-            result: result.clone(),
-        });
-        Some(result)
+        };
+        Some(self.filter.cache.get_or_build(key, || {
+            let mut ranked: Vec<(TrackId, FilterRank)> = self
+                .all_tracks_for_screen(s, screen)
+                .into_iter()
+                .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t.id, r)))
+                .collect();
+            ranked.sort_by(|a, b| a.1.cmp(&b.1));
+            ranked.into_iter().map(|(id, _)| id).collect()
+        }))
     }
 
     /// Reset the current screen's cursor/scroll to the top.

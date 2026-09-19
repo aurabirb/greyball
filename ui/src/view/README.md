@@ -96,16 +96,19 @@ one component's outcome and mutates another (`ListEvent::Activate` from the pick
 and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling, never locks the
 session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
 deliberate exception; `HelpModal`'s lines and `PlaylistPicker`'s playlist list are snapshots too, but
-self-heal — see below). Interior mutability in `draw` is limited to clocks and caches (`Marquee`,
-`LocalFilter::cache` — keyed on `list_revision`, not a source length, so a same-length content swap
-still recomputes, and holding matched ids rather than `Track`s so a `TrackUpdated` attrs patch can't
+self-heal — see below). Interior mutability in `draw` is limited to clocks and caches: `Marquee`, the
+Log pane's incremental `WrapCache`, and `Memo<K, V>` (`memo.rs`) — the one-entry cache every keyed
+cache here is built on (`get_or_build(key, || value)` clones the value out, so values are `Arc`s;
+`Memo<K>::changed(key)` is the value-less "did the key move" gate). Each memo is a field of whatever
+owns the cached thing, never a global. The memos: `LocalFilter::cache` — keyed on `list_revision`,
+not a source length, so a same-length content swap still recomputes, and holding matched ids rather than `Track`s so a `TrackUpdated` attrs patch can't
 go stale inside it — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
 `MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`, keyed on `revision`).
 
-A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) stamps itself
-with the `list_revision` it was built at and is rebuilt from `MedleyView::required_size` — never
-per-draw — when `Session::list_revision` has since moved on (`scroll::stale`,
-`MedleyView::refresh_help`/`refresh_playlist_picker`); both replace their content in place rather than
+A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) opens empty
+with a `built: Memo<u64>` stamp and is filled from `MedleyView::required_size` — never per-draw, and
+always before its first draw — whenever `Session::list_revision` differs from the stamp
+(`MedleyView::refresh_help`/`refresh_playlist_picker`); both replace their content in place rather than
 resetting it — `HelpModal::refresh` keeps `scroll` (re-clamped to the new line count) and
 `PlaylistPicker::refresh` re-clamps its cursor onto the same playlist id (or the new length if that
 playlist is gone) and re-follows it into view.

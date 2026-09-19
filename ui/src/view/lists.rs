@@ -302,11 +302,8 @@ impl MedleyView {
             query: self.active_filter().map(str::to_string),
             highlighted,
         };
-        let mut last = self.follow_sig.lock().unwrap();
-        if last.as_ref() == Some(&key) {
-            return;
+        if self.follow_sig.changed(key) {
+            scan.follow_view(self.visible_track_ids(s, screen), highlighted);
         }
-        scan.follow_view(self.visible_track_ids(s, screen), highlighted);
-        *last = Some(key);
     }
 }

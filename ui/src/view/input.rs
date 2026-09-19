@@ -11,6 +11,7 @@ use crate::command::{self, Pane};
 use crate::keybindings::Action;
 
 use super::{HIST, MedleyView, PLAYLISTS, SEARCH};
+use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
 
@@ -70,7 +71,7 @@ impl MedleyView {
                 };
                 let open = self.playlists.open;
                 if parsed == command::Parsed::Help {
-                    self.open_help();
+                    self.help = Some(HelpModal::default());
                     return EventResult::consumed();
                 }
                 // `Screen` mode: fullscreen, one at a time.
@@ -260,12 +261,11 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.open_help();
+                self.help = Some(HelpModal::default());
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                let (playlists, list_revision) = self.with_session(|s| (s.playlists(), s.list_revision()));
-                self.playlist_picker = Some(PlaylistPicker::new(id, playlists, list_revision));
+                self.playlist_picker = Some(PlaylistPicker::new(id));
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {
