@@ -116,7 +116,7 @@ impl MedleyView {
             Modal::Picker(picker) => picker.draw(printer, rect),
             Modal::HotkeyMenu(menu) => {
                 let keys = self.with_session(HotkeyMenu::keys);
-                menu.draw(printer, rect, &keys, self.hotkey_feedback.as_deref());
+                menu.draw(printer, rect, &keys, self.feedback.as_deref());
             }
             Modal::HotkeyCapture(target, name) => {
                 let current = self.with_session(|s| s.playlist_hotkey(target));

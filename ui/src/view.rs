@@ -36,6 +36,7 @@ mod input;
 mod log;
 mod memo;
 mod modal;
+mod notice;
 mod panes;
 mod playlist_picker;
 mod rows;
@@ -72,15 +73,13 @@ pub struct MedleyView {
     last_screen_size: Vec2,
     editing: Editing,
     buffer: String,
-    /// Last queue/wedge result.
-    queue_feedback: Option<String>,
+    /// The hint row's one transient message, cleared by the next input event.
+    feedback: Option<String>,
     panes: PaneLayout,
     /// Which window currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     vis: Arc<crate::vis::Vis>,
     modal: Option<Modal>,
-    /// Last hotkey bind/unbind result, shown until the next keypress.
-    hotkey_feedback: Option<String>,
     marquee: Marquee,
     /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
     follow_sig: Memo<(WindowId, u64, (u64, usize))>,
@@ -98,12 +97,11 @@ impl MedleyView {
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
-            queue_feedback: None,
+            feedback: None,
             panes: PaneLayout::new(pane_cfg),
             focus: Focus::Main,
             vis,
             modal: None,
-            hotkey_feedback: None,
             marquee: Marquee::new(),
             follow_sig: Memo::default(),
             chrome: Memo::default(),
@@ -381,8 +379,7 @@ impl MedleyView {
         let is_mouse_followup =
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
         if !is_mouse_followup {
-            self.queue_feedback = None;
-            self.hotkey_feedback = None;
+            self.feedback = None;
             self.with_session_mut(|s| s.clear_membership_feedback());
         }
 

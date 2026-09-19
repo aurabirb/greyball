@@ -104,8 +104,8 @@ impl MedleyView {
         match entry {
             SettingsEntry::Source { name, enabled } => {
                 self.with_session_mut(|s| s.set_source_enabled(name, !enabled));
-                self.queue_feedback = Some(format!(
-                    "  {name}: {} (restart to apply)",
+                self.feedback = Some(format!(
+                    "{name}: {} (restart to apply)",
                     if enabled { "disabled" } else { "enabled" }
                 ));
             }

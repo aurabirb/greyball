@@ -72,7 +72,7 @@ fn add_file(session: &SessionHandle, playlist: Option<PlaylistId>, path: &Path) 
         playlist,
         paths: vec![path.to_path_buf()],
     }) {
-        Ok(Dispatch::Modal(m)) => m,
+        Ok(Dispatch::Report(m)) => m,
         Ok(_) => format!("added {}", path.display()),
         Err(e) => e.to_string(),
     }

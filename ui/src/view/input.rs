@@ -14,6 +14,7 @@ use crate::screen::Screen;
 use super::MedleyView;
 use super::help::HelpModal;
 use super::modal::Modal;
+use super::notice::Notice;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
 use super::track_list::TrackList;
@@ -149,44 +150,20 @@ impl MedleyView {
     }
 
     pub(super) fn run(&mut self, cmd: Command) -> EventResult {
-        // `Previous` only grows the queue when it actually wedges the just-played track back onto the front.
-        let tracks_queue_len = matches!(cmd, Command::Enqueue(_) | Command::Wedge(_) | Command::Previous)
-            .then(|| self.with_session(|s| s.queue_len()));
-        let feedback_kind = match &cmd {
-            Command::Enqueue(_) => Some("Queued"),
-            Command::Wedge(_) => Some("Wedged"),
-            Command::Previous => Some("Wedged"),
-            _ => None,
-        };
-        let is_toggle_shuffle = matches!(cmd, Command::ToggleShuffle);
-        let is_toggle_scan = matches!(cmd, Command::ToggleScan);
-        let res = self.with_session_mut(|s| s.dispatch(cmd));
-        if matches!(res, Ok(Dispatch::Ok)) {
-            if let (Some(before), Some(kind)) = (tracks_queue_len, feedback_kind) {
-                let after = self.with_session(|s| s.queue_len());
-                if kind == "Queued" || after > before {
-                    self.queue_feedback = Some(format!("  {kind}: {after} tracks"));
-                }
-            }
-            // Flash feedback for the two clickable status-line tags.
-            if is_toggle_shuffle {
-                let on = self.with_session(|s| s.shuffle());
-                self.queue_feedback = Some(format!("  Shuffle: {}", if on { "on" } else { "off" }));
-            } else if is_toggle_scan {
-                let label = self.with_session(|s| s.scan.as_ref().map(|scan| scan.mode()));
-                let label = match label {
-                    Some(core::ScanMode::Active) => "active",
-                    Some(core::ScanMode::CacheOnly) => "cache-only",
-                    Some(core::ScanMode::Disabled) | None => "off",
-                };
-                self.queue_feedback = Some(format!("  Scan: {label}"));
-            }
-        }
-        match res {
-            Ok(Dispatch::Ok) => EventResult::consumed(),
+        match self.with_session_mut(|s| s.dispatch(cmd)) {
             Ok(Dispatch::Quit) => EventResult::with_cb(|c: &mut Cursive| c.quit()),
-            Ok(Dispatch::Modal(m)) => popup(m),
-            Err(e) => popup(e.to_string()),
+            Ok(outcome) => Notice::of_dispatch(outcome).map_or_else(EventResult::consumed, |n| self.notify(n)),
+            Err(e) => self.notify(Notice::Popup(e.to_string())),
+        }
+    }
+
+    pub(super) fn notify(&mut self, notice: Notice) -> EventResult {
+        match notice {
+            Notice::Flash(text) => {
+                self.feedback = Some(text);
+                EventResult::consumed()
+            }
+            Notice::Popup(msg) => popup(msg),
         }
     }
 
@@ -337,12 +314,11 @@ impl MedleyView {
             Editing::CommandLine => format!(":{}", self.buffer),
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
-            // `queue_feedback` (this keypress only) wins over `membership_feedback`.
             Editing::None => self
-                .queue_feedback
+                .feedback
                 .clone()
-                .or(membership_feedback.map(|m| format!("  {m}")))
-                .or(self.hotkey_feedback.clone().map(|m| format!("  {m}")))
+                .or(membership_feedback)
+                .map(|m| format!("  {m}"))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
                     if self.screen == Screen::Playlists && hotkey_target_selected {

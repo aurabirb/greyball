@@ -132,7 +132,7 @@ impl MedleyView {
     pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) {
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
         let name = self.hotkey_row_name_for(&target);
-        self.hotkey_feedback = Some(match result {
+        self.feedback = Some(match result {
             Ok(Some(stolen_from)) => {
                 let stolen_name = self.hotkey_row_name_for(&stolen_from);
                 format!("Bound '{key}' to {name} (moved from {stolen_name})")
@@ -151,6 +151,6 @@ impl MedleyView {
     pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) {
         let key = self.with_session(|s| s.playlist_hotkey(&target));
         self.with_session_mut(|s| s.unbind_hotkey(&target));
-        self.hotkey_feedback = key.map(|k| format!("Unbound '{k}'"));
+        self.feedback = key.map(|k| format!("Unbound '{k}'"));
     }
 }

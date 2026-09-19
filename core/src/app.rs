@@ -282,11 +282,18 @@ pub const HISTORY_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_
 /// other two reserved ids.
 pub const NOW_PLAYING_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_u128(2));
 
-/// Result of a command the front-end must react to beyond re-rendering.
+/// What a command did; the front-end decides how each is shown.
 #[derive(Debug, PartialEq)]
 pub enum Dispatch {
     Ok,
-    Modal(String),
+    /// The queue's length after an append.
+    Queued(usize),
+    /// The queue's length after a push to its front.
+    Wedged(usize),
+    ShuffleSet(bool),
+    ScanMode(crate::scan::ScanMode),
+    /// A result the user asked for and should acknowledge.
+    Report(String),
     Quit,
 }
 
@@ -634,11 +641,11 @@ impl Session {
             }
             Command::Enqueue(id) => {
                 self.queue.append(id);
-                Ok(Dispatch::Ok)
+                Ok(Dispatch::Queued(self.queue.len()))
             }
             Command::Wedge(id) => {
                 self.queue.play_next(id);
-                Ok(Dispatch::Ok)
+                Ok(Dispatch::Wedged(self.queue.len()))
             }
             Command::PlayPause => {
                 if let Some(p) = self.active_player() {
@@ -661,14 +668,16 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::ToggleScan => {
-                if let Some(scan) = &self.scan {
+                let mode = self.scan.as_ref().map_or(crate::scan::ScanMode::Disabled, |scan| {
                     scan.set_mode(scan.mode().cycle());
-                }
-                Ok(Dispatch::Ok)
+                    scan.mode()
+                });
+                Ok(Dispatch::ScanMode(mode))
             }
             Command::ToggleShuffle => {
-                self.queue.set_shuffle(!self.queue.get_shuffle());
-                Ok(Dispatch::Ok)
+                let on = !self.queue.get_shuffle();
+                self.queue.set_shuffle(on);
+                Ok(Dispatch::ShuffleSet(on))
             }
             Command::Previous => {
                 // The manual queue drains as it plays, so it never has
@@ -676,16 +685,15 @@ impl Session {
                 // always falls back to the bounded play history, which is
                 // structurally independent of the queue's own contents.
                 let just_playing = self.now_playing;
-                if let Some(id) = self.queue.previous_from_history() {
-                    // Wedge the track we're walking back over onto the
-                    // queue's front, so a later `n` resumes forward through
-                    // it instead of skipping straight past it.
-                    if let Some(playing) = just_playing {
-                        self.queue.play_next(playing);
-                    }
-                    self.play_track(id, false);
+                let Some(id) = self.queue.previous_from_history() else {
+                    return Ok(Dispatch::Ok);
+                };
+                // Wedge the track we're walking back over, so a later `n` resumes forward through it.
+                if let Some(playing) = just_playing {
+                    self.queue.play_next(playing);
                 }
-                Ok(Dispatch::Ok)
+                self.play_track(id, false);
+                Ok(just_playing.map_or(Dispatch::Ok, |_| Dispatch::Wedged(self.queue.len())))
             }
             Command::Seek(delta) => {
                 if let Some(p) = self.active_player() {
@@ -732,7 +740,7 @@ impl Session {
             Command::LinkPick(id) => match self.link_pick.take() {
                 None => {
                     self.link_pick = Some(id);
-                    Ok(Dispatch::Modal("link: pick a second row".to_string()))
+                    Ok(Dispatch::Report("link: pick a second row".to_string()))
                 }
                 Some(first) => {
                     self.catalog.link(first, id)?;
@@ -764,7 +772,7 @@ impl Session {
             Command::ImportM3u(path) => self.import_m3u(path),
             Command::AddUri(uri) => {
                 let Some(source) = self.source_for_uri(&uri) else {
-                    return Ok(Dispatch::Modal("not a playable URL".to_string()));
+                    return Ok(Dispatch::Report("not a playable URL".to_string()));
                 };
                 let source = source.clone();
                 match source.resolve(&uri) {
@@ -773,7 +781,7 @@ impl Session {
                                 self.push_result(tid);
                         Ok(Dispatch::Ok)
                     }
-                    Err(_) => Ok(Dispatch::Modal("not a playable URL".to_string())),
+                    Err(_) => Ok(Dispatch::Report("not a playable URL".to_string())),
                 }
             }
             Command::AddFilesToPlaylist { playlist, paths } => {
@@ -1895,9 +1903,9 @@ impl Session {
         let disp = path.display();
         log::info!("export_m3u: {disp} — {n} track(s), {} skipped", gaps.len());
         if gaps.is_empty() {
-            Ok(Dispatch::Modal(format!("exported {disp} ({n} tracks)")))
+            Ok(Dispatch::Report(format!("exported {disp} ({n} tracks)")))
         } else {
-            Ok(Dispatch::Modal(format!(
+            Ok(Dispatch::Report(format!(
                 "exported {disp} ({n} tracks, {} skipped): {}",
                 gaps.len(),
                 gaps.join("; ")
@@ -2047,7 +2055,7 @@ impl Session {
             "import_m3u: \"{name}\" — {} track(s) ({new_c} new, {merged_c} merged, {skipped} skipped)",
             items.len()
         );
-        Ok(Dispatch::Modal(format!(
+        Ok(Dispatch::Report(format!(
             "imported \"{name}\": {} tracks ({new_c} new, {merged_c} merged, {skipped} skipped)",
             items.len()
         )))
@@ -2114,7 +2122,7 @@ impl Session {
                     self.save_playlist(&pl)?;
                 }
                 log::info!("add: \"{}\" — {added} added, {skipped} skipped", pl.name);
-                Ok(Dispatch::Modal(if skipped > 0 {
+                Ok(Dispatch::Report(if skipped > 0 {
                     format!("added {added} track(s) to \"{}\" ({skipped} skipped)", pl.name)
                 } else {
                     format!("added {added} track(s) to \"{}\"", pl.name)
@@ -2122,7 +2130,7 @@ impl Session {
             }
             None => {
                 log::info!("add: queue — {added} added, {skipped} skipped");
-                Ok(Dispatch::Modal(if skipped > 0 {
+                Ok(Dispatch::Report(if skipped > 0 {
                     format!("queued {added} track(s) ({skipped} skipped)")
                 } else {
                     format!("queued {added} track(s)")
