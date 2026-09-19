@@ -1484,7 +1484,15 @@ impl Session {
     /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
         self.touch();
-        self.hotkeys.replace(hotkeys);
+        // `bind_hotkey` never lets a playlist onto a built-in's key, so one found there would shadow it unseen.
+        for (key, target, action) in self.hotkeys.replace(hotkeys) {
+            let name = match &target {
+                HotkeyTarget::Local(id) => self.playlists().into_iter().find(|p| p.id == *id).map(|p| p.name),
+                _ => None,
+            };
+            let name = name.unwrap_or_else(|| format!("{target:?}"));
+            self.warn("hotkeys", &format!("dropped '{key}' from playlist {name}: it is the key of built-in {}", action.id()));
+        }
         self.prune_synthetic_hotkeys();
     }
 

@@ -83,14 +83,6 @@
   preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
-- [ ] A playlist hotkey persisted in `state.toml` can shadow a built-in key (seen: `s` no longer
-  toggles shuffle). `bind_hotkey` (`core/src/app.rs`) refuses to bind over a built-in, but
-  `Session::set_hotkeys` loads the persisted map unchecked, and `effective_target_at` lets an explicit
-  binding win over a built-in's default — so a binding made before a built-in claimed that key (or a
-  hand-edited file) silently steals it. Suspected fix: validate in `set_hotkeys` — drop any
-  non-built-in binding whose key is a built-in's effective key (its default unless that built-in is
-  remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
-  cleaned map.
 - [ ] Skipping tracks very fast (holding/mashing next/prev) makes playback misbehave. Reproduce
   first and write down the exact symptoms from `medley.log` (wrong track playing vs. shown, audio
   of two tracks overlapping, stuck `Loading`, a skipped-over track starting late, extra
@@ -258,9 +250,8 @@
   generalize that one action to "prompt for item N" instead of adding one per command. A command
   with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
   run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
-  (the rows say so in their detail line). `o` becomes the default key for `:open`. A new
-  default key can collide with a persisted playlist hotkey, so land the `set_hotkeys` validation (Bugs:
-  "A playlist hotkey persisted in `state.toml` can shadow a built-in key") with or before it.
+  (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
+  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row.
 - [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
   (`:add-to-playlist/:add/:atp`, under about 26 columns: a float on a 60-column terminal, a side dock)
   the cluster is cut mid-word. Let the command cell break after a `/`. In a very wide rect the command

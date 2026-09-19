@@ -34,10 +34,24 @@ impl Hotkeys {
         changed
     }
 
-    pub(crate) fn replace(&mut self, map: HashMap<char, HotkeyTarget>) {
+    /// Loads `map` minus every playlist binding that would shadow a built-in's key; returns those, each with its built-in.
+    pub(crate) fn replace(&mut self, mut map: HashMap<char, HotkeyTarget>) -> Vec<(char, HotkeyTarget, BuiltinAction)> {
+        let playlists = map.iter().filter(|(_, target)| !matches!(target, HotkeyTarget::Builtin(_)));
+        let dropped: Vec<_> = playlists.filter_map(|(&key, target)| Some((key, target.clone(), defaulting_to(&map, key)?))).collect();
+        for (key, ..) in &dropped {
+            map.remove(key);
+        }
         self.map = map;
         self.generation += 1;
+        dropped
     }
+}
+
+/// The built-in whose default `key` is, unless it is remapped elsewhere.
+fn defaulting_to(hotkeys: &HashMap<char, HotkeyTarget>, key: char) -> Option<BuiltinAction> {
+    BuiltinAction::ALL.iter().find_map(|&(action, default)| {
+        (default == key && !hotkeys.values().any(|t| *t == HotkeyTarget::Builtin(action))).then_some(action)
+    })
 }
 
 /// Whatever answers to `key`: its table entry, else the built-in defaulting to it that isn't remapped elsewhere.
@@ -45,10 +59,7 @@ fn effective_target_at(hotkeys: &HashMap<char, HotkeyTarget>, key: char) -> Opti
     if let Some(t) = hotkeys.get(&key) {
         return Some(t.clone());
     }
-    BuiltinAction::ALL.iter().find_map(|&(action, default)| {
-        let target = HotkeyTarget::Builtin(action);
-        (default == key && !hotkeys.values().any(|t| *t == target)).then_some(target)
-    })
+    defaulting_to(hotkeys, key).map(HotkeyTarget::Builtin)
 }
 
 /// Drops `target`'s previous key and steals `key`; a rebind to the same key isn't a steal.
