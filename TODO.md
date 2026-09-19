@@ -316,6 +316,19 @@
   `Session::revision` change, so the new row appears without reopening; add the key to the
   picker's footer hint (`[+] new playlist`). An empty picker ("no playlists") gets the same key
   in place of the `:newplaylist <name>` instruction text.
+- [ ] Show a liked marker on track rows: a centre dot `·` at the left of the row, in the Tags
+  column where the bpm value sits (`Column::Tags` in `render_cell`, `ui/src/view/rows.rs`; the
+  `tags` cell of `Row`), for every track that is in a source's Liked Songs — in every list that
+  uses the shared row builder (`tracks_to_rows`): library, search, queue, history, playlists.
+  Give the dot its own fixed one-cell slot at the start of the tags cell (blank when not liked) so
+  bpm values stay aligned whether or not a row is liked, and account for it in `column_layout`'s
+  tags width. Liked state needs a cheap lookup: no list knows it today (see the like/unlike bug
+  above — `Session::set_liked`/`liked_targets`, `core/src/app.rs`, only talk to the source), so
+  keep a set of liked track ids in core, filled from each source's Liked Songs listing as
+  `ViewCache` loads it and updated through the same pending/settle path that bug item introduces
+  for like/unlike; rows read it under the frame snapshot, and a change bumps `Session::revision`.
+  While a like/unlike is pending, draw the dot italic like a pending playlist-hotkey letter. Best
+  done together with, or right after, the like/unlike bug fix.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
@@ -401,12 +414,9 @@
     invalidated by playlist-mutating commands, or a revision counter the view keys a cache on.
   - Let `on_event` reuse the frame snapshot's (`ui/src/view/frame.rs`) cheap parts instead of
     re-locking (`TabBar` click, `StatusLine::snapshot` on click, `warn_count`).
-  - Add a `Session` revision counter (bumped in `dispatch`/`on_event` when they report dirty) so
-    derived UI data — rows window, titles, help lines, settings entries, `LocalFilter::cache` (keyed
-    today on `source_len`, which misses same-length edits) — is rebuilt only when the revision, the
-    window or the size changes, not at `BASELINE_FPS`/`vis::FPS`. While the Vis pane is open the
-    whole frame, session lock included, is rebuilt at 30 fps, and the `Vis` worker contends for the
-    same lock at 30 Hz for `audio_levels`; move the levels behind their own lock/atomic.
+  - While the Vis pane is open, the `Vis` worker's `session.lock().unwrap().audio_levels()`
+    (`ui/src/vis.rs`) contends with the main session lock at 30 Hz; move audio levels behind their
+    own lock/atomic instead of sharing the `Session` mutex.
   - Feedback text lives in three places with three lifetimes: `MedleyView::queue_feedback`,
     `HotkeyUi::feedback`, `Session::membership_feedback` (cleared by the UI through a lock on every
     keypress). Fold into one UI-side `Feedback` slot; deliver the async membership result as a
