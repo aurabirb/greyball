@@ -173,6 +173,10 @@
   track list window (same paths as Search results). It must work in any placement — docked next to
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
+- [ ] Make sure the local filter (`/`) works in every panel that shows a track list — Now Playing,
+  Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
+  every placement (tab, docked, floating), filtering that window's own list through the same
+  `TrackList` path. List the panels where it does nothing or acts on the wrong window, then fix them.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
