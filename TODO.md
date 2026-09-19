@@ -135,6 +135,21 @@
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
   hammered; surface the failure in the warnings list rather than silently showing nothing.
+- [ ] Decided behaviour fixes, one pass (after per-window stage B):
+  - The warnings modal opens only from a click on the `⚠ warnings (N)` button's own span, not from
+    anywhere on the hint row (hit-test with the same span `draw` uses for the button).
+  - The mouse wheel scrolls a fullscreen (`Screen`-placement) Log/Settings pane like a docked one.
+  - A tab's `/` filter persists across tab switches like a docked window's does; only Esc (or a new
+    list via `reset_for_new_list`) clears it. The list title keeps showing the active filter.
+  - Toggling a LOCAL playlist hotkey on a track flashes "Added to …"/"Removed from …" like the
+    remote path does (a `Dispatch` outcome formatted in `ui/src/view/notice.rs`).
+  - Pressing a hotkey bound to a remote playlist whose source isn't registered/logged in returns
+    `Dispatch::Refused("Can't toggle …: <source> isn't available")` instead of doing nothing.
+  - Keys handled by a modal (including the key that closes it) leave the shell's feedback slot
+    alone; only input that reaches the base view clears it — so an async result that lands while
+    Help/the picker/a fullscreen pane is open is still readable after closing it.
+  Settled, no work: Queue/History tab and pane stay two independent window instances (the mode
+  toggle moves the focused instance); `/` targets the focused list; rows stay keyed on `revision`.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
@@ -405,7 +420,8 @@
 - [ ] Hide the sources column on narrow terminal sizes.
 
 ### Audits / cleanup tasks
-- [ ] Review how plugin/source failures are surfaced to the user and make the channel match the
+- [ ] (Do together with the decided behaviour fixes pass under Bugs; the one place that picks the
+  channel is `Notice::of_dispatch`/`of_event` in `ui/src/view/notice.rs`.) Review how plugin/source failures are surfaced to the user and make the channel match the
   failure's nature, instead of whatever each call site currently happens to do:
   - A failure directly caused by user input (e.g. liking a track fails) should show an error modal.
   - A failure that just means the action is blocked/not applicable right now (e.g. today's "no
