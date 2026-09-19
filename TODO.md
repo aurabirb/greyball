@@ -181,6 +181,12 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Move the liked marker (`·`) from the start of the Tags cell to the gap between the tags column
+  (bpm) and the track title, in place of the separating space — the dot sits right after the bpm
+  and directly before the title, so the tags column goes back to its bpm width and the marker takes
+  the existing single-space gap (`column_layout`/`five_col`/`render_cell`, `ui/src/view/rows.rs`;
+  `TAGS_COL_W` shrinks back from 4 to 3). The gap stays one cell wide, blank for a track that is not
+  liked; the italic pending style and the title/other column positions are unchanged.
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
