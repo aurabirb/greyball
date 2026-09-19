@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
-use cursive::theme::ColorStyle;
+use cursive::theme::{ColorStyle, Effect};
 
 use core::{HotkeyTarget, Session};
 
@@ -19,6 +19,8 @@ use super::window::WindowOutcome;
 const GAP: usize = 2;
 /// Blank columns kept clear of the right edge, so text never meets the border or scrollbar.
 const RIGHT_PAD: usize = 3;
+/// Left padding of a description's continuation lines.
+const CONT_PAD: usize = 2;
 
 /// What Enter on a row can rebind, or why it can't.
 enum Target {
@@ -39,7 +41,7 @@ enum Line {
     Blank,
     Title(String),
     /// The first line of `rows[_]`, the only kind the cursor stops on.
-    First(usize, String),
+    First(usize, String, String),
     Rest(String),
 }
 
@@ -119,15 +121,17 @@ fn playlist_cells(s: &Session) -> Vec<Cells> {
 fn build(width: usize, s: &Session) -> Built {
     let mut built = Built { lines: Vec::new(), rows: Vec::new(), sections: Vec::new() };
     let titled = Section::ALL.iter().map(|&section| (section.title(), table_cells(section, s)));
-    let sections = titled.chain(std::iter::once(("Playlist keys", playlist_cells(s))));
-    for (title, cells) in sections.filter(|(_, cells)| !cells.is_empty()) {
-        // Lane widths come from the section's widest cells, the command lane capped so the description keeps room.
+    let sections: Vec<_> = titled.chain(std::iter::once(("Playlist keys", playlist_cells(s)))).filter(|(_, cells)| !cells.is_empty()).collect();
+    let avail = width.saturating_sub(RIGHT_PAD).max(1);
+    // One key lane for every section, so all keys share a column.
+    let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count()).max().unwrap_or(0).min(avail / 4);
+    for (title, cells) in sections {
+        // The command lane is sized per section and capped so the description keeps room.
         let widest = |cell: fn(&Cells) -> &String| cells.iter().map(|c| cell(c).chars().count()).max().unwrap_or(0);
-        let avail = width.saturating_sub(RIGHT_PAD).max(1);
-        let shortcut_w = widest(|c| &c.shortcut).min(avail / 4);
         let command_w = widest(|c| &c.command).min((avail * 2 / 5).min(32));
         let lane = |w: usize| if w == 0 { 0 } else { w + GAP };
         let text_w = avail.saturating_sub(lane(command_w) + lane(shortcut_w)).max(1);
+        let wrap_w = text_w.saturating_sub(CONT_PAD).max(1);
         if !built.lines.is_empty() {
             built.lines.push(Line::Blank);
         }
@@ -136,9 +140,9 @@ fn build(width: usize, s: &Session) -> Built {
         for cell in cells {
             built.lines.push(Line::Blank);
             let command = if command_w == 0 { Vec::new() } else { wrap_slashes(&cell.command, command_w) };
-            let mut text = wrap(&cell.summary, text_w);
+            let mut text = wrap(&cell.summary, wrap_w);
             if !cell.detail.is_empty() {
-                text.extend(wrap(&cell.detail, text_w));
+                text.extend(wrap(&cell.detail, wrap_w));
             }
             let first = built.lines.len();
             for i in 0..command.len().max(text.len()) {
@@ -147,11 +151,10 @@ fn build(width: usize, s: &Session) -> Built {
                 if command_w > 0 {
                     line.push_str(&pad(&part(&command), lane(command_w)));
                 }
-                line.push_str(&pad(&part(&text), text_w));
-                if i == 0 && shortcut_w > 0 {
-                    line.push_str(&pad(&format!("{}{}", " ".repeat(GAP), cell.shortcut), lane(shortcut_w)));
-                }
-                built.lines.push(if i == 0 { Line::First(built.rows.len(), line) } else { Line::Rest(line) });
+                let indent = if i == 0 { "" } else { "  " };
+                line.push_str(&pad(&format!("{indent}{}", part(&text)), text_w + if shortcut_w > 0 { GAP } else { 0 }));
+                let key = if shortcut_w > 0 { pad(&cell.shortcut, shortcut_w) } else { String::new() };
+                built.lines.push(if i == 0 { Line::First(built.rows.len(), line, key) } else { Line::Rest(line) });
             }
             built.rows.push(Row { first, end: built.lines.len(), name: cell.summary, target: cell.target });
         }
@@ -256,7 +259,7 @@ impl HelpPane {
                     self.offset = bound_offset(offset, built.lines.len(), view_h);
                 }
                 (MouseEvent::Press(MouseButton::Left), _) if body.contains(pos) => {
-                    if let Some(Line::First(row, _)) = built.lines.get(self.offset + pos.y - body.top()) {
+                    if let Some(Line::First(row, _, _)) = built.lines.get(self.offset + pos.y - body.top()) {
                         self.cursor = *row;
                     }
                 }
@@ -301,10 +304,18 @@ impl HelpPane {
             match line {
                 Line::Blank => {}
                 Line::Title(text) => view.with_color(ColorStyle::title_primary(), |p| p.print((0, y), text)),
-                Line::First(i, text) if *i == self.cursor => {
-                    view.with_color(ColorStyle::highlight(), |p| p.print((0, y), &pad(text, body.width())));
+                Line::First(i, text, key) => {
+                    let draw = |p: &Printer| {
+                        p.print((0, y), &pad(text, body.width()));
+                        p.with_effect(Effect::Underline, |p| p.print((text.chars().count(), y), key));
+                    };
+                    if *i == self.cursor {
+                        view.with_color(ColorStyle::highlight(), draw);
+                    } else {
+                        draw(&view);
+                    }
                 }
-                Line::First(_, text) | Line::Rest(text) => view.print((0, y), text),
+                Line::Rest(text) => view.print((0, y), text),
             }
         }
         draw_scrollbar(&printer.windowed(Rect::from_size((0, 1), (printer.size.x, body.height()))), body.width(), body.height(), offset, built.lines.len());
