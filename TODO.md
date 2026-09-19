@@ -70,10 +70,6 @@
   (e.g. a minimum width below which it disappears, the title truncating to leave the waveform a
   reasonable share) and make it show for the currently playing track, including a track that is
   still being analysed (draw nothing until buckets exist).
-- [ ] The Vis window leaves an empty row at its bottom that the owner does not want — likely the
-  now-blank status row every window reserves (`Window::shows_status()` is false for Vis, but the row
-  is still reserved). Give Vis's picture that row (the reserved row and the body must not depend on
-  the row's content, so a window with no status text should not reserve one at all) without
   breaking the corner-slot declarations for other windows.
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track

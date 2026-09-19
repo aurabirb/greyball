@@ -122,23 +122,24 @@ impl Window {
         self.rect
     }
 
-    /// Every window has a status row: both bottom corners are offered in it.
+    /// A window with a status row offers both bottom corners in it.
     pub(super) const CORNERS: Corners = Corners::BOTH;
 
-    /// Whether the row carries text; the rest of its behaviour is the same for every window.
+    /// Whether the window has a status row at all, which its kind alone decides: Vis draws its picture on every row.
     pub(super) fn shows_status(&self) -> bool {
         !matches!(self.body, Body::Vis(_))
     }
 
     /// The status row in screen coordinates, when the window has room to draw it.
     pub(super) fn status_rect(&self) -> Option<Rect> {
-        let y = self.rect.height().checked_sub(1).filter(|&y| y > 0)?;
+        let y = self.rect.height().checked_sub(1).filter(|&y| y > 0 && self.shows_status())?;
         Some(Rect::from_size((self.rect.left(), self.rect.top() + y), (self.rect.width(), 1)))
     }
 
     /// `rect()` without the status row: the rect the component lays out, draws and hit-tests in.
     fn content(&self) -> Rect {
-        Rect::from_size(self.rect.top_left(), (self.rect.width(), self.rect.height().saturating_sub(1)))
+        let row = usize::from(self.shows_status());
+        Rect::from_size(self.rect.top_left(), (self.rect.width(), self.rect.height().saturating_sub(row)))
     }
 
     /// Takes the rect this layout pass gave the window and keeps its scroll state inside it.
