@@ -19,7 +19,7 @@ const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
 
 /// Narrower than this the waveform is not drawn.
-const WAVE_MIN: usize = 12;
+const WAVE_MIN: usize = 40;
 
 /// Bars narrower than this draw no waveform.
 const WAVE_MIN_BAR: usize = 80;
