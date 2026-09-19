@@ -116,6 +116,12 @@ pub trait Source: Send + Sync {
     fn liked_songs_node(&self) -> Option<BrowseNode> {
         None
     }
+
+    /// Whether a track added to `node` shows up at the head of its listing rather than the tail
+    /// (Spotify's Liked Songs lists newest first). Default: appended.
+    fn adds_first(&self, _node: &BrowseNode) -> bool {
+        false
+    }
 }
 
 pub trait ReadSeek: Read + Seek {}

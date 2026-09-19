@@ -11,7 +11,7 @@ use rand::prelude::*;
 use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::hotkeys::Hotkeys;
-use crate::event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
+use crate::event::{Bus, CoreEvent, PlayerEvent};
 use crate::media_cache::MediaCache;
 use crate::playlist_m3u::{
     M3uDoc, M3uEntry, ParsedRendition, PlaylistMeta, SoftMeta, parse_m3u, write_entry, write_header,
@@ -2168,7 +2168,7 @@ impl Session {
         let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: track isn't on {source}"));
         };
-        if !self.view.toggle_remote_membership(t, uri, src, node, self.remote_ctx()) {
+        if !self.view.set_remote_membership(t, uri, src, node, None, self.remote_ctx()) {
             return Dispatch::Refused(format!("Still updating {name:?} in that playlist"));
         }
         self.invalidate_hotkey_memberships();
@@ -2248,35 +2248,24 @@ impl Session {
             .collect()
     }
 
-    /// Adds `track` to (or removes it from) each of its sources' liked list, off the UI thread.
+    /// Likes or unlikes `track` on each of its sources' liked list, off the UI thread.
     fn set_liked(&mut self, track: TrackId, like: bool) -> Result<Dispatch> {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
         let targets = self.liked_targets(&t);
         let name = t.display_name();
-        let verb = if like { "like" } else { "unlike" };
         if targets.is_empty() {
+            let verb = if like { "like" } else { "unlike" };
             return Ok(refused("set_liked", format!("Can't {verb} {name:?}: no liked-songs source for this track")));
         }
-        let bus = self.bus.clone();
-        std::thread::spawn(move || {
-            for (src, node, uri) in targets {
-                let result = if like {
-                    src.add_to_playlist(&node, &uri)
-                } else {
-                    src.remove_from_playlist(&node, &uri)
-                };
-                bus.send(CoreEvent::MembershipResult(match result {
-                    Ok(()) if like => MembershipOutcome::Changed(format!("Liked {name:?}")),
-                    Ok(()) => MembershipOutcome::Changed(format!("Removed {name:?} from Liked Songs")),
-                    Err(e) => {
-                        log::error!("set_liked[{}]: {e}", src.id());
-                        MembershipOutcome::of_error(format!("Can't {verb} {name:?}"), &e)
-                    }
-                }));
-            }
-        });
+        let mut started = false;
+        for (src, node, uri) in targets {
+            started |= self.view.set_remote_membership(t.clone(), uri, src, node, Some(like), self.remote_ctx());
+        }
+        if !started {
+            return Ok(Dispatch::Refused(format!("Still updating {name:?} in Liked Songs")));
+        }
         Ok(Dispatch::Ok)
     }
 

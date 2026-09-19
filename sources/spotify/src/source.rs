@@ -196,6 +196,10 @@ impl Source for SpotifySource {
         Some(BrowseNode::Path(LIKED_SONGS.to_string()))
     }
 
+    fn adds_first(&self, node: &BrowseNode) -> bool {
+        self.is_synthetic(node)
+    }
+
     fn browse(&self, node: &BrowseNode, want: usize) -> Result<BrowsePage> {
         match node {
             // Root: "Liked Songs" (synthetic, prepended outside the paged

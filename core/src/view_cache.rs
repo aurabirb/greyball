@@ -4,7 +4,7 @@
 //! same list again. Kept as its own type so `Session` stays data-access and
 //! wiring, not view state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,8 @@ use crate::types::{SourceId, Track, TrackId};
 /// `tracks.len()`.
 struct RemotePlaylistTracks {
     tracks: Vec<Track>,
+    /// `tracks`' ids, for cheap membership lookups.
+    ids: HashSet<TrackId>,
     /// Bumped by `edit_tracks`, the one way `tracks`' membership or order changes.
     generation: u64,
     /// A background thread is already folding newly-landed raw hits into
@@ -67,6 +69,7 @@ impl RemotePlaylistTracks {
     fn empty() -> Self {
         Self {
             tracks: Vec::new(),
+            ids: HashSet::new(),
             generation: 0,
             ingesting: false,
             browsing: false,
@@ -80,6 +83,7 @@ impl RemotePlaylistTracks {
 
     fn edit_tracks(&mut self, edit: impl FnOnce(&mut Vec<Track>)) {
         edit(&mut self.tracks);
+        self.ids = self.tracks.iter().map(|t| t.id).collect();
         self.generation += 1;
     }
 }
@@ -97,6 +101,8 @@ enum Membership {
 struct PendingChange {
     track: Track,
     add: bool,
+    /// An add lands at the head of the list, not the tail (`Source::adds_first`).
+    front: bool,
 }
 
 type RemoteKey = (SourceId, BrowseNode);
@@ -198,7 +204,7 @@ pub(crate) struct ViewCache {
     /// (`ensure_remote_playlist_tracks`) — until a call comes back
     /// non-partial with nothing left to ingest and the entry freezes.
     remote_playlist_tracks: TracksCache,
-    /// In-flight hotkey toggles per remote playlist — see `toggle_remote_membership`.
+    /// In-flight hotkey toggles per remote playlist — see `set_remote_membership`.
     pending: PendingChanges,
 }
 
@@ -402,18 +408,18 @@ impl ViewCache {
         // want=0: called on every keypress for cursor bounds, not just
         // Command::PlayContext — mustn't force full-speed loading itself.
         self.ensure_remote_playlist_tracks(source, node, 0, ctx);
-        let mut ids: Vec<TrackId> = self
-            .remote_playlist_cached(source, node, |e| e.tracks.iter().map(|t| t.id).collect())
-            .unwrap_or_default();
-        ids.extend(self.pending_adds(source, node).iter().map(|t| t.id));
+        let (front, back) = self.pending_adds(source, node);
+        let mut ids: Vec<TrackId> = front.iter().map(|t| t.id).collect();
+        ids.extend(self.remote_playlist_cached(source, node, |e| e.tracks.iter().map(|t| t.id).collect::<Vec<_>>()).unwrap_or_default());
+        ids.extend(back.iter().map(|t| t.id));
         ids
     }
 
     /// Cheap count of a remote playlist's ingested tracks so far.
     pub fn remote_playlist_len(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) -> usize {
         self.ensure_remote_playlist_tracks(source, node, 0, ctx);
-        self.remote_playlist_cached(source, node, |e| e.tracks.len()).unwrap_or(0)
-            + self.pending_adds(source, node).len()
+        let (front, back) = self.pending_adds(source, node);
+        self.remote_playlist_cached(source, node, |e| e.tracks.len()).unwrap_or(0) + front.len() + back.len()
     }
 
     /// A window of a remote playlist's ingested tracks (`offset..offset+limit`)
@@ -430,29 +436,39 @@ impl ViewCache {
         // slightly before the user scrolls past the loaded edge.
         const WINDOW_MARGIN: usize = 50;
         self.ensure_remote_playlist_tracks(source, node, offset + limit + WINDOW_MARGIN, ctx);
-        let (mut window, settled_len): (Vec<Track>, usize) = self
+        let (front, back) = self.pending_adds(source, node);
+        let mut window: Vec<Track> = front.iter().skip(offset).take(limit).cloned().collect();
+        let settled_skip = offset.saturating_sub(front.len());
+        let (settled, settled_len): (Vec<Track>, usize) = self
             .remote_playlist_cached(source, node, |e| {
-                (e.tracks.iter().skip(offset).take(limit).cloned().collect(), e.tracks.len())
+                (e.tracks.iter().skip(settled_skip).take(limit - window.len()).cloned().collect(), e.tracks.len())
             })
             .unwrap_or_default();
+        window.extend(settled);
         let room = limit.saturating_sub(window.len());
         if room > 0 {
-            let skip = offset.saturating_sub(settled_len);
-            window.extend(self.pending_adds(source, node).into_iter().skip(skip).take(room));
+            let skip = offset.saturating_sub(front.len() + settled_len);
+            window.extend(back.into_iter().skip(skip).take(room));
         }
         window
     }
 
-    /// Tracks mid-add to `(source, node)` that the loaded list doesn't hold yet — its pending tail rows.
-    fn pending_adds(&self, source: &SourceId, node: &BrowseNode) -> Vec<Track> {
+    /// Tracks mid-add to `(source, node)` that the loaded list doesn't hold yet, as the rows
+    /// pending ahead of the loaded list and those pending after it.
+    fn pending_adds(&self, source: &SourceId, node: &BrowseNode) -> (Vec<Track>, Vec<Track>) {
         let key = (source.clone(), node.clone());
-        let adds: Vec<Track> = match self.pending.lock().unwrap().get(&key) {
-            Some(changes) => changes.iter().filter(|c| c.add).map(|c| c.track.clone()).collect(),
-            None => return Vec::new(),
+        let adds: Vec<(Track, bool)> = match self.pending.lock().unwrap().get(&key) {
+            Some(changes) => changes.iter().filter(|c| c.add).map(|c| (c.track.clone(), c.front)).collect(),
+            None => return (Vec::new(), Vec::new()),
         };
         let cache = self.remote_playlist_tracks.lock().unwrap();
-        let loaded = cache.get(&key).map(|e| e.tracks.as_slice()).unwrap_or_default();
-        adds.into_iter().filter(|t| !loaded.iter().any(|l| l.id == t.id)).collect()
+        let loaded = cache.get(&key).map(|e| &e.ids);
+        let (front, back): (Vec<_>, Vec<_>) = adds
+            .into_iter()
+            .filter(|(t, _)| !loaded.is_some_and(|ids| ids.contains(&t.id)))
+            .partition(|(_, front)| *front);
+        let tracks = |v: Vec<(Track, bool)>| v.into_iter().map(|(t, _)| t).collect();
+        (tracks(front), tracks(back))
     }
 
     /// Tracks with an add or remove still in flight on `(source, node)`.
@@ -475,7 +491,7 @@ impl ViewCache {
             return if change.add { Membership::PendingAdd } else { Membership::PendingRemove };
         }
         let member = self
-            .remote_playlist_cached(source, node, |e| e.tracks.iter().any(|t| t.id == track))
+            .remote_playlist_cached(source, node, |e| e.ids.contains(&track))
             .unwrap_or(false);
         if member { Membership::Member } else { Membership::NotMember }
     }
@@ -502,26 +518,32 @@ impl ViewCache {
         self.remote_playlist_tracks.lock().unwrap().get(&key).map(f)
     }
 
-    /// Flip `track`'s membership of `(source, node)` on a background thread. Add-vs-remove is
-    /// decided only once the whole list has loaded, so a partial prefix never reads as "absent".
-    /// `false` (nothing sent) when a change for this `(playlist, track)` is already in flight.
-    pub fn toggle_remote_membership(
+    /// Change `track`'s membership of `(source, node)` on a background thread: `want` says add
+    /// (`Some(true)`) or remove, `None` flips it. A flip decides add-vs-remove only once the whole
+    /// list has loaded, so a partial prefix never reads as "absent"; an explicit `want` that already
+    /// holds sends nothing. `false` (nothing sent) when a change for this `(playlist, track)` is
+    /// already in flight.
+    pub fn set_remote_membership(
         &self,
         track: Track,
         uri: String,
         source: Arc<dyn Source>,
         node: BrowseNode,
+        want: Option<bool>,
         ctx: RemoteCtx,
     ) -> bool {
         let key = (source.id(), node.clone());
-        let guess_add = self.remote_membership(&key.0, &node, track.id) == Membership::NotMember;
+        let front = source.adds_first(&node);
+        let liked = source.liked_songs_node().as_ref() == Some(&node);
+        let guess_add =
+            want.unwrap_or_else(|| self.remote_membership(&key.0, &node, track.id) == Membership::NotMember);
         {
             let mut pending = self.pending.lock().unwrap();
             let changes = pending.entry(key.clone()).or_default();
             if changes.iter().any(|c| c.track.id == track.id) {
                 return false;
             }
-            changes.push(PendingChange { track: track.clone(), add: guess_add });
+            changes.push(PendingChange { track: track.clone(), add: guess_add, front });
         }
         let deps = RemotePlaylistDeps {
             catalog: ctx.catalog.clone(),
@@ -535,18 +557,19 @@ impl ViewCache {
         std::thread::spawn(move || {
             let name = track.display_name();
             let outcome = Self::await_loaded_membership(&deps, &source, &key, track.id).and_then(|member| {
+                let add = want.unwrap_or(!member);
                 if let Some(changes) = pending.lock().unwrap().get_mut(&key)
                     && let Some(change) = changes.iter_mut().find(|c| c.track.id == track.id)
                 {
-                    change.add = !member;
+                    change.add = add;
                 }
                 deps.bus.send(CoreEvent::PlaylistsChanged);
-                let result = if member {
-                    source.remove_from_playlist(&node, &uri)
-                } else {
-                    source.add_to_playlist(&node, &uri)
+                let result = match (add, member) {
+                    (true, true) | (false, false) => Ok(()),
+                    (true, false) => source.add_to_playlist(&node, &uri),
+                    (false, true) => source.remove_from_playlist(&node, &uri),
                 };
-                result.map(|()| member)
+                result.map(|()| add)
             });
             let ids: Option<Vec<TrackId>> = {
                 // Both locks held so no redraw sees the track neither pending nor settled.
@@ -556,12 +579,16 @@ impl ViewCache {
                     changes.retain(|c| c.track.id != track.id);
                 }
                 match (&outcome, cache.get_mut(&key)) {
-                    (Ok(was_member), Some(entry)) => {
+                    (Ok(added), Some(entry)) => {
                         entry.edit_tracks(|tracks| {
-                            if *was_member {
+                            if !*added {
                                 tracks.retain(|t| t.id != track.id);
-                            } else {
-                                tracks.push(track.clone());
+                            } else if !tracks.iter().any(|t| t.id == track.id) {
+                                if front {
+                                    tracks.insert(0, track.clone());
+                                } else {
+                                    tracks.push(track.clone());
+                                }
                             }
                         });
                         entry.persisted_len = entry.tracks.len();
@@ -578,11 +605,18 @@ impl ViewCache {
             }
             deps.bus.send(CoreEvent::PlaylistsChanged);
             deps.bus.send(CoreEvent::MembershipResult(match outcome {
-                Ok(true) => MembershipOutcome::Changed(format!("Removed {name:?} from playlist")),
-                Ok(false) => MembershipOutcome::Changed(format!("Added {name:?} to playlist")),
+                Ok(true) if liked => MembershipOutcome::Changed(format!("Liked {name:?}")),
+                Ok(false) if liked => MembershipOutcome::Changed(format!("Removed {name:?} from Liked Songs")),
+                Ok(true) => MembershipOutcome::Changed(format!("Added {name:?} to playlist")),
+                Ok(false) => MembershipOutcome::Changed(format!("Removed {name:?} from playlist")),
                 Err(e) => {
-                    log::error!("toggle_playlist_membership[{cache_key}]: {e}");
-                    MembershipOutcome::of_error(format!("Can't toggle {name:?}"), &e)
+                    log::error!("set_remote_membership[{cache_key}]: {e}");
+                    let what = match (liked, want) {
+                        (false, _) => "toggle",
+                        (true, Some(true)) => "like",
+                        (true, _) => "unlike",
+                    };
+                    MembershipOutcome::of_error(format!("Can't {what} {name:?}"), &e)
                 }
             }));
         });
@@ -688,6 +722,7 @@ impl ViewCache {
                     let tracks = ctx.store.get_tracks(&persisted).unwrap_or_default();
                     let len = tracks.len();
                     let entry = RemotePlaylistTracks {
+                        ids: tracks.iter().map(|t| t.id).collect(),
                         tracks,
                         generation: 1,
                         ingesting: false,

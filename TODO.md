@@ -92,16 +92,10 @@
   AP socket through a local proxy. When one shows up in `medley.log`, confirm playback carried on
   ("reconnecting in the background" → "session connected", no `Stopped` in between), then delete this.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
-- [ ] Remote playlist hotkey toggles (`ViewCache::toggle_remote_membership`, `core/src/view_cache.rs`)
+- [ ] Remote playlist hotkey toggles (`ViewCache::set_remote_membership`, `core/src/view_cache.rs`)
   have only been exercised against a throwaway fake source, never a real Spotify playlist. On first
   real use, confirm in `medley.log` that one press sends exactly one add/remove, the letter goes
   italic then settles, and the open playlist gains/loses the row — then delete this.
-- [ ] Like/unlike (`Session::set_liked`, `core/src/app.rs`) never updates the cached Liked Songs list,
-  so an open Liked Songs view keeps a just-unliked row (and lacks a just-liked one) until restart,
-  and no list shows a track's liked state at all. Route it through the same pending/settle path as
-  `ViewCache::toggle_remote_membership` (a source needs to say where an add lands — Spotify puts new
-  likes first, not last) and add a liked marker to the shared row builder (`tracks_to_rows`,
-  `ui/src/view/rows.rs`).
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
   (`ui/src/view/rows.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
