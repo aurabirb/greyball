@@ -146,6 +146,14 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Confirm before a playlist hotkey removes a track: when pressing a playlist's key on the selected
+  track would REMOVE it from that playlist (the track is already a member, so the toggle is a
+  removal — local playlists and remote ones through `ViewCache::set_remote_membership`,
+  `core/src/view_cache.rs`, the hotkey path in `ui/src/keybindings.rs`/`Session`), ask for
+  confirmation first, exactly like the unlike key does (`Unlike`'s "Confirms first." flow — find
+  its confirm dialog and reuse it, worded for the playlist: `Remove <track> from <playlist>?`).
+  Adding needs no confirmation. Enter/`y` confirms, Esc/`n` cancels, and nothing is sent before
+  confirmation (no pending marker, no request). One shared confirm path for both.
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
