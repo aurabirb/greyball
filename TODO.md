@@ -251,6 +251,14 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
+- [ ] Move the assigned key on Playlists top-level rows from the left gutter (the tags column before
+  the name) to the right-hand hotkeys column, where track rows show their playlist letters
+  (`Column::Hotkeys` in `render_cell`, `ui/src/view/rows.rs`; the top-level rows are built in
+  `ui/src/view/track_list.rs` from `TrackList::top()`), same alignment and style as on track rows so
+  the two read as one column when switching between a playlist's tracks and the playlist list. Applies
+  to every Playlists-kind window (the tab and `playlist-keys`). Check it in a real-terminal
+  screenshot of the `playlist-keys` float at its default size: the key must stay visible when the
+  name is truncated in a narrow rect (the key column keeps its width; the name gives way).
 - [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
