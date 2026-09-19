@@ -4,6 +4,8 @@ use cursive::theme::ColorStyle;
 
 use core::{Command, SetupKind};
 
+use crate::screen::Corners;
+
 use super::{Focus, MedleyView};
 use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
@@ -14,6 +16,11 @@ use super::warnings::{Warnings, WarningsModal};
 pub(super) enum Modal {
     Warnings(WarningsModal),
     Picker(PlaylistPicker),
+}
+
+impl Modal {
+    /// A modal covers the whole screen, so nothing may draw in a corner under or over it.
+    pub(super) const CORNERS: Corners = Corners::NONE;
 }
 
 /// What an event meant to the open modal, for `MedleyView` to act on.

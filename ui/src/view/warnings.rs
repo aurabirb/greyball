@@ -1,7 +1,7 @@
 use std::thread;
 
 use cursive::{Printer, Rect};
-use cursive::event::{Event, Key};
+use cursive::event::Event;
 use cursive::theme::ColorStyle;
 
 use core::{CoreEvent, PluginHealth, Session, SetupKind, SourceId};
@@ -20,15 +20,10 @@ pub(super) fn warnings_label(count: usize) -> String {
     format!(" ⚠ warnings ({count}) ")
 }
 
-/// The button's `(start, width)` on the hint row, shared by draw and the click hit-test; `None` without warnings.
-pub(super) fn warnings_span(count: usize, row_w: usize) -> Option<(usize, usize)> {
-    let width = warnings_label(count).chars().count().min(row_w);
-    (count > 0).then_some((row_w - width, width))
-}
-
-/// Whether a keyboard event arriving while `Focus::Warnings` is focused should knock focus off the button.
-pub(super) fn defocuses_warnings(event: &Event) -> bool {
-    !matches!(event, Event::Key(Key::Enter))
+/// The button's cells at the right end of `row`, shared by draw and the click hit-test.
+pub(super) fn warnings_rect(count: usize, row: Rect) -> Rect {
+    let width = warnings_label(count).chars().count().min(row.width());
+    Rect::from_size((row.left() + row.width() - width, row.top()), (width, 1))
 }
 
 /// What the modal lists, read under one lock: every plugin's health, then this session's background failures.

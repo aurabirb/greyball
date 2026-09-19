@@ -7,7 +7,7 @@ use cursive::theme::{BaseColor, Color, ColorStyle};
 
 use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
-use crate::screen::{Home, Kind, Placement, Startup, WINDOWS};
+use crate::screen::{Corners, Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
 
 use super::help::{Built, HelpPane};
@@ -87,6 +87,7 @@ pub(super) struct Window {
     body: Body,
     rect: Rect,
     status: Option<StatusRow>,
+    corners: Corners,
 }
 
 impl Window {
@@ -106,6 +107,16 @@ impl Window {
 
     pub(super) fn rect(&self) -> Rect {
         self.rect
+    }
+
+    pub(super) fn corners(&self) -> Corners {
+        self.corners
+    }
+
+    /// The status row in screen coordinates, when the window has one with room to draw.
+    pub(super) fn status_rect(&self) -> Option<Rect> {
+        let y = self.rect.height().checked_sub(1).filter(|&y| y > 0 && self.status.is_some())?;
+        Some(Rect::from_size((self.rect.left(), self.rect.top() + y), (self.rect.width(), 1)))
     }
 
     /// `rect()` without the status row: the rect the component lays out, draws and hit-tests in.
@@ -268,7 +279,7 @@ impl Windows {
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
         let status = startup.status_row.then(StatusRow::default);
-        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status });
+        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status, corners: startup.corners() });
         self.placements.of.push(placement);
         WindowId(self.items.len() - 1)
     }

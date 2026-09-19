@@ -100,6 +100,33 @@ pub enum Home {
     Float,
 }
 
+/// A bottom corner of the screen, where a surface may host a widget or an input line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    Left,
+    Right,
+}
+
+/// Which bottom corners a surface offers.
+#[derive(Clone, Copy)]
+pub struct Corners {
+    left: bool,
+    right: bool,
+}
+
+impl Corners {
+    pub const NONE: Corners = Corners { left: false, right: false };
+    pub const RIGHT: Corners = Corners { left: false, right: true };
+    pub const BOTH: Corners = Corners { left: true, right: true };
+
+    pub fn offers(self, corner: Corner) -> bool {
+        match corner {
+            Corner::Left => self.left,
+            Corner::Right => self.right,
+        }
+    }
+}
+
 /// A startup window: the name `:panes`, `:window` and `state.toml` know it by, and its instance settings.
 pub struct Startup {
     pub name: &'static str,
@@ -111,6 +138,13 @@ pub struct Startup {
     pub status_row: bool,
     /// The startup tab this window is the companion of: it opens and cycles in the tab's place, and never joins the tab bar.
     pub companion_of: Option<&'static str>,
+}
+
+impl Startup {
+    /// A window with a status row offers both bottom corners in it; one without offers none.
+    pub const fn corners(&self) -> Corners {
+        if self.status_row { Corners::BOTH } else { Corners::NONE }
+    }
 }
 
 const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {

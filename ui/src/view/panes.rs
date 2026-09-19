@@ -14,7 +14,7 @@ use super::window::WindowId;
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
 
-const BOTTOM_BAR_ROWS: usize = 2;
+pub(super) const BOTTOM_BAR_ROWS: usize = 2;
 
 /// `Action::CyclePaneLayout`'s rotation, one `(side, stack)` step per press.
 pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [

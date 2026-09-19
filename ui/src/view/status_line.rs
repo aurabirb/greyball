@@ -5,6 +5,8 @@ use unicode_width::UnicodeWidthStr;
 
 use core::{Command, PlayerState, Session, TrackId};
 
+use crate::screen::Corners;
+
 use super::text::{in_span, ms, pad, scroll_title};
 use super::transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
 
@@ -61,6 +63,8 @@ struct Layout {
 }
 
 impl StatusLine {
+    pub(super) const CORNERS: Corners = Corners::RIGHT;
+
     pub(super) fn snapshot(s: &Session) -> Self {
         let core = StatusCore::snapshot(s);
         let st = s.player_status();

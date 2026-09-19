@@ -16,6 +16,7 @@ use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
 use crate::screen::{Kind, Placement};
 
+use corners::Widget;
 use frame::Chrome;
 use input::Editing;
 use memo::Memo;
@@ -23,11 +24,12 @@ use modal::{Modal, modal_body};
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
-use text::{Marquee, in_span};
+use text::Marquee;
 use track_list::TrackList;
-use warnings::{defocuses_warnings, warnings_label, warnings_span};
+use warnings::warnings_label;
 use window::{Ctx, WindowFrame, WindowId, WindowOutcome, Windows};
 
+mod corners;
 mod frame;
 mod help;
 mod hotkeys;
@@ -316,13 +318,13 @@ impl MedleyView {
 
     /// Every shown window — the tab, the docked, the floats by id — then the warnings button; `warn_count` is the caller's.
     fn focus_order_given(&self, warn_count: usize) -> Vec<Focus> {
-        let mut shown = self.visible();
+        let placed = self.placed();
+        let mut shown: Vec<WindowId> = placed.iter().map(|placed| placed.id).collect();
         // Focusing a float raises it, so z-order would make `Tab` skip the one just covered.
         let floats = shown.iter().position(|&id| self.windows.placement(id) == Placement::Floating).unwrap_or(shown.len());
         shown[floats..].sort();
         let mut order: Vec<Focus> = shown.into_iter().map(Focus::Window).collect();
-        // A fullscreen window covers the button.
-        if warn_count > 0 && self.fullscreen().is_none() {
+        if self.warnings_widget(&placed, warn_count).is_some() {
             order.push(Focus::Warnings);
         }
         order
@@ -426,9 +428,7 @@ impl View for MedleyView {
         };
         let bottom = printer.size.y.saturating_sub(if covered { 1 } else { 2 });
         let line = self.hint_line(chrome);
-        // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let button = warnings_span(chrome.warn_count, printer.size.x).filter(|_| !covered);
-        let warn_w = button.map_or(0, |(_, width)| width);
+        // Cursor position in the main list / its length, right-aligned.
         let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
         let style = if covered { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
         printer.with_color(style, |printer| {
@@ -436,29 +436,23 @@ impl View for MedleyView {
             if let Some(list) = main.filter(|list| list.total > 0) {
                 let more = if list.loading { "+" } else { "" };
                 let readout = format!("{}/{}{more} {}", cursor.min(list.total - 1) + 1, list.total, list.unit);
-                let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
+                let x = printer.size.x.saturating_sub(readout.width() + 1);
                 if x >= line.width() + 2 {
                     printer.print((x, bottom), &readout);
                 }
             }
         });
 
-        if covered {
-            return;
+        let widget = self.warnings_widget(&placed, chrome.warn_count);
+        if !covered {
+            let y = printer.size.y.saturating_sub(1);
+            let width = Widget::status_width(widget.as_ref(), printer.size.x);
+            frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);
         }
-        let y = printer.size.y.saturating_sub(1);
-        frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
-
-        // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
-        if let Some((bx, _)) = button {
-            let label = warnings_label(chrome.warn_count);
+        if let Some(widget) = widget {
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
-            let style = if self.focus == Focus::Warnings {
-                ColorStyle::new(bg, fg)
-            } else {
-                ColorStyle::new(fg, bg)
-            };
-            printer.with_color(style, |p| p.print((bx, bottom), &label));
+            let style = if self.focus == Focus::Warnings { ColorStyle::new(bg, fg) } else { ColorStyle::new(fg, bg) };
+            printer.windowed(widget.rect).with_color(style, |p| p.print((0, 0), &warnings_label(chrome.warn_count)));
         }
     }
 
@@ -508,6 +502,15 @@ impl MedleyView {
         }
         let fullscreen = self.fullscreen();
 
+        if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
+            && let Some(local) = position.checked_sub(*offset)
+            && let Some(widget) = self.warnings_widget(&self.placed(), self.warn_count())
+            && widget.rect.contains(local)
+        {
+            self.open_warnings();
+            return EventResult::consumed();
+        }
+
         // Fixed rows of the whole screen: the tab bar on top, the hint row and the status line at the bottom.
         if fullscreen.is_none()
             && let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
@@ -527,15 +530,11 @@ impl MedleyView {
                     _ => EventResult::consumed(),
                 };
             }
-            if local.y == size.y.saturating_sub(2)
-                && warnings_span(self.warn_count(), size.x).is_some_and(|span| in_span(local.x, span))
-            {
-                self.open_warnings();
-                return EventResult::consumed();
-            }
             if local.y == size.y.saturating_sub(1) {
                 let status = self.with_session(StatusLine::snapshot);
-                return match status.click(local.x, size.x) {
+                let widget = self.warnings_widget(&self.placed(), self.warn_count());
+                let width = Widget::status_width(widget.as_ref(), size.x);
+                return match status.click(local.x, width) {
                     Some(cmd) => self.run(cmd),
                     None => EventResult::consumed(),
                 };
@@ -560,12 +559,15 @@ impl MedleyView {
             };
         }
 
-        if self.focus == Focus::Warnings {
-            if !defocuses_warnings(event) {
+        // Tab and Shift-Tab cycle on from the button; any other key but Enter moves to the window hosting it.
+        if self.focus == Focus::Warnings && !matches!(event, Event::Key(Key::Tab) | Event::Shift(Key::Tab)) {
+            if *event == Event::Key(Key::Enter) {
                 self.open_warnings();
                 return EventResult::consumed();
             }
-            self.focus = Focus::Window(self.main_id());
+            let placed = self.placed();
+            let host = self.warnings_widget(&placed, self.warn_count()).map_or(self.main_id(), |widget| widget.host);
+            self.focus_window(host);
         }
 
         // A key goes to the focused window, then the shell; nothing under a fullscreen window is ever offered one.

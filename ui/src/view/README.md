@@ -86,6 +86,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   consumed). `Window::draw` fills the row with the last bind result (`Notice::Status`, styled as a warning
   when refused, cleared by the next key or blur), else the component's idle hints: a list's `[key] assign   [Backspace] clear` where they apply, then `[M] <next placement>` (the `CyclePlacement` key and `Windows::next_placement`, `close` when it closes) while it has focus. `Notice::Status` goes
   to the focused window's `Window::set_status` when it has such a row, else to the hint row.
+- Corner slots (`corners.rs`): each surface declares which bottom corners it offers (`screen::Corners`): a window with `Startup::status_row` both (`Startup::corners`), the scrubber `StatusLine` the right one, a modal none (`Modal::CORNERS`); a window docked along the bottom edge (`pane_cfg.side` `Bottom`) offers none. `MedleyView::slots` is the one function that picks, per corner, the scrubber line when it is shown and offers it, else the nearest offering window's status row, and none under a modal. The warnings button is drawn through it (`warnings_widget`, at the right end of the slot's row; on the scrubber line the `StatusLine` gets the width left of it), and its click, draw and place in the Tab cycle all read that one result. A key other than Enter, Tab or Shift-Tab pressed on the focused button first focuses its host window (the slot's window, or for the scrubber line the window occupying the corner), so navigation acts on that window's list.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
@@ -260,13 +261,12 @@ on `revision` — it is read fresh or kept in its own small cache.
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
    returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`).
-4. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom-2 → the warnings modal, inside `warnings_span` only (the span `draw` puts the button in);
-   bottom → `StatusLine::click`.
+4. A left press on the warnings button (its rect from `warnings_widget`) opens the warnings modal. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom → `StatusLine::click` over the width the button leaves.
 5. Any other mouse event goes to the topmost shown window whose `Placed::frame` contains it. The
    window takes focus when it uses the event, and on any press — so a press on a floating window's
    border or title row raises it; a click outside a floating window reaches what is under it and
    closes nothing.
-6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
+6. Keys: Enter on the focused warnings button opens the modal, Tab and Shift-Tab cycle on from it, any other key focuses the button's host window first. Then
    `send` offers the key to the focused window — but for Tab and Shift-Tab, which only a floating or
    `Screen` window is offered. Enter and Esc a tabbed Log, Settings or Vis window ignores go on to
    the main window (`main_id()`) when that is a list (play from, or back out of, the main list while a Log has focus);

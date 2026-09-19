@@ -186,10 +186,10 @@
   `zz-scratch*`) waiting for this.
 ### Features
 - [ ] Corner slots: replace the global bottom hint/command row with a shared "corner slot" mechanism,
-  in three shippable steps (one commit each; the second and third only after the previous one is
-  pushed). Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
+  in two remaining shippable steps (one commit each; the second only after the first is pushed). The
+  slot function is `MedleyView::slots` (`ui/src/view/corners.rs`); the warnings button already draws through it. Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
   the shell hint text, the command/search line, flash feedback, the cursor/total readout and,
-  right-aligned, the red warnings button (`warnings_span`/`warnings_label`, `Focus::Warnings`, the
+  right-aligned, the red warnings button (`warnings_label`, `Focus::Warnings`, the
   focus order, the click hit-test in `on_event`); the per-window status row is now a generic window
   feature (`Startup::status_row`, `Window::content()`).
   - Availability: every surface that could host a slot says which of its two bottom corners (left,
@@ -197,17 +197,7 @@
     hard-coded in the shell. Defaults: a window with a status row offers both; the bottom scrubber
     status line (`StatusLine`) offers the RIGHT slot only; modal windows (picker, warnings modal,
     confirm dialogs — anything drawn over the whole screen) offer NOTHING, so a widget never
-    appears under or over a modal. A surface with no status row offers nothing.
-  - Step 1: one function computes, from the placed rects and those declarations, the nearest
-    available slot to the bottom-left and to the bottom-right corner (the scrubber line if it is
-    shown and offers that side, else the status row of the window occupying that corner, else
-    nothing). Move the warnings button to the bottom-right slot through it, keeping its Enter/click
-    behaviour and its place in the Tab focus cycle (`Focus::Warnings` stays a stop); leave the old
-    row otherwise untouched. While the widget has focus, the navigation keys (`j`/`k`, `J`/`K`,
-    PgUp/PgDn, the arrows, Home/End) focus the window that hosts it — the docked window or tab
-    whose status row it is drawn in — and act on that window's list, instead of falling through to
-    the global tab or the main window; Enter still opens the warnings modal. Verify
-    with a floating window covering the corner and with a modal open.
+    appears under or over a modal. A surface with no status row offers nothing. A window docked along the bottom edge (dock side `Bottom`) offers neither bottom corner, so the nearest-slot function skips it (`MedleyView::docked_at_bottom`).
   - Step 2: the `:command` (and search) input line draws in the bottom-left slot through the same
     function. Width floor: a slot narrower than a usable command line (a docked pane can be ~30
     columns) is not enough, so below the floor the input line spans the whole bottom line instead.
