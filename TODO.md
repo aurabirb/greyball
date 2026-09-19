@@ -59,7 +59,10 @@
   as a tab it does in any placement, through the same `TrackList` paths.
 - [ ] Make the Help command rows bindable where that is not hard (`ui/src/view/help.rs`, rows in
   `ui/src/items.rs`): the no-argument `:`-commands first, as the "bindable Help rows" item above
-  describes; leave the argument commands and Space/`x` to that item.
+  describes; leave the argument commands and Space/`x` to that item. Key underline: the underline
+  covers exactly one cell per key placeholder (the single symbol that holds the key), not the whole
+  padded key column; every row whose key can be set (a bindable row, including one with no key
+  yet) shows its placeholder underlined, and rows that cannot be bound show no underline.
 ### Bugs
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
@@ -258,13 +261,6 @@
   `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
   status lines from scratch. The window-resize handler needs exactly this too (see the stale
   rightmost-column bug), so share one function between the two.
-- [ ] Add a visualizer FPS limit setting to the Settings UI. The Vis frame rate is the fixed
-  constant `FPS = 30` in `ui/src/vis.rs` (used by the worker's sleep, ~line 109, and by
-  `sync_vis_fps` in `ui/src/view.rs`, which sets the cursive refresh rate while a Vis window is
-  shown). Make it a persisted setting (config alongside the other settings, adjustable in the
-  Settings window like the others, not config-file-only), read by both places so it applies
-  immediately without a restart, with a sensible range (e.g. 5–60) and 30 as the default.
-  `BASELINE_FPS` (idle floor, `ui/src/lib.rs`) is not part of this.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
