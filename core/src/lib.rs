@@ -35,7 +35,7 @@ pub use config::{
     SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES,
 };
 pub use audio_decode::decode_and_cache;
-pub use event::{Bus, CoreEvent, PlayerEvent};
+pub use event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
 pub use http_fetch::{fetch_url_bytes, fetch_url_to, start_get};
 pub use logbuf::LogBuf;
 pub use audio::audio_ext;

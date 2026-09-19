@@ -134,7 +134,7 @@
   restart. Keep a failed entry retriable (don't clear `partial` on `Err`, or track a failed state)
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
-  hammered; surface the failure in the warnings list rather than silently showing nothing.
+  hammered.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
@@ -392,19 +392,6 @@
 - [ ] Hide the sources column on narrow terminal sizes.
 
 ### Audits / cleanup tasks
-- [ ] (Do together with the decided behaviour fixes pass under Bugs; the one place that picks the
-  channel is `Notice::of_dispatch`/`of_event` in `ui/src/view/notice.rs`.) Review how plugin/source failures are surfaced to the user and make the channel match the
-  failure's nature, instead of whatever each call site currently happens to do:
-  - A failure directly caused by user input (e.g. liking a track fails) should show an error modal.
-  - A failure that just means the action is blocked/not applicable right now (e.g. today's "no
-    liked-songs source for this track" case) should surface in the command status bar, same as the
-    current like/unlike feedback.
-  - A failure in background work (e.g. a scan/plugin probe failing on its own, not in response to a
-    keypress) should be non-actionable and added to the warnings list instead, clearing on restart —
-    not popped as a modal or shoved into the status bar.
-  Audit existing call sites (`set_liked`/`Command::Like`/`Unlike` in `core/src/app.rs`, plugin
-  `probe()`/`setup()` failures, the new plugin-command seam's `run_command` error path, scan/BPM plugin
-  errors) against these three categories and fix whichever ones use the wrong channel.
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
   inhibits *future and queued* track analysis/download, or only pauses whatever's in flight right now
   — i.e. does newly-added/queued work still get analyzed/downloaded while paused, or does it correctly

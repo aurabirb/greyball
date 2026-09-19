@@ -733,7 +733,10 @@ fn open_streaming_url(
                     uri: uri_owned,
                 }));
             }
-            Err(e) => log::warn!("player: streaming download of {url_owned} failed: {e}"),
+            Err(e) => bus.send(CoreEvent::BackgroundFailure {
+                context: source_owned.to_string(),
+                message: format!("streaming download of {url_owned} failed: {e}"),
+            }),
         }
         cache_state.finish(result.err());
     });

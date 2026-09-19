@@ -37,15 +37,13 @@ fn home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
-/// Load `config.toml`, tolerating a missing or malformed file. The persisted
-/// volume lives in a separate `state.toml`.
-fn load_config() -> Config {
+/// `config.toml` (a malformed one falls back to defaults) and what was wrong with it, for the warnings list.
+fn load_config() -> (Config, Vec<String>) {
     let path = config_dir().join("config.toml");
+    let mut problems = Vec::new();
     let mut cfg = match std::fs::read_to_string(&path) {
         Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-            // Now that logging is up: warn, not just eprintln.
-            eprintln!("medley: {}: {e}; using defaults", path.display());
-            log::warn!("config: {} failed to parse: {e}; using defaults", path.display());
+            problems.push(format!("{} failed to parse: {e}; using defaults", path.display()));
             Config::default()
         }),
         Err(_) => {
@@ -59,13 +57,13 @@ fn load_config() -> Config {
     // Validate roots — a bad entry is dropped by the http source silently today.
     for root in &cfg.http.roots {
         if let Err(e) = url::Url::parse(root) {
-            log::warn!("config: http root {root:?} is not a valid URL: {e}");
+            problems.push(format!("http root {root:?} is not a valid URL: {e}"));
         }
     }
     if let Some(v) = load_volume() {
         cfg.volume = v;
     }
-    cfg
+    (cfg, problems)
 }
 
 fn state_path() -> PathBuf {
@@ -342,7 +340,7 @@ fn spawn_plugin_health_timer(session: Arc<Mutex<medley_core::Session>>, bus: Bus
 }
 
 fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = load_config();
+    let (mut cfg, config_problems) = load_config();
     // Diff base for `source_overrides` at shutdown — captured before Settings-toggled overrides apply.
     let config_source_defaults: Vec<(&str, bool)> =
         TOGGLABLE_SOURCES.iter().map(|&n| (n, cfg.source_enabled(n).unwrap_or(false))).collect();
@@ -489,6 +487,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
         // only seeds the initial mode.
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
+    }
+    for problem in &config_problems {
+        session.warn("config", problem);
     }
     session.set_hotkeys(load_hotkeys());
     session.ensure_remote_playlists();

@@ -68,7 +68,7 @@ impl Config {
 pub struct HttpConfig {
     /// Register the http source at startup. On by default; with no `roots`
     /// configured it simply finds nothing (`search` reports "no roots
-    /// configured" as a `SourceError`, logged — not fatal).
+    /// configured" as a `BackgroundFailure` — not fatal).
     pub enabled: bool,
     pub roots: Vec<String>,
     pub recurse_depth: usize,

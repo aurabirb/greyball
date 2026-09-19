@@ -26,10 +26,8 @@ pub enum CoreEvent {
     /// fallback was needed) and it's now ready — `Session` retries playing
     /// `TrackId` if it's still what's wanted.
     CacheFallbackReady(TrackId),
-    SourceError {
-        source: SourceId,
-        message: String,
-    },
+    /// Background work failed; `Session` lists it under the warnings until restart.
+    BackgroundFailure { context: String, message: String },
     /// A plugin's health changed (`setup()` finished, a plugin's own
     /// cooldown-gated background check, or `app`'s periodic health timer) —
     /// the front-end's cue to redraw the warnings panel. Doesn't carry the
@@ -44,9 +42,25 @@ pub enum CoreEvent {
     /// on this instead of its usual incremental one.
     PluginLoginSucceeded,
     /// What a background like/unlike or remote-playlist toggle came to.
-    MembershipResult(String),
-    /// What a plugin's `:`-command (`Plugin::run_command`) returned.
-    PluginCommandResult(String),
+    MembershipResult(MembershipOutcome),
+    /// What a plugin's `:`-command returned, or why the setup the user ran failed.
+    PluginReport(String),
+}
+
+#[derive(Clone, Debug)]
+pub enum MembershipOutcome {
+    Changed(String),
+    /// The source can't edit that playlist.
+    Blocked(String),
+    Failed(String),
+}
+
+impl MembershipOutcome {
+    /// `why` prefixed with `what`, as blocked when the source has no such edit at all.
+    pub fn of_error(what: String, why: &crate::Error) -> Self {
+        let msg = format!("{what}: {why}");
+        if matches!(why, crate::Error::Unsupported(_)) { MembershipOutcome::Blocked(msg) } else { MembershipOutcome::Failed(msg) }
+    }
 }
 
 #[derive(Clone, Debug)]

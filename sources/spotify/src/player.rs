@@ -440,7 +440,10 @@ fn do_load(
     let sp_uri = match SpotifyUri::from_uri(&req.uri) {
         Ok(sp_uri) if sp_uri.is_playable() => sp_uri,
         _ => {
-            log::warn!("spotify: cannot play {}", req.uri);
+            bus.send(CoreEvent::BackgroundFailure {
+                context: "spotify".to_string(),
+                message: format!("cannot play {}", req.uri),
+            });
             bus.send(CoreEvent::Player(PlayerEvent::Finished {
                 source: crate::source_id(),
                 uri: req.uri,

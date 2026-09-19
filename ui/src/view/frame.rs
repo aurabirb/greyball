@@ -29,7 +29,7 @@ impl MedleyView {
             let chrome = self.chrome.get_or_build(s.revision(), || {
                 Arc::new(Chrome {
                     status: StatusCore::snapshot(s),
-                    warn_count: s.plugin_warning_count(),
+                    warn_count: s.warning_count(),
                     help_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp)),
                 })
             });

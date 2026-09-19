@@ -4,7 +4,7 @@ use cursive::{Printer, Rect};
 use cursive::event::{Event, Key};
 use cursive::theme::ColorStyle;
 
-use core::{CoreEvent, PluginHealth, SetupKind, SourceId};
+use core::{CoreEvent, PluginHealth, Session, SetupKind, SourceId};
 
 use super::MedleyView;
 use super::input::Editing;
@@ -31,60 +31,78 @@ pub(super) fn defocuses_warnings(event: &Event) -> bool {
     !matches!(event, Event::Key(Key::Enter))
 }
 
-/// The plugin-warnings modal: a navigable plugin list above their messages; exists only while open.
+/// What the modal lists, read under one lock: every plugin's health, then this session's background failures.
+pub(super) struct Warnings {
+    statuses: Vec<(SourceId, PluginHealth)>,
+    failures: Vec<(String, String)>,
+}
+
+impl Warnings {
+    pub(super) fn read(s: &Session) -> Self {
+        Self { statuses: s.plugin_statuses().to_vec(), failures: s.background_failures().to_vec() }
+    }
+
+    fn rows(&self) -> usize {
+        self.statuses.len() + self.failures.len()
+    }
+
+    /// "{id}: {msg}" for every plugin reporting a non-`Ok` health.
+    fn messages(&self) -> Vec<String> {
+        self.statuses.iter().filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}"))).collect()
+    }
+}
+
+/// The warnings modal: plugin rows that run setup, then background-failure rows, above the plugins' messages.
 #[derive(Default)]
 pub(super) struct WarningsModal {
     list: ListState,
 }
 
 impl WarningsModal {
-    /// "{id}: {msg}" for every plugin reporting a non-`Ok` health.
-    fn messages(statuses: &[(SourceId, PluginHealth)]) -> Vec<String> {
-        statuses.iter().filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}"))).collect()
-    }
-
     /// The navigable list's area — what the bottom messages section leaves of the modal's list rows.
-    fn list_rect(rect: Rect, statuses: &[(SourceId, PluginHealth)]) -> Rect {
-        let n = Self::messages(statuses).len();
+    fn list_rect(rect: Rect, warnings: &Warnings) -> Rect {
+        let n = warnings.messages().len();
         let messages_h = if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) };
         let rows = modal_list(rect);
         Rect::from_size(rows.top_left(), (rows.width(), rows.height().saturating_sub(messages_h)))
     }
 
-    pub(super) fn relayout(&mut self, resized: bool, rect: Rect, statuses: &[(SourceId, PluginHealth)]) {
-        self.list.relayout(resized, statuses.len(), Self::list_rect(rect, statuses).height());
+    pub(super) fn relayout(&mut self, resized: bool, rect: Rect, warnings: &Warnings) {
+        self.list.relayout(resized, warnings.rows(), Self::list_rect(rect, warnings).height());
     }
 
-    pub(super) fn on_event(&mut self, event: &Event, rect: Rect, statuses: &[(SourceId, PluginHealth)]) -> ModalOutcome {
-        match self.list.on_event(event, statuses.len(), Self::list_rect(rect, statuses)) {
+    pub(super) fn on_event(&mut self, event: &Event, rect: Rect, warnings: &Warnings) -> ModalOutcome {
+        match self.list.on_event(event, warnings.rows(), Self::list_rect(rect, warnings)) {
             ListEvent::Close => ModalOutcome::Close,
-            ListEvent::Activate | ListEvent::Clicked => ModalOutcome::Setup(self.list.cursor),
-            ListEvent::Moved | ListEvent::Unhandled => ModalOutcome::Stay,
+            // A background failure has nothing to set up.
+            ListEvent::Activate | ListEvent::Clicked if self.list.cursor < warnings.statuses.len() => {
+                ModalOutcome::Setup(self.list.cursor)
+            }
+            _ => ModalOutcome::Stay,
         }
     }
 
     /// `setup` is the `(prompt, typed text)` of a plugin setup value being collected, if any.
-    pub(super) fn draw(&self, printer: &Printer, rect: Rect, statuses: &[(SourceId, PluginHealth)], setup: Option<(&str, &str)>) {
-        let body = draw_modal_frame(printer, rect, Some("Plugin warnings"), "  [Enter] run setup   [Esc] close");
-        if statuses.is_empty() {
+    pub(super) fn draw(&self, printer: &Printer, rect: Rect, warnings: &Warnings, setup: Option<(&str, &str)>) {
+        let body = draw_modal_frame(printer, rect, Some("Warnings"), "  [Enter] run setup   [Esc] close");
+        if warnings.rows() == 0 {
             body.print((0, 1), "(no plugins registered)");
         }
-        let list = Self::list_rect(rect, statuses);
-        let lines: Vec<String> = statuses
-            .iter()
-            .map(|(id, health)| {
-                let icon = match health {
-                    PluginHealth::Ok => "✓",
-                    PluginHealth::Warn(_) => "⚠",
-                    PluginHealth::Fail(_) => "✗",
-                };
-                format!("{icon} {id}")
-            })
-            .collect();
+        let list = Self::list_rect(rect, warnings);
+        let plugins = warnings.statuses.iter().map(|(id, health)| {
+            let icon = match health {
+                PluginHealth::Ok => "✓",
+                PluginHealth::Warn(_) => "⚠",
+                PluginHealth::Fail(_) => "✗",
+            };
+            format!("{icon} {id}")
+        });
+        let failures = warnings.failures.iter().map(|(context, message)| format!("! {context}: {message}"));
+        let lines: Vec<String> = plugins.chain(failures).collect();
         self.list.draw(&printer.windowed(list), &lines);
 
         let messages = printer.windowed(Rect::from_size((list.left(), list.bottom() + 2), (list.width(), WARNINGS_MESSAGES_MAX)));
-        for (j, msg) in Self::messages(statuses).iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
+        for (j, msg) in warnings.messages().iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
             messages.print((0, j), &pad(msg, messages.size.x));
         }
 
@@ -107,9 +125,9 @@ impl MedleyView {
         self.modal = Some(Modal::Warnings(WarningsModal::default()));
     }
 
-    /// Number of plugins currently reporting a non-`Ok` health.
+    /// What the warnings button counts.
     pub(super) fn warn_count(&self) -> usize {
-        self.with_session(|s| s.plugin_warning_count())
+        self.with_session(|s| s.warning_count())
     }
 
     /// `Enter` (or a click) on row `selected` of the warnings modal.
@@ -139,6 +157,7 @@ impl MedleyView {
             };
             let health = plugin.setup(input);
             let succeeded = health.is_ok();
+            let failure = health.message().map(|msg| format!("{id} setup: {msg}"));
             let wiring = plugin.wiring();
             let mut guard = session.lock().unwrap();
             guard.apply_wiring(&id, wiring);
@@ -149,6 +168,9 @@ impl MedleyView {
             bus.send(CoreEvent::PluginStatusChanged);
             if succeeded {
                 bus.send(CoreEvent::PluginLoginSucceeded);
+            }
+            if let Some(failure) = failure {
+                bus.send(CoreEvent::PluginReport(failure));
             }
         });
     }

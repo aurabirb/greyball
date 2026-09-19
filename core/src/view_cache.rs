@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
-use crate::event::{Bus, CoreEvent};
-use crate::traits::{BrowseNode, BrowsePage, Source, Store};
+use crate::event::{Bus, CoreEvent, MembershipOutcome};
+use crate::traits::{BrowseNode, BrowsePage, Error, Source, Store};
 use crate::types::{SourceId, Track, TrackId};
 
 /// Cache entry behind `ViewCache::remote_playlist_track_ids`/`_len`/`_window`.
@@ -368,7 +368,7 @@ impl ViewCache {
                 }
             }
             if let Err(e) = result {
-                bus.send(CoreEvent::SourceError { source, message: e.to_string() });
+                bus.send(CoreEvent::BackgroundFailure { context: source.to_string(), message: format!("playlists: {e}") });
             }
             bus.send(CoreEvent::PlaylistsChanged);
         });
@@ -530,7 +530,7 @@ impl ViewCache {
                 } else {
                     source.add_to_playlist(&node, &uri)
                 };
-                result.map(|()| member).map_err(|e| e.to_string())
+                result.map(|()| member)
             });
             let ids: Option<Vec<TrackId>> = {
                 // Both locks held so no redraw sees the track neither pending nor settled.
@@ -562,11 +562,11 @@ impl ViewCache {
             }
             deps.bus.send(CoreEvent::PlaylistsChanged);
             deps.bus.send(CoreEvent::MembershipResult(match outcome {
-                Ok(true) => format!("Removed {name:?} from playlist"),
-                Ok(false) => format!("Added {name:?} to playlist"),
+                Ok(true) => MembershipOutcome::Changed(format!("Removed {name:?} from playlist")),
+                Ok(false) => MembershipOutcome::Changed(format!("Added {name:?} to playlist")),
                 Err(e) => {
                     log::error!("toggle_playlist_membership[{cache_key}]: {e}");
-                    format!("Can't toggle {name:?}: {e}")
+                    MembershipOutcome::of_error(format!("Can't toggle {name:?}"), &e)
                 }
             }));
         });
@@ -579,7 +579,7 @@ impl ViewCache {
         source: &Arc<dyn Source>,
         key: &RemoteKey,
         track: TrackId,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let sources = HashMap::from([(key.0.clone(), source.clone())]);
         let ctx = RemoteCtx { sources: &sources, store: &deps.store, catalog: &deps.catalog, bus: &deps.bus };
         let deadline = Instant::now() + MEMBERSHIP_LOAD_TIMEOUT;
@@ -591,9 +591,9 @@ impl ViewCache {
             });
             match loaded {
                 Some((false, member)) => return Ok(member),
-                Some((true, _)) => return Err("the playlist didn't load completely".to_string()),
+                Some((true, _)) => return Err(Error::Other("the playlist didn't load completely".to_string())),
                 None if Instant::now() >= deadline => {
-                    return Err("timed out waiting for the playlist to load".to_string());
+                    return Err(Error::Other("timed out waiting for the playlist to load".to_string()));
                 }
                 None => std::thread::sleep(MEMBERSHIP_POLL),
             }
@@ -727,9 +727,9 @@ impl ViewCache {
                         entry.errored = true;
                         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
                     }
-                    deps.bus.send(CoreEvent::SourceError {
-                        source: key.0.clone(),
-                        message: e.to_string(),
+                    deps.bus.send(CoreEvent::BackgroundFailure {
+                        context: key.0.to_string(),
+                        message: format!("{cache_key}: {e}"),
                     });
                     deps.bus.send(CoreEvent::PlaylistsChanged);
                     return;
@@ -750,8 +750,8 @@ impl ViewCache {
                     entry.errored = true;
                     entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
                 }
-                deps.bus.send(CoreEvent::SourceError {
-                    source: key.0.clone(),
+                deps.bus.send(CoreEvent::BackgroundFailure {
+                    context: key.0.to_string(),
                     message: format!("{cache_key}: playlist fetch failed partway through"),
                 });
                 deps.bus.send(CoreEvent::PlaylistsChanged);

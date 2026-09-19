@@ -52,8 +52,8 @@ impl Search {
                             hits += 1;
                             bus.send(CoreEvent::SearchHit(tid))
                         }
-                        Err(e) => bus.send(CoreEvent::SourceError {
-                            source: sid.clone(),
+                        Err(e) => bus.send(CoreEvent::BackgroundFailure {
+                            context: sid.to_string(),
                             message: e.to_string(),
                         }),
                     }
@@ -72,9 +72,9 @@ impl Search {
                     }
                     Err(e) => {
                         log::warn!("search gen {generation} [{}]: {e}", sid);
-                        bus.send(CoreEvent::SourceError {
-                            source: sid.clone(),
-                            message: e.to_string(),
+                        bus.send(CoreEvent::BackgroundFailure {
+                            context: sid.to_string(),
+                            message: format!("search: {e}"),
                         })
                     }
                 }

@@ -10,7 +10,7 @@ use super::hotkeys::{HotkeyMenu, capture_event, draw_capture};
 use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
 use super::text::pad;
-use super::warnings::WarningsModal;
+use super::warnings::{Warnings, WarningsModal};
 
 /// The one exclusive layer over the main view; every variant swallows all input while open.
 pub(super) enum Modal {
@@ -82,7 +82,7 @@ impl MedleyView {
         let (rect, session) = (self.modal_rect(), self.session.clone());
         let s = session.lock().unwrap();
         match &mut self.modal {
-            Some(Modal::Warnings(m)) => m.relayout(resized, rect, s.plugin_statuses()),
+            Some(Modal::Warnings(m)) => m.relayout(resized, rect, &Warnings::read(&s)),
             Some(Modal::Picker(picker)) => picker.relayout(resized, rect, &s),
             Some(Modal::HotkeyMenu(menu)) => menu.relayout(resized, rect),
             Some(Modal::Help(help)) => help.relayout(rect, &s),
@@ -98,14 +98,14 @@ impl MedleyView {
                     Editing::PluginSetup(id) => Some(id),
                     _ => None,
                 };
-                let (statuses, prompt) = self.with_session(|s| {
+                let (warnings, prompt) = self.with_session(|s| {
                     let prompt = setup_id.map(|id| match s.plugin(id).map(|p| p.setup_kind()) {
                         Some(SetupKind::TextInput { prompt }) => prompt,
                         Some(SetupKind::Action) | None => String::new(),
                     });
-                    (s.plugin_statuses().to_vec(), prompt)
+                    (Warnings::read(s), prompt)
                 });
-                m.draw(printer, rect, &statuses, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
+                m.draw(printer, rect, &warnings, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
             }
             Modal::Picker(picker) => picker.draw(printer, rect),
             Modal::HotkeyMenu(menu) => {
@@ -122,13 +122,10 @@ impl MedleyView {
 
     pub(super) fn on_modal_event(&mut self, event: &Event) -> EventResult {
         let rect = self.modal_rect();
-        let statuses = match self.modal {
-            Some(Modal::Warnings(_)) => self.with_session(|s| s.plugin_statuses().to_vec()),
-            _ => Vec::new(),
-        };
+        let session = self.session.clone();
         let outcome = match &mut self.modal {
             None => return EventResult::Ignored,
-            Some(Modal::Warnings(m)) => m.on_event(event, rect, &statuses),
+            Some(Modal::Warnings(m)) => m.on_event(event, rect, &Warnings::read(&session.lock().unwrap())),
             Some(Modal::Picker(picker)) => picker.on_event(event, rect),
             Some(Modal::HotkeyMenu(menu)) => menu.on_event(event, rect),
             Some(Modal::HotkeyCapture(target, _)) => capture_event(event, target),

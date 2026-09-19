@@ -731,6 +731,8 @@ fn scan_one(
                 let count = failures.entry((plugin.id(), track.id)).or_insert(0);
                 *count += 1;
                 if *count >= FAILURE_THRESHOLD {
+                    // No track name, so every track that gives up shares one warnings row.
+                    catalog.warn(plugin.id(), "scan keeps failing for some tracks — see :log".to_string());
                     inner
                         .failure_cooldown
                         .lock()

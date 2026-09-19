@@ -196,6 +196,11 @@ impl Catalog {
         self.bus.send(CoreEvent::TrackUpdated(id));
     }
 
+    /// Lists a background failure of work that holds only the catalog under the warnings.
+    pub fn warn(&self, context: &str, message: String) {
+        self.bus.send(CoreEvent::BackgroundFailure { context: context.to_string(), message });
+    }
+
     /// Set attrs/tags/etc. from analysis or user edits.
     pub fn patch(&self, t: TrackId, f: impl FnOnce(&mut Track)) -> Result<()> {
         let _guard = self.lock.lock().unwrap();

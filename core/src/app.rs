@@ -11,7 +11,7 @@ use rand::prelude::*;
 use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::hotkeys::Hotkeys;
-use crate::event::{Bus, CoreEvent, PlayerEvent};
+use crate::event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
 use crate::media_cache::MediaCache;
 use crate::playlist_m3u::{
     M3uDoc, M3uEntry, ParsedRendition, PlaylistMeta, SoftMeta, parse_m3u, write_entry, write_header,
@@ -296,8 +296,10 @@ pub enum Dispatch {
     MembershipSet { track: String, playlist: String, added: bool },
     ScanMode(crate::scan::ScanMode),
     /// A result the user asked for and should acknowledge.
-    Report(String),
-    /// A toggle that did nothing, and why.
+    Done(String),
+    /// `:link` holds its first row and waits for the second.
+    LinkPending,
+    /// Blocked or not applicable right now, and why; a real failure is `dispatch`'s `Err`.
     Refused(String),
     Quit,
 }
@@ -310,7 +312,10 @@ struct Shown {
     context: Option<PlaybackContext>,
     /// Cache of `plugin_statuses`: a probe can do disk or network I/O, so it never runs per frame.
     plugin_health: Vec<(SourceId, PluginHealth)>,
+    failures: Vec<(String, String)>,
 }
+
+const MAX_BACKGROUND_FAILURES: usize = 20;
 
 /// The list `Command::PlayContext` last started playing from (search
 /// results, a playlist, Liked Songs, ...) — consulted as a fallback once the
@@ -508,6 +513,7 @@ impl Session {
             volume: cfg.volume.clamp(0.0, 1.0),
             context,
             plugin_health: Vec::new(),
+            failures: Vec::new(),
         };
         let mut plugin_commands = HashMap::new();
         for p in &plugins {
@@ -720,7 +726,7 @@ impl Session {
             Command::LinkPick(id) => match self.link_pick.take() {
                 None => {
                     self.link_pick = Some(id);
-                    Ok(Dispatch::Report("link: pick a second row".to_string()))
+                    Ok(Dispatch::LinkPending)
                 }
                 Some(first) => {
                     self.catalog.link(first, id)?;
@@ -751,8 +757,9 @@ impl Session {
             Command::ExportM3uTo { playlist, path } => self.export_m3u_to(playlist, path),
             Command::ImportM3u(path) => self.import_m3u(path),
             Command::AddUri(uri) => {
+                let unplayable = || Error::Other("not a playable URL".to_string());
                 let Some(source) = self.source_for_uri(&uri) else {
-                    return Ok(Dispatch::Report("not a playable URL".to_string()));
+                    return Err(unplayable());
                 };
                 let source = source.clone();
                 match source.resolve(&uri) {
@@ -761,7 +768,7 @@ impl Session {
                                 self.push_result(tid);
                         Ok(Dispatch::Ok)
                     }
-                    Err(_) => Ok(Dispatch::Report("not a playable URL".to_string())),
+                    Err(_) => Err(unplayable()),
                 }
             }
             Command::AddFilesToPlaylist { playlist, paths } => {
@@ -823,10 +830,11 @@ impl Session {
                 self.ensure_remote_playlists();
                 Ok(true)
             }
-            CoreEvent::SourceError { .. }
-            | CoreEvent::PluginLoginSucceeded
-            | CoreEvent::MembershipResult(_)
-            | CoreEvent::PluginCommandResult(_) => Ok(true),
+            CoreEvent::BackgroundFailure { context, message } => {
+                self.warn(context, message);
+                Ok(true)
+            }
+            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) => Ok(true),
         }
     }
 
@@ -838,11 +846,27 @@ impl Session {
         &self.shown.plugin_health
     }
 
-    /// Number of plugins currently reporting a non-`Ok` health — for the
-    /// warnings button/tab, cheaper than filtering `plugin_statuses` at
-    /// every call site.
-    pub fn plugin_warning_count(&self) -> usize {
-        self.shown.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count()
+    /// What the warnings button counts: plugins not `Ok`, plus this session's background failures.
+    pub fn warning_count(&self) -> usize {
+        self.shown.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count() + self.shown.failures.len()
+    }
+
+    /// This session's background failures, oldest first, as `(context, message)`.
+    pub fn background_failures(&self) -> &[(String, String)] {
+        &self.shown.failures
+    }
+
+    /// Lists a background failure under the warnings; a repeat is not listed twice and the oldest makes room.
+    pub fn warn(&mut self, context: &str, message: &str) {
+        log::warn!("{context}: {message}");
+        if self.shown.failures.iter().any(|(c, m)| c == context && m == message) {
+            return;
+        }
+        let failures = &mut self.shown.write().failures;
+        if failures.len() == MAX_BACKGROUND_FAILURES {
+            failures.remove(0);
+        }
+        failures.push((context.to_string(), message.to_string()));
     }
 
     /// `probe()` only ever returns a few generic canned strings, so a real
@@ -1033,10 +1057,7 @@ impl Session {
                             );
                             self.pending_cache_fallback = None;
                             if !self.play_from_cache(&t, true) {
-                                self.bus.send(CoreEvent::SourceError {
-                                    source: source.clone(),
-                                    message: format!("playback failed for {uri}"),
-                                });
+                                self.warn(source.as_str(), &format!("playback failed for {:?} ({uri})", t.title));
                                 self.advance(false);
                             }
                         }
@@ -1212,7 +1233,7 @@ impl Session {
     /// silently drops out of history just because `export_primary_uri`
     /// itself comes up empty (e.g. its cache entry got evicted between the
     /// play starting and this write).
-    fn append_history_entry(&self, track: &Track, played_at: DateTime<Utc>, played: &Rendition) {
+    fn append_history_entry(&mut self, track: &Track, played_at: DateTime<Utc>, played: &Rendition) {
         let primary = self.export_primary_uri(track).unwrap_or_else(|| played.uri.clone());
         let mut entry = build_entry(track, primary);
         entry.played_at = Some(played_at);
@@ -1235,10 +1256,7 @@ impl Session {
             .open(&self.history_path);
         match file.and_then(|mut f| f.write_all(text.as_bytes())) {
             Ok(()) => {}
-            Err(e) => log::warn!(
-                "history: failed to append to {}: {e}",
-                self.history_path.display()
-            ),
+            Err(e) => self.warn("history", &format!("failed to append to {}: {e}", self.history_path.display())),
         }
     }
 
@@ -1529,16 +1547,12 @@ impl Session {
                 if let Some(p) = self.pick_player(&r) {
                     self.start_playback(&track, &r, p, record);
                 } else if !self.play_from_cache(&track, record) {
-                    let message = format!("no player registered for {}", r.source);
-                    self.bus.send(CoreEvent::SourceError {
-                        source: r.source.clone(),
-                        message,
-                    });
+                    self.warn(r.source.as_str(), &format!("can't play {:?}: no player registered", track.title));
                 }
             }
             Resolution::Gap { reason } => {
                 if !self.play_from_cache(&track, record) {
-                    log::warn!("play_track gap: {reason}");
+                    self.warn("playback", &format!("can't play {:?}: {reason}", track.title));
                 }
             }
         }
@@ -1854,9 +1868,9 @@ impl Session {
         let disp = path.display();
         log::info!("export_m3u: {disp} — {n} track(s), {} skipped", gaps.len());
         if gaps.is_empty() {
-            Ok(Dispatch::Report(format!("exported {disp} ({n} tracks)")))
+            Ok(Dispatch::Done(format!("exported {disp} ({n} tracks)")))
         } else {
-            Ok(Dispatch::Report(format!(
+            Ok(Dispatch::Done(format!(
                 "exported {disp} ({n} tracks, {} skipped): {}",
                 gaps.len(),
                 gaps.join("; ")
@@ -2006,7 +2020,7 @@ impl Session {
             "import_m3u: \"{name}\" — {} track(s) ({new_c} new, {merged_c} merged, {skipped} skipped)",
             items.len()
         );
-        Ok(Dispatch::Report(format!(
+        Ok(Dispatch::Done(format!(
             "imported \"{name}\": {} tracks ({new_c} new, {merged_c} merged, {skipped} skipped)",
             items.len()
         )))
@@ -2073,7 +2087,7 @@ impl Session {
                     self.save_playlist(&pl)?;
                 }
                 log::info!("add: \"{}\" — {added} added, {skipped} skipped", pl.name);
-                Ok(Dispatch::Report(if skipped > 0 {
+                Ok(Dispatch::Done(if skipped > 0 {
                     format!("added {added} track(s) to \"{}\" ({skipped} skipped)", pl.name)
                 } else {
                     format!("added {added} track(s) to \"{}\"", pl.name)
@@ -2081,7 +2095,7 @@ impl Session {
             }
             None => {
                 log::info!("add: queue — {added} added, {skipped} skipped");
-                Ok(Dispatch::Report(if skipped > 0 {
+                Ok(Dispatch::Done(if skipped > 0 {
                     format!("queued {added} track(s) ({skipped} skipped)")
                 } else {
                     format!("queued {added} track(s)")
@@ -2227,11 +2241,11 @@ impl Session {
                     src.remove_from_playlist(&node, &uri)
                 };
                 bus.send(CoreEvent::MembershipResult(match result {
-                    Ok(()) if like => format!("Liked {name:?}"),
-                    Ok(()) => format!("Removed {name:?} from Liked Songs"),
+                    Ok(()) if like => MembershipOutcome::Changed(format!("Liked {name:?}")),
+                    Ok(()) => MembershipOutcome::Changed(format!("Removed {name:?} from Liked Songs")),
                     Err(e) => {
                         log::error!("set_liked[{}]: {e}", src.id());
-                        format!("Can't {verb} {name:?}: {e}")
+                        MembershipOutcome::of_error(format!("Can't {verb} {name:?}"), &e)
                     }
                 }));
             }

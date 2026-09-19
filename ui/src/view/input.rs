@@ -30,13 +30,6 @@ pub(super) enum Editing {
     Filter,
 }
 
-pub(super) fn popup(msg: impl Into<String>) -> EventResult {
-    let msg = msg.into();
-    EventResult::with_cb(move |c: &mut Cursive| {
-        c.add_layer(Dialog::info(msg.clone()));
-    })
-}
-
 pub(super) fn key_name(event: &Event) -> Option<String> {
     match event {
         Event::Char(' ') => Some("Space".to_string()),
@@ -53,7 +46,7 @@ impl MedleyView {
         thread::spawn(move || {
             let msg = plugin.run_command(&word, arg);
             bus.send(CoreEvent::PluginStatusChanged);
-            bus.send(CoreEvent::PluginCommandResult(msg));
+            bus.send(CoreEvent::PluginReport(msg));
         });
         EventResult::consumed()
     }
@@ -68,7 +61,7 @@ impl MedleyView {
             Editing::CommandLine => {
                 let parsed = match command::parse(&text) {
                     Ok(p) => p,
-                    Err(e) => return popup(e),
+                    Err(e) => return self.notify(Notice::failed(e)),
                 };
                 let open = self.windows[self.main_id()].list().and_then(TrackList::open_local);
                 if parsed == command::Parsed::Help {
@@ -126,7 +119,7 @@ impl MedleyView {
                     let plugin = self.with_session(|s| s.plugin_for_command(&word));
                     return match plugin {
                         Some(plugin) => self.run_plugin_command(plugin, word, arg),
-                        None => popup(format!("unknown command: {word}")),
+                        None => self.notify(Notice::failed(format!("unknown command: {word}"))),
                     };
                 }
                 let cmd = self.with_session(|s| {
@@ -135,7 +128,7 @@ impl MedleyView {
                 });
                 match cmd {
                     Ok(c) => self.run(c),
-                    Err(e) => popup(e),
+                    Err(e) => self.notify(Notice::failed(e)),
                 }
             }
             Editing::PluginSetup(id) => {
@@ -153,8 +146,7 @@ impl MedleyView {
     pub(crate) fn run(&mut self, cmd: Command) -> EventResult {
         match self.with_session_mut(|s| s.dispatch(cmd)) {
             Ok(Dispatch::Quit) => EventResult::with_cb(|c: &mut Cursive| c.quit()),
-            Ok(outcome) => Notice::of_dispatch(outcome).map_or_else(EventResult::consumed, |n| self.notify(n)),
-            Err(e) => self.notify(Notice::Popup(e.to_string())),
+            result => Notice::of_dispatch(result).map_or_else(EventResult::consumed, |n| self.notify(n)),
         }
     }
 
@@ -164,7 +156,9 @@ impl MedleyView {
                 self.feedback = Some(text);
                 EventResult::consumed()
             }
-            Notice::Popup(msg) => popup(msg),
+            Notice::Popup(msg) => EventResult::with_cb(move |c: &mut Cursive| {
+                c.add_layer(Dialog::info(msg.clone()));
+            }),
         }
     }
 
@@ -338,7 +332,7 @@ impl MedleyView {
                 }
                 result
             }
-            None => popup(format!("no source can open this as a playlist: {uri:?}")),
+            None => self.notify(Notice::failed(format!("no source can open this as a playlist: {uri:?}"))),
         }
     }
 
@@ -346,6 +340,10 @@ impl MedleyView {
     fn open_arg(&mut self, arg: String, open: Option<PlaylistId>) -> EventResult {
         if self.with_session(|s| s.source_for_uri(&arg).is_some()) {
             return self.open_playlist_uri(arg);
+        }
+        // A URL no source claims is not a path to add.
+        if arg.contains("://") && !arg.starts_with("file://") {
+            return self.notify(Notice::failed(format!("no source can open {arg:?}")));
         }
         let lower = arg.to_ascii_lowercase();
         if lower.ends_with(".m3u") || lower.ends_with(".m3u8") {

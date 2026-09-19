@@ -79,6 +79,11 @@ impl SpotifyPlugin {
                 // `probe` would pick this up on the next periodic redraw
                 // regardless, but this makes the warning clear immediately.
                 bus.send(CoreEvent::PluginStatusChanged);
+            } else {
+                bus.send(CoreEvent::BackgroundFailure {
+                    context: "spotify".to_string(),
+                    message: "session refresh failed — see :log".to_string(),
+                });
             }
         });
     }

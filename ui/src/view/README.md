@@ -106,7 +106,7 @@ on `revision` — it is read fresh or kept in its own small cache.
 - `Session::revision` bumps on every UI-visible mutation, including an attribute-only `TrackUpdated`
   patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
   frame. The plain fields the UI shows (`now_playing`, the player state, `volume`, `context`,
-  `plugin_health`) live in a `Revised<Shown>` (`core/src/revised.rs`): read through `Deref`, written
+  `plugin_health`, the background `failures`) live in a `Revised<Shown>` (`core/src/revised.rs`): read through `Deref`, written
   only through `write()`, which bumps, so such a write cannot skip it; the per-tick position and
   duration sit outside it in `Session::progress`. State held elsewhere (hotkeys, config, wiring, scan
   mode) calls `touch()`. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
@@ -123,10 +123,17 @@ on `revision` — it is read fresh or kept in its own small cache.
   startup (`app/src/main.rs`) and on `CoreEvent::PluginStatusChanged`. A landed fetch, clean or failed,
   is final for the session unless the source reported a partial page.
 - Writes: `run(cmd)` → `Session::dispatch` → a `Dispatch` saying what happened (`Queued(n)`,
-  `ShuffleSet(on)`, `Refused(why)`, …); `run` never re-reads the session to find out.
+  `ShuffleSet(on)`, `MembershipSet`, `Done(result)`, `Refused(why)`, …) or an `Err`; `run` never
+  re-reads the session to find out.
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow work runs on a
   spawned thread and reports as a `CoreEvent` carrying its result (`MembershipResult`,
-  `PluginCommandResult`); core keeps no message for the UI to poll.
+  `PluginReport`); core keeps no message for the UI to poll.
+- Failures have three channels by cause. Something the user asked for failed (`dispatch`'s `Err`,
+  `MembershipOutcome::Failed`, a `PluginReport`, a command that doesn't parse, `Notice::failed`): a
+  `Popup`. Blocked or not applicable right now (`Dispatch::Refused`, `MembershipOutcome::Blocked`): a
+  `Flash`. Background work failed (`CoreEvent::BackgroundFailure`, `Session::warn`: playback, stream,
+  search, playlist pages, scan, token refresh, config): a row in the warnings list until restart,
+  deduplicated and bounded, counted by `Session::warning_count` — never a popup or a flash.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
   is shown — `Flash` on the hint row or a `Popup` dialog — and `MedleyView::notify` the one way to
   show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a

@@ -199,7 +199,7 @@ impl MedleyView {
                 self.windows[placed.id].relayout(placed.rect, &s);
             }
             self.follow_scan(&s);
-            s.plugin_warning_count()
+            s.warning_count()
         };
         self.clamp_focus_given(warn_count);
     }
