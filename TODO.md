@@ -218,9 +218,12 @@
   - Step 2: the `:command` (and search) input line draws in the bottom-left slot through the same
     function. Width floor: a slot narrower than a usable command line (a docked pane can be ~30
     columns) is not enough, so below the floor the input line spans the whole bottom line instead.
-  - Step 3: delete the global row: hint text, flashes (`Notice::Status`) and the cursor/total
-    readout move into the focused window's own status row (guess to verify), windows without a
-    status row get one enabled or a fallback, `BOTTOM_BAR_ROWS` drops by one (it feeds `split`,
+  - Step 3: delete the global row: hint text and flashes (`Notice::Status`) move into the focused
+    window's own status row (guess to verify); the cursor/total count stops being a shell feature —
+    each list window draws its own `cursor/total unit` in its own status row if it wants one (today
+    only the main list has it, so docked and floating lists gain a count) and the shell's readout
+    code and its `Chrome`/frame plumbing are deleted; windows without a status row get one enabled
+    or a fallback, `BOTTOM_BAR_ROWS` drops by one (it feeds `split`,
     `required_size`, `list_h()` and the mouse row maths) so the list gains the row. Judge each step
     in real-terminal screenshots (tab, docked window, floats covering the corner, narrow terminal).
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
