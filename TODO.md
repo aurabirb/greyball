@@ -154,6 +154,19 @@
   its confirm dialog and reuse it, worded for the playlist: `Remove <track> from <playlist>?`).
   Adding needs no confirmation. Enter/`y` confirms, Esc/`n` cancels, and nothing is sent before
   confirmation (no pending marker, no request). One shared confirm path for both.
+  Position-aware removal: when the playlist the pressed key belongs to is the one open in the focused
+  list, the key removes only the highlighted OCCURRENCE (by its position in that playlist), not every
+  instance of the track; the confirmation names it (`Remove <track> (row N) from <playlist>?`) and only
+  that row dims and disappears. From any other view (a different list, Search, History) there is no
+  position, so the key keeps meaning "remove the track from that playlist" and the confirmation says
+  how many occurrences go when there are several. This needs a removal request that targets a
+  position: local playlists remove by index; Spotify's `DELETE /v1/playlists/{id}/tracks`
+  (`remove_playlist_track`, `sources/spotify/src/webapi.rs` ~538) currently removes every occurrence
+  of a URI, so use its `positions` field with the playlist's `snapshot_id` (and
+  `Source::remove_from_playlist` in `core/src/traits.rs` grows a position argument); the settle step
+  and the pending dimming must be keyed by position too. Fix together with the duplicate-occurrence
+  items (the playing-position bug and the removal question), which share the position-aware row
+  identity.
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
