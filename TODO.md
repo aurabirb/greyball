@@ -55,7 +55,28 @@
   liked track pressed again is removed. Remove the separate `BuiltinAction::Unlike` (default `L`),
   its Help row and its own confirm; the unlike direction asks for confirmation the way the
   playlist-key removal item below describes (one shared confirm path). `Like` stays `l`.
+- [ ] Open the Help window as a TAB when `?` (`OpenHelp`, `:help`) is pressed, and let it follow the
+  normal placement cycle afterwards (tabbed → docked → screen → float → tabbed, like any
+  non-companion window), instead of opening as a float. `?` on the open tab returns to where the
+  user came from; Esc rules follow the existing window rules (a tab does not close on Esc).
+  `screen::HELP`'s `Home::Float` and everything that special-cases Help floating (its status hint,
+  README) follow.
 ### Bugs
+- [ ] The waveform never shows up: the top bar (`TabBar::draw`, `ui/src/view/tab_bar.rs`) should draw it
+  in the second row between the player controls and the title on every wide enough terminal, and
+  drop it entirely on small widths (no shrunken stub). Investigate why nothing is drawn: no
+  envelope stored yet for the playing track (`WaveformPlugin`, `sources/waveform`; scan paused or
+  cache-only mode `B`, the now-playing priority path, tracks that are streamed and never scanned),
+  the available width between transport and title being too small because the title takes
+  priority (at 120 columns the widget was 8 cells), or a draw/layout bug. Decide the layout rule
+  (e.g. a minimum width below which it disappears, the title truncating to leave the waveform a
+  reasonable share) and make it show for the currently playing track, including a track that is
+  still being analysed (draw nothing until buckets exist).
+- [ ] The Vis window leaves an empty row at its bottom that the owner does not want — likely the
+  now-blank status row every window reserves (`Window::shows_status()` is false for Vis, but the row
+  is still reserved). Give Vis's picture that row (the reserved row and the body must not depend on
+  the row's content, so a window with no status text should not reserve one at all) without
+  breaking the corner-slot declarations for other windows.
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
   event is dropped, so a stuck track with no such line in the Log pane means the player never sent
