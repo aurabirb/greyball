@@ -292,13 +292,11 @@ fn five_col(cells: [&str; 5], layout: &[Option<(usize, usize, bool)>; 5], width:
     if layout[1].is_none() {
         return truncate(cells[1], width);
     }
-    let cols: Vec<String> = layout
-        .iter()
-        .zip(cells)
-        .filter_map(|(l, cell)| {
-            let &(_, w, right) = l.as_ref()?;
-            Some(if right { pad_right_aligned(cell, w) } else { pad(cell, w) })
-        })
-        .collect();
-    cols.join(" ")
+    let mut line = String::new();
+    for (l, cell) in layout.iter().zip(cells) {
+        let Some(&(start, w, right)) = l.as_ref() else { continue };
+        line.push_str(&" ".repeat(start.saturating_sub(line.width())));
+        line.push_str(&if right { pad_right_aligned(cell, w) } else { pad(cell, w) });
+    }
+    line
 }
