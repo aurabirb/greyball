@@ -48,6 +48,7 @@ log = "0.4"
 simplelog = "0.12"
 chrono = "0.4"
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
+signal-hook = "0.3"
 
 # MPRIS (media keys) — Linux/BSD only, D-Bus. Listed unconditionally
 # (simpler than a target-cfg dependency table) but only ever used behind

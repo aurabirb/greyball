@@ -98,6 +98,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-media-player",
  "player",
+ "signal-hook",
  "simplelog",
  "sources-http",
  "sources-soulseek",

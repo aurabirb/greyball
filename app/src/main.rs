@@ -650,7 +650,15 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     siv.set_fps(ui::BASELINE_FPS);
 
     siv.refresh();
+    let terminate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for sig in [signal_hook::consts::SIGHUP, signal_hook::consts::SIGTERM] {
+        signal_hook::flag::register(sig, terminate.clone())?;
+    }
     while siv.is_running() {
+        if terminate.load(std::sync::atomic::Ordering::Relaxed) {
+            siv.quit();
+            break;
+        }
         siv.step();
         // Re-arm wake coalescing for this iteration, then drain. Drain first,
         // then lock: never hold the Session mutex across a cursive call, and
