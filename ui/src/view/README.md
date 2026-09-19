@@ -50,10 +50,11 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open
   hint, plus the closing key when that window is the open `playlist-keys`. Everything else — placement, `:window`,
   `M`, Esc closing a focused float, persistence — is what any window has.
-- `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`),
-  `:help` and its alias `:keys` run `toggle_help` (close it when it has focus, else `show` and focus).
-  Its content is `../items.rs`, the one table where a `:`-command's spellings, arguments and
-  description and a key's description are written: `command::parse` resolves aliases and builds
+- `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`)
+  and `:help` run `toggle_help` (close it when it has focus, else `show` and focus).
+  Its content is `../items.rs`, the one table where a `:`-command's two spellings (one long, one
+  short, by convention rather than by type), arguments and
+  description and a key's description are written: `command::parse` resolves both spellings and builds
   usage errors from it, `items::describe` names a built-in in bind feedback, and a built-in's default
   key stays in `core::BuiltinAction::ALL`. Structural keys (`keybindings::fixed`, `Nav`, the shell's Tab
   and arrows) are matched as events in code; their rows only describe them. Sections come in

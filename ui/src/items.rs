@@ -39,7 +39,7 @@ pub enum Key {
 
 pub struct Item {
     pub section: Section,
-    /// `:`-spellings, canonical first; empty for a key-only item.
+    /// A command's two `:`-spellings, long then short; empty for a key-only item.
     pub names: &'static [&'static str],
     /// `<required>` and `[optional]` arguments as the user types them.
     pub args: &'static str,
@@ -81,46 +81,46 @@ const fn fixed(section: Section, keys: &'static str, summary: &'static str, deta
 }
 
 pub const ITEMS: &[Item] = &[
-    command(&["search", "s", "find"], "<query>", "search all sources for tracks", ""),
+    command(&["search", "s"], "<query>", "search all sources for tracks", ""),
     keyed(
-        command(&["newplaylist", "np", "newpl"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
+        command(&["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
         BuiltinAction::AddToPlaylistOrNew,
     ),
-    command(&["add-to-playlist", "add", "atp"], "<playlist>", "add the selected track to a playlist by name", ""),
+    command(&["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
     command(
-        &["open"],
+        &["open", "o"],
         "[<url-or-path>]",
         "open a playlist link, an M3U file or local audio files",
         "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: a file browser.",
     ),
-    command(&["export"], "<playlist> [path]", "export a playlist to M3U", ""),
-    command(&["log"], "", "toggle the log pane", ""),
-    command(&["settings"], "", "toggle the settings pane", ""),
-    command(&["vis"], "", "toggle the real-audio bar-eq visualizer pane", ""),
-    command(&["queue"], "", "toggle the queue pane", ""),
-    command(&["history"], "", "toggle the history pane", ""),
-    command(&["hist"], "", "show the History tab window (history-tab)", ""),
+    command(&["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
+    command(&["log", "l"], "", "toggle the log pane", ""),
+    command(&["settings", "set"], "", "toggle the settings pane", ""),
+    command(&["vis", "v"], "", "toggle the real-audio bar-eq visualizer pane", ""),
+    command(&["queue", "qu"], "", "toggle the queue pane", ""),
+    command(&["history", "hi"], "", "toggle the history pane", ""),
+    command(&["hist", "ht"], "", "show the History tab window (history-tab)", ""),
     command(
-        &["window"],
+        &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
         "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, queue, history (the panes), playlist-keys, help.",
     ),
     command(
-        &["panes"],
+        &["panes", "p"],
         "[<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
         "Window names as for :window; without one, every window that is not a tab moves. The last tab stays tabbed.",
     ),
-    keyed(command(&["togglescan"], "", "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."), BuiltinAction::ToggleScan),
-    keyed(command(&["toggleshuffle"], "", "toggle queue shuffle", ""), BuiltinAction::ToggleShuffle),
-    command(&["link"], "", "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
-    command(&["unlink"], "", "unlink the selected track from its links", ""),
+    keyed(command(&["togglescan", "ts"], "", "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."), BuiltinAction::ToggleScan),
+    keyed(command(&["toggleshuffle", "sh"], "", "toggle queue shuffle", ""), BuiltinAction::ToggleShuffle),
+    command(&["link", "ln"], "", "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
+    command(&["unlink", "ul"], "", "unlink the selected track from its links", ""),
     keyed(
-        command(&["help", "h", "?", "keys"], "", "open this window", "Enter on a row gives it a new key, Backspace its default back."),
+        command(&["help", "h"], "", "open this window", "Enter on a row gives it a new key, Backspace its default back."),
         BuiltinAction::OpenHelp,
     ),
-    keyed(command(&["quit", "q", "exit"], "", "exit medley", ""), BuiltinAction::Quit),
+    keyed(command(&["quit", "q"], "", "exit medley", ""), BuiltinAction::Quit),
     fixed(Section::Movement, "↑/↓ j/k", "move the cursor", ""),
     fixed(Section::Movement, "PgUp/PgDn K/J", "move a page", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),

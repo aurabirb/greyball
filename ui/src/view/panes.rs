@@ -227,7 +227,7 @@ impl MedleyView {
         self.focus = Focus::Window(id);
     }
 
-    /// The `OpenHelp` key, `:help` and `:keys`: closes the help window when it has focus, else shows and focuses it.
+    /// The `OpenHelp` key and `:help`: closes the help window when it has focus, else shows and focuses it.
     pub(super) fn toggle_help(&mut self) {
         let Some(id) = self.windows.named(HELP) else { return };
         if self.focus == Focus::Window(id) && self.close_window(id) {

@@ -25,8 +25,9 @@ Queue, Playlists.
 
 `:` commands include `search`/`s`, `newplaylist`/`np`, `add-to-playlist`/`add`,
 `open`, `export`, `log`, `settings`, `panes`, `link` (pick a row, then run it
-again on a second row to merge them as one track), `unlink`, and `help`/`?`
-— run `:help` in-app for the full list with descriptions.
+again on a second row to merge them as one track), `unlink`, and `help`/`h`.
+Every command has one long and one short spelling — run `:help` in-app for the
+full list with descriptions.
 
 ## Configuration
 

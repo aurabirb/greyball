@@ -214,11 +214,6 @@
     confirms, Esc/n cancels, nothing changes until confirmed. Same for a rebind captured in the
     Help window. Binding a free key to an unkeyed playlist stays immediate. Reuse the unlike-confirm
     dialog pattern (`confirm_unlike`) rather than a new modal kind.
-  - Commands have exactly two spellings each: one long name and one short alias (`:open`/`:o`,
-    `:newplaylist`/`:np`, `:search`/`:s`, …). In `ui/src/items.rs` cut every `names` list to
-    [long, short], give commands that lack a short form one (unique, mnemonic, 1–3 letters), drop
-    all other aliases from parsing, and let the table enforce it (`names: [&str; 2]`). List the
-    removed spellings in the commit message body.
   Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
   flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
   focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an
@@ -320,7 +315,7 @@
   (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
   binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row.
 - [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
-  (`:add-to-playlist/:add/:atp`, under about 26 columns: a float on a 60-column terminal, a side dock)
+  (`:add-to-playlist/:add`, under about 22 columns: a float on a 60-column terminal, a side dock)
   the cluster is cut mid-word. Let the command cell break after a `/`. In a very wide rect the command
   lane grows to two fifths of the width for `:panes`' long argument list and pushes every description
   right; consider a tighter cap.

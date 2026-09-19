@@ -106,7 +106,7 @@ const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {
 /// The window the `TogglePlaylistKeys` key opens over whatever is shown.
 pub const PLAYLIST_KEYS: &str = "playlist-keys";
 
-/// The window the `OpenHelp` key, `:help` and `:keys` open over whatever is shown.
+/// The window the `OpenHelp` key and `:help` open over whatever is shown.
 pub const HELP: &str = "help";
 
 /// Every window startup builds, tabs first in tab order; Queue, History and Playlists each have two instances.

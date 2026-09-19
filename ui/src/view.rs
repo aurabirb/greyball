@@ -103,7 +103,14 @@ pub struct MedleyView {
 impl MedleyView {
     /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on its first tab.
     pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
-        let pane_cfg = session.lock().unwrap().cfg.panes;
+        let pane_cfg = {
+            let mut s = session.lock().unwrap();
+            // `command::parse` reads the item table first, so a plugin word spelled like an item never runs.
+            for (word, _) in s.plugin_command_help().into_iter().filter(|(word, _)| crate::items::named(word).is_some()) {
+                s.warn("commands", &format!("plugin command :{word} is shadowed by the built-in command of that spelling"));
+            }
+            s.cfg.panes
+        };
         let vis = crate::vis::Vis::spawn(session.clone());
         let windows = Windows::new(log, vis.clone(), pane_cfg.mode.into());
         let tabs: Vec<WindowId> = windows.ids().filter(|&id| windows.placement(id) == Placement::Tabbed).collect();
