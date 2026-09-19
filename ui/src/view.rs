@@ -432,8 +432,8 @@ impl View for MedleyView {
 
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
         if !covered {
-            TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &frame.status.state }
-                .draw(printer, &frame.status.now_playing, marquee_offset);
+            TabBar { tabs: &self.tab_names(), active: self.active_tab(), status: &frame.status, marquee_offset }
+                .draw(printer);
             let y = printer.size.y.saturating_sub(1);
             let width = Widget::status_width(widget.as_ref(), printer.size.x);
             frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);
@@ -522,10 +522,15 @@ impl MedleyView {
         {
             let size = self.last_screen_size;
             if local.y == 0 {
-                let state = self.with_session(|s| s.player_status().state);
-                let hit = TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &state }.click(local.x, size.x);
+                let status = self.with_session(StatusLine::snapshot);
+                let marquee_offset = self.marquee.offset(&status.now_playing);
+                let hit = TabBar { tabs: &self.tab_names(), active: self.active_tab(), status: &status, marquee_offset }
+                    .click(local.x, size.x);
                 if let Some(TabBarHit::Transport(button)) = hit {
                     return self.run(button.command());
+                }
+                if let Some(TabBarHit::Title(cmd)) = hit {
+                    return self.run(cmd);
                 }
                 self.focus = Focus::Window(self.main_id());
                 return match hit {

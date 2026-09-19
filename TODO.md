@@ -126,20 +126,6 @@
   and the pending dimming must be keyed by position too. Fix together with the duplicate-occurrence
   items (the playing-position bug and the removal question), which share the position-aware row
   identity.
-- [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
-  row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
-  bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
-  exactly as wide as it renders today (the `scroll_title` result — no padding, no layout change) and
-  underline (`Effect::Underline`, applied once — combining an effect twice toggles it off) the
-  first `text_width * position / duration` cells of the visible text, splitting by display width on
-  grapheme boundaries so a wide glyph is either fully underlined or not. The underline is positional
-  over the visible text, so it stays put while a too-long title scrolls underneath it. Click: a left
-  press on row 0 inside the drawn title's span `(start, text_width)` runs
-  `Command::Seek(target - position)` with `frac = (x - start) / text_width`, the same math as the
-  status line's scrubber branch in `on_event`; compute the span from one function shared by
-  `draw_tab_bar` and the hit-test (like `transport_layout`/`transport_at_x`) so they can't drift.
-  Unknown duration → no underline, clicks no-op. Check whether a click on that title already does
-  something and keep it reachable. No helpers beyond what this feature itself calls.
 - [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
   `BAR_WIDTH` (24, `ui/src/view/status_line.rs`). Today `StatusLine::layout` reserves the fixed bar and
   hands every spare column to the title field (`name_w`), which `pad`s a short title with

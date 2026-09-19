@@ -1,10 +1,11 @@
 use cursive::Printer;
-use cursive::theme::{BaseColor, Color, ColorStyle};
+use cursive::theme::{BaseColor, Color, ColorStyle, Effect};
 
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use core::PlayerState;
+use core::Command;
 
+use super::status_line::StatusLine;
 use super::text::{in_span, scroll_title};
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
@@ -26,14 +27,17 @@ pub(super) enum TabBarHit {
     /// The tab at this index of `TabBar::tabs`.
     Tab(usize),
     Transport(Transport),
+    /// A seek along the now-playing title.
+    Title(Command),
 }
 
-/// Row 0 of the screen: a tab per tabbed window, the transport buttons, then the now-playing marquee.
+/// Row 0 of the screen: a tab per tabbed window, the transport buttons, then the now-playing marquee, which doubles as a scrubber.
 pub(super) struct TabBar<'a> {
     /// The tabbed windows' names, in tab order.
     pub(super) tabs: &'a [String],
     pub(super) active: usize,
-    pub(super) state: &'a PlayerState,
+    pub(super) status: &'a StatusLine,
+    pub(super) marquee_offset: usize,
 }
 
 /// Where everything sits in a bar of a given width, for both drawing and hit-testing.
@@ -66,7 +70,7 @@ impl TabBar<'_> {
     fn layout(&self, total_w: usize) -> Layout {
         // The last column stays clear, matching the list's scrollbar gutter below.
         let content_w = total_w.saturating_sub(1);
-        let buttons_w = transport_layout(0, self.state).last().map_or(0, |&(_, s, w)| s + w);
+        let buttons_w = transport_layout(0, &self.status.state).last().map_or(0, |&(_, s, w)| s + w);
         let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
         let collapsed = full_w + TRANSPORT_GAP + buttons_w > content_w;
 
@@ -79,7 +83,7 @@ impl TabBar<'_> {
             .collect();
 
         let transport_start = tabs_end + TRANSPORT_GAP;
-        let transport = transport_layout(transport_start, self.state);
+        let transport = transport_layout(transport_start, &self.status.state);
         let transport_end = transport.last().map_or(transport_start, |&(_, s, w)| s + w);
         let (transport, detail_start) = if transport_end <= content_w {
             (transport, transport_end + TRANSPORT_GAP)
@@ -89,8 +93,15 @@ impl TabBar<'_> {
         Layout { collapsed, tabs, transport, detail: (detail_start, content_w.saturating_sub(detail_start)) }
     }
 
-    /// Draws the bar across row 0 of `printer`, `marquee` right-aligned in whatever room is left.
-    pub(super) fn draw(&self, printer: &Printer, marquee: &str, marquee_offset: usize) {
+    /// The visible title and its start column, right-aligned in the room the layout leaves.
+    fn title(&self, layout: &Layout) -> (usize, String) {
+        let (detail_start, detail_w) = layout.detail;
+        let text = scroll_title(&self.status.now_playing, detail_w, self.marquee_offset);
+        (detail_start + detail_w - text.width(), text)
+    }
+
+    /// Draws the bar across row 0 of `printer`, the marquee right-aligned in whatever room is left.
+    pub(super) fn draw(&self, printer: &Printer) {
         let layout = self.layout(printer.size.x);
         for &(i, start, w) in &layout.tabs {
             let text: String = tab_label(i + 1, &self.tabs[i], layout.collapsed).chars().take(w).collect();
@@ -101,14 +112,28 @@ impl TabBar<'_> {
                 printer.print((start, 0), &text);
             }
         }
-        for ((_, label), &(_, start, _)) in transport_labels(self.state).iter().zip(&layout.transport) {
+        for ((_, label), &(_, start, _)) in transport_labels(&self.status.state).iter().zip(&layout.transport) {
             printer.print((start, 0), label);
         }
-        let (detail_start, detail_w) = layout.detail;
-        let text = scroll_title(marquee, detail_w, marquee_offset);
+        let (start, text) = self.title(&layout);
         if !text.is_empty() {
-            let start = detail_start + detail_w - text.width();
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((start, 0), &text));
+            let played = match self.status.duration_ms {
+                0 => 0,
+                d => text.width() * self.status.position_ms.min(d) as usize / d as usize,
+            };
+            let (mut split, mut cells) = (0, 0);
+            for (i, c) in text.char_indices() {
+                cells += c.width().unwrap_or(0);
+                if cells > played && c.width().unwrap_or(0) > 0 {
+                    break;
+                }
+                split = i + c.len_utf8();
+            }
+            let (done, rest) = text.split_at(split);
+            printer.with_color(ColorStyle::title_primary(), |p| {
+                p.with_effect(Effect::Underline, |p| p.print((start, 0), done));
+                p.print((start + done.width(), 0), rest);
+            });
         }
     }
 
@@ -118,6 +143,15 @@ impl TabBar<'_> {
         if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Transport(button));
         }
-        layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))).map(|&(i, ..)| TabBarHit::Tab(i))
+        if let Some(&(i, ..)) = layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
+            return Some(TabBarHit::Tab(i));
+        }
+        let (start, text) = self.title(&layout);
+        let (duration, width) = (self.status.duration_ms, text.width());
+        if duration == 0 || !in_span(x, (start, width)) {
+            return None;
+        }
+        let target_ms = ((x - start) as f64 / width as f64 * duration as f64).round() as i64;
+        Some(TabBarHit::Title(Command::Seek(target_ms - self.status.position_ms as i64)))
     }
 }

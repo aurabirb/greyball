@@ -45,8 +45,8 @@ pub(super) struct StatusLine {
     /// "artist - title" of the playing track.
     pub(super) now_playing: String,
     pub(super) state: PlayerState,
-    position_ms: u32,
-    duration_ms: u32,
+    pub(super) position_ms: u32,
+    pub(super) duration_ms: u32,
     bpm_tag: String,
     shuffle: bool,
 }
