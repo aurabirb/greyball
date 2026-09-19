@@ -456,7 +456,8 @@ fn start_load(
 ) {
     audio.generation += 1;
     let generation = audio.generation;
-    audio.finished_sent = false;
+    // The previous (drained) sink stays in place until `finish_load`; its emptiness says nothing about this load.
+    audio.finished_sent = true;
     let (source, uri) = (r.source.clone(), r.uri.clone());
     log::debug!("player: load gen {generation} [{source}] {uri}");
     audio.playing = Some((source.clone(), uri.clone()));
@@ -582,6 +583,7 @@ fn finish_load(
     audio._temp = loaded.temp;
     audio.duration_ms = loaded.duration_ms;
     audio.sink = Some(sink);
+    audio.finished_sent = false;
 
     {
         let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());

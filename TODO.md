@@ -47,17 +47,6 @@
   no-argument command's item carries its built-in, which this item needs anyway), and let
   `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
   owner decision, do not make it a fixed-size array.
-- [ ] A track whose duration is unknown (shown as 0:00, no scrubber) doesn't auto-advance when it
-  ends — playback just stops and the next track never starts. Suspects, by reading: end-of-track
-  detection that depends on `duration_ms` (a position ≥ duration check that can never fire when
-  duration is 0; preload/`PreloadHint` timing keyed on remaining time); `RodioPlayer`
-  (`player/src/rodio_player.rs`) only emitting `PlayerEvent::Finished` from a path that needs a
-  known length, vs. the sink actually draining (`Sink::empty()`/source exhaustion) — the latter
-  must emit `Finished` regardless of duration; the no-`Content-Length` streaming fallback and
-  `Media::Reader` sources, which are exactly the tracks with unknown length; the `generation` guard
-  dropping a `Finished` as stale; `Session::on_player_event` ignoring `Finished` when
-  `progress`/duration is zero. Fix so that "the decoder ran out of samples" always advances
-  (`advance(false)`), and fill in the duration when the decoder learns it late.
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
   reach it through `show(id)` + the shell's search text field (`Editing::Search`,

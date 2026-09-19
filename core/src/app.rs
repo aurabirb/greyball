@@ -1001,7 +1001,7 @@ impl Session {
                 position_ms,
                 duration_ms,
             } => {
-                self.progress = (*position_ms, *duration_ms);
+                self.progress = (*position_ms, self.known_duration(*duration_ms));
                 Ok(true)
             }
             PlayerEvent::Paused => {
@@ -1017,7 +1017,17 @@ impl Session {
                 // queue currently considers playing (guards stale Finished).
                 let finished = self.store.track_by_rendition(source, uri)?.map(|t| t.id);
                 let current = self.queue.get_current();
-                if finished.is_some() && finished == current {
+                if let Some(id) = finished
+                    && Some(id) == current
+                {
+                    let drained_at = self.progress.0;
+                    if drained_at > 0 {
+                        let _ = self.catalog.patch(id, |t| {
+                            if t.duration_ms == 0 {
+                                t.duration_ms = drained_at;
+                            }
+                        });
+                    }
                     self.advance(false);
                 }
                 Ok(true)
@@ -1848,7 +1858,18 @@ impl Session {
     /// `state` overrides a player whose own status lags the event that reported it.
     fn set_status(&mut self, status: PlayerStatus, state: Option<PlayerState>) {
         self.shown.write().player_state = state.unwrap_or(status.state);
-        self.progress = (status.position_ms, status.duration_ms);
+        self.progress = (status.position_ms, self.known_duration(status.duration_ms));
+    }
+
+    /// The player's own duration, else the current track's (a decoder that couldn't tell reports 0).
+    fn known_duration(&self, player_ms: u32) -> u32 {
+        if player_ms > 0 {
+            return player_ms;
+        }
+        self.queue
+            .get_current()
+            .and_then(|id| self.store.get_track(id).ok().flatten())
+            .map_or(0, |t| t.duration_ms)
     }
 
     fn load_tracks(&self, ids: &[TrackId]) -> Vec<Track> {
