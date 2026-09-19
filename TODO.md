@@ -286,6 +286,22 @@
   window's lane widths and the lists' scrollbar gutter then derive from the padded rect. Judge the
   result in a real-terminal screenshot with two cascaded floats (one of them Help) over a list and
   over a docked pane.
+- [ ] Give the Help/hotkey window its own status bar: the last inner row of the window (above the
+  bottom border/padding, inside its rect in every placement) shows the key instructions and the
+  binding feedback, instead of borrowing the shell's hint row underneath the float. Idle: the
+  instructions for the row under the cursor (`[Enter] rebind   [Backspace] default   [Tab] next
+  section   [Esc] close`, or why this row can't be bound). Capturing: `press a key for <name> —
+  [Esc] cancel`. After a bind attempt: the result — bound, moved from, refused (`'x' is a fixed
+  key`, `already used by built-in …`), restored default — styled as a warning when it is a
+  refusal, staying until the next key press in the window. Today these come from `Window::hint()`
+  and `WindowOutcome::Flash` → the shell's single feedback slot (`ui/src/view/help.rs`,
+  `notice.rs`, `hint_line`); route the Help window's own bind/refusal messages to its status bar
+  (the window returns the outcome, the shell hands the formatted text back, or the window formats
+  it itself — whichever keeps `notice.rs` the one place that words messages) and keep the shell
+  slot for everything else. The window's layout memo reserves the row (list height = body − 1);
+  draw and click hit-test share that layout. If the generic float frame later grows a footer slot
+  any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
+  it once there rather than per window.
 - [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
