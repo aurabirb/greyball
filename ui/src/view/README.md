@@ -45,7 +45,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order).
   The `TogglePlaylistKeys` key (backtick) runs `toggle_playlist_keys`: as the active tab it only takes
   focus; else close it when it has focus, else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
-  came from (open in the active list, else in any other window, else `Session::playing_playlist`),
+  came from (`Session::playing_playlist`, else the one open in the active list, else in any other window),
   else on the playlist it was left in, else where it was. The hint row reads the focused window's
   frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open
   hint, plus the closing key when that window is the open `playlist-keys`. Everything else — placement, `:window`,
@@ -87,8 +87,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
-  windows with at least one tab and at most one open `screen` window. A restored layout's active tab wins over `Config::initial_screen`,
-  which only picks the tab of a default layout.
+  windows with at least one tab and at most one open `screen` window. The default
+  layout starts on its first tab.
 - A floating window's own title row sits in the top border of the box the shell draws around it
   (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window
   focuses it; focusing a floating window raises it (`focus_window`). Closing the focused window
@@ -210,8 +210,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   search, playlist pages, scan, token refresh, config): a row in the warnings list until restart,
   deduplicated and bounded, counted by `Session::warning_count` — never a popup or a flash.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
-  is shown — `Flash` on the hint row or a `Popup` dialog — and `MedleyView::notify` the one way to
-  show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
+  is shown — `Flash` on the hint row (what a key or command did, `Dispatch::Done` included) or a
+  `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
   mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included.
   A modal's keys, its closing one included, leave it, so a result that lands behind the picker is
   readable after Esc. A window or modal never writes it: it returns an outcome (a window's own
@@ -261,7 +261,9 @@ type-ahead must never meet an empty modal. One that snapshots session data also 
 stamp and re-reads in place from `relayout_modal` — never `draw` — only when the stamp moves while it
 is open: the picker keeps its cursor on the same playlist. `draw_modal_frame(
 printer, rect, title, footer)` draws the title bar and footer hint and returns the body printer;
-`modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`.
+`modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`; the
+warnings modal splits its list rows once more (`WarningsModal::areas`) into the list and the message
+area that wraps the selected row's full text.
 
 ## Adding a component
 

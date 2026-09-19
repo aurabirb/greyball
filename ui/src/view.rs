@@ -14,7 +14,7 @@ use core::{Command, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
-use crate::screen::{Kind, Placement, initial_window};
+use crate::screen::{Kind, Placement};
 
 use frame::Chrome;
 use input::Editing;
@@ -101,13 +101,13 @@ pub struct MedleyView {
 }
 
 impl MedleyView {
-    /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on `initial_screen`'s tab.
-    pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
+    /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on its first tab.
+    pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
         let pane_cfg = session.lock().unwrap().cfg.panes;
         let vis = crate::vis::Vis::spawn(session.clone());
         let windows = Windows::new(log, vis.clone(), pane_cfg.mode.into());
         let tabs: Vec<WindowId> = windows.ids().filter(|&id| windows.placement(id) == Placement::Tabbed).collect();
-        let active = windows.named(initial_window(initial_screen)).filter(|id| tabs.contains(id)).unwrap_or(tabs[0]);
+        let active = tabs[0];
         let mut view = Self {
             session,
             windows,

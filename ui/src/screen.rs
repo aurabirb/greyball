@@ -124,14 +124,3 @@ pub const WINDOWS: [Startup; 12] = [
     Startup { keyed_first: true, ..startup(PLAYLIST_KEYS, Kind::List(ListKind::Playlists), Home::Float) },
     startup(HELP, Kind::Help, Home::Float),
 ];
-
-/// The window `Config::initial_screen` names; anything unrecognized starts on Search.
-pub fn initial_window(name: &str) -> &'static str {
-    match name {
-        "queue" => "queue-tab",
-        "playlists" => "playlists",
-        "hist" => "history-tab",
-        "now_playing" => "now-playing",
-        _ => "search",
-    }
-}

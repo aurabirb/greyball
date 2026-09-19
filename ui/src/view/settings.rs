@@ -39,7 +39,6 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     let cfg = &s.cfg;
     let mut v = vec![
         SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
-        SettingsEntry::Info(format!("initial_screen:   {}", cfg.initial_screen)),
         SettingsEntry::Info(format!("volume:           {:.0}%", s.player_status().volume * 100.0)),
         SettingsEntry::Info(format!("http.roots:       {}", cfg.http.roots.len())),
         SettingsEntry::Info(format!("http.recurse:     {}", cfg.http.recurse_depth)),

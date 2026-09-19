@@ -278,7 +278,7 @@ pub enum Dispatch {
     /// A local playlist gained (`added`) or lost the track.
     MembershipSet { track: String, playlist: String, added: bool },
     ScanMode(crate::scan::ScanMode),
-    /// A result the user asked for and should acknowledge.
+    /// What a command the user ran did, in words.
     Done(String),
     PlaylistCreated(PlaylistId),
     /// `:link` holds its first row and waits for the second.

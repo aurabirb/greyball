@@ -359,7 +359,6 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
     }
-    let initial_screen = cfg.initial_screen.clone();
     let theme = cfg.theme.clone();
 
     let mut siv = ui::create_cursive()?;
@@ -510,7 +509,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
 
     siv.set_theme(ui::theme::load(&theme));
     siv.set_user_data(session.clone());
-    siv.add_fullscreen_layer(ui::root_view(session.clone(), &initial_screen, log_buf, load_layout()));
+    siv.add_fullscreen_layer(ui::root_view(session.clone(), log_buf, load_layout()));
 
     // Hardware media keys, lock-screen/notification widgets, etc. — Linux/BSD
     // only (D-Bus). Fails soft internally if no session bus is reachable.

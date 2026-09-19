@@ -4,7 +4,7 @@ use core::{CoreEvent, Dispatch, MembershipOutcome, ScanMode};
 pub(crate) enum Notice {
     /// The hint row, until the next input event: what a key did, or why it is blocked right now.
     Flash(String),
-    /// A dialog the user dismisses: a result to acknowledge, or the failure of something the user asked for.
+    /// A dialog the user dismisses: a plugin's report, or the failure of something the user asked for.
     Popup(String),
 }
 
@@ -37,8 +37,7 @@ impl Notice {
                 }
             )),
             Dispatch::LinkPending => Notice::Flash("link: pick a second row".to_string()),
-            Dispatch::Done(msg) => Notice::Popup(msg),
-            Dispatch::Refused(msg) => Notice::Flash(msg),
+            Dispatch::Done(msg) | Dispatch::Refused(msg) => Notice::Flash(msg),
         })
     }
 

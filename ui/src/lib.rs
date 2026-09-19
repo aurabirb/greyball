@@ -59,14 +59,13 @@ pub fn create_cursive() -> Result<CursiveRunner<Cursive>, Box<dyn std::error::Er
     Ok(CursiveRunner::new(Cursive::new(), backend))
 }
 
-/// The root view; `layout` is last run's `saved_layout`, and without one `initial_screen` names the active tab.
+/// The root view; `layout` is last run's `saved_layout`.
 pub fn root_view(
     session: SessionHandle,
-    initial_screen: &str,
     log: Arc<LogBuf>,
     layout: Option<Layout>,
 ) -> NamedView<MedleyView> {
-    MedleyView::new(session, initial_screen, log, layout).with_name(ROOT)
+    MedleyView::new(session, log, layout).with_name(ROOT)
 }
 
 /// The window layout to persist, read at shutdown.

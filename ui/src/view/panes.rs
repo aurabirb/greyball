@@ -213,10 +213,10 @@ impl MedleyView {
         if self.focus == Focus::Window(id) && self.close_window(id) {
             return;
         }
-        // The playlist the user came from: open in the active list, else in any other window, else the one playing.
+        // The playlist the user came from: the one playing, else open in the active list, else in any other window.
         let lists = std::iter::once(self.active_list_id()).chain(self.windows.ids().filter(|&other| other != id));
-        let open = lists.filter_map(|id| self.windows[id].list()).find_map(TrackList::open_target);
-        let from = open.or_else(|| self.with_session(Session::playing_playlist));
+        let open = || lists.filter_map(|id| self.windows[id].list()).find_map(TrackList::open_target);
+        let from = self.with_session(Session::playing_playlist).or_else(open);
         if let Some(list) = self.windows[id].list_mut() {
             list.show_top(from);
         }

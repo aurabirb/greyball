@@ -30,10 +30,6 @@ pub struct Config {
     /// (MVP) does not persist the change back to this file.
     pub panes: PaneLayoutConfig,
     pub theme: String,
-    /// Startup screen — `"now_playing"` by default, showing whatever
-    /// `PlaybackContext` was restored from the previous exit, if any (see
-    /// `NOW_PLAYING_PLAYLIST_ID`).
-    pub initial_screen: String,
     /// Persisted player volume, 0.0..=1.0.
     pub volume: f32,
 }
@@ -229,9 +225,6 @@ impl Default for Config {
             visible_track_attrs: vec!["bpm".to_string()],
             panes: PaneLayoutConfig::default(),
             theme: "default".to_string(),
-            // Search is no longer the "home" screen — it's reachable via `/`
-            // or `1` same as ever, just not what greets a fresh install.
-            initial_screen: "now_playing".to_string(),
             volume: 1.0,
         }
     }

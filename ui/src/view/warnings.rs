@@ -10,10 +10,10 @@ use super::MedleyView;
 use super::input::Editing;
 use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
 use super::scroll::{ListEvent, ListState};
-use super::text::pad;
+use super::text::{pad, wrap};
 
-/// Cap on how many plugin messages the warnings modal's bottom section shows.
-const WARNINGS_MESSAGES_MAX: usize = 5;
+/// Rows of the message area under the list, which shows the selected row's text in full.
+const MESSAGE_ROWS: usize = 5;
 
 /// Only ever called for `count > 0` — the button isn't drawn at all when there are no warnings.
 pub(super) fn warnings_label(count: usize) -> String {
@@ -46,33 +46,36 @@ impl Warnings {
         self.statuses.len() + self.failures.len()
     }
 
-    /// "{id}: {msg}" for every plugin reporting a non-`Ok` health.
-    fn messages(&self) -> Vec<String> {
-        self.statuses.iter().filter_map(|(id, health)| health.message().map(|m| format!("{id}: {m}"))).collect()
+    /// Row `i`'s text in full: a plugin's health message, or a failure as listed.
+    fn message(&self, i: usize) -> Option<String> {
+        match self.statuses.get(i) {
+            Some((id, health)) => health.message().map(|m| format!("{id}: {m}")),
+            None => self.failures.get(i - self.statuses.len()).map(|(context, message)| format!("{context}: {message}")),
+        }
     }
 }
 
-/// The warnings modal: plugin rows that run setup, then background-failure rows, above the plugins' messages.
+/// The warnings modal: plugin rows that run setup, then background-failure rows, above the selected row's full text.
 #[derive(Default)]
 pub(super) struct WarningsModal {
     list: ListState,
 }
 
 impl WarningsModal {
-    /// The navigable list's area — what the bottom messages section leaves of the modal's list rows.
-    fn list_rect(rect: Rect, warnings: &Warnings) -> Rect {
-        let n = warnings.messages().len();
-        let messages_h = if n == 0 { 0 } else { 1 + n.min(WARNINGS_MESSAGES_MAX) };
+    /// The navigable list and, a spacer row below it, the message area: the one layout draw, keys and clicks share.
+    fn areas(rect: Rect) -> (Rect, Rect) {
         let rows = modal_list(rect);
-        Rect::from_size(rows.top_left(), (rows.width(), rows.height().saturating_sub(messages_h)))
+        let message_h = MESSAGE_ROWS.min(rows.height() / 2);
+        let list = Rect::from_size(rows.top_left(), (rows.width(), rows.height().saturating_sub(message_h + 1)));
+        (list, Rect::from_size((rows.left(), rows.top() + list.height() + 1), (rows.width(), message_h)))
     }
 
     pub(super) fn relayout(&mut self, resized: bool, rect: Rect, warnings: &Warnings) {
-        self.list.relayout(resized, warnings.rows(), Self::list_rect(rect, warnings).height());
+        self.list.relayout(resized, warnings.rows(), Self::areas(rect).0.height());
     }
 
     pub(super) fn on_event(&mut self, event: &Event, rect: Rect, warnings: &Warnings) -> ModalOutcome {
-        match self.list.on_event(event, warnings.rows(), Self::list_rect(rect, warnings)) {
+        match self.list.on_event(event, warnings.rows(), Self::areas(rect).0) {
             ListEvent::Close => ModalOutcome::Close,
             // A background failure has nothing to set up.
             ListEvent::Activate | ListEvent::Clicked if self.list.cursor < warnings.statuses.len() => {
@@ -88,7 +91,7 @@ impl WarningsModal {
         if warnings.rows() == 0 {
             body.print((0, 1), "(no plugins registered)");
         }
-        let list = Self::list_rect(rect, warnings);
+        let (list, message) = Self::areas(rect);
         let plugins = warnings.statuses.iter().map(|(id, health)| {
             let icon = match health {
                 PluginHealth::Ok => "✓",
@@ -101,9 +104,9 @@ impl WarningsModal {
         let lines: Vec<String> = plugins.chain(failures).collect();
         self.list.draw(&printer.windowed(list), &lines);
 
-        let messages = printer.windowed(Rect::from_size((list.left(), list.bottom() + 2), (list.width(), WARNINGS_MESSAGES_MAX)));
-        for (j, msg) in warnings.messages().iter().take(WARNINGS_MESSAGES_MAX).enumerate() {
-            messages.print((0, j), &pad(msg, messages.size.x));
+        let text = warnings.message(self.list.cursor).unwrap_or_default();
+        for (y, line) in wrap(&text, message.width()).iter().take(message.height()).enumerate() {
+            printer.windowed(message).print((0, y), line);
         }
 
         // The setup prompt takes the footer's place, its typed text on the bottom row.
