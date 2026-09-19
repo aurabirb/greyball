@@ -214,7 +214,7 @@ pub struct RodioPlayer {
 
 impl RodioPlayer {
     pub fn new(
-        media: HashMap<SourceId, Arc<dyn MediaProvider>>,
+        media: core::SharedMedia,
         bus: Bus,
         media_cache: Arc<MediaCache>,
     ) -> Self {
@@ -302,7 +302,7 @@ fn worker(
     inner: Arc<Mutex<Snapshot>>,
     tap: Arc<AudioTap>,
     bus: Bus,
-    media: HashMap<SourceId, Arc<dyn MediaProvider>>,
+    media: core::SharedMedia,
     media_cache: Arc<MediaCache>,
 ) {
     let stream = match rodio::OutputStreamBuilder::open_default_stream() {
@@ -446,7 +446,7 @@ fn start_load(
     inner: &Arc<Mutex<Snapshot>>,
     tap: &Arc<AudioTap>,
     bus: &Bus,
-    media: &HashMap<SourceId, Arc<dyn MediaProvider>>,
+    media: &core::SharedMedia,
     media_cache: &Arc<MediaCache>,
     tx: &Sender<Cmd>,
     r: Rendition,
@@ -489,7 +489,7 @@ fn start_load(
         return;
     }
 
-    let media = media.clone();
+    let media = media.snapshot();
     let media_cache = media_cache.clone();
     let tap = tap.clone();
     let tx = tx.clone();

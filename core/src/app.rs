@@ -25,7 +25,7 @@ use crate::resolver::{Resolution, Resolver, Target, local_path_from_uri};
 use crate::revised::Revised;
 use crate::search::Search;
 use crate::traits::{
-    BrowseNode, Error, MediaProvider, Player, PlayerState, PlayerStatus, Result, Source, Store,
+    BrowseNode, Error, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
     LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchHit, SearchQuery, SourceId, Track,
@@ -442,7 +442,7 @@ pub struct Session {
     pub search: Arc<Search>,
     pub queue: Arc<Queue>,
     pub sources: HashMap<SourceId, Arc<dyn Source>>,
-    pub media: HashMap<SourceId, Arc<dyn MediaProvider>>,
+    pub media: crate::plugin::SharedMedia,
     pub players: HashMap<SourceId, Arc<dyn Player>>,
     /// Every optional source plugin `app` built, registered or not — see
     /// `plugin::Plugin`. Kept even for a plugin that ended up `Fail` (and so
@@ -535,7 +535,7 @@ impl Session {
         bus: Bus,
         store: Arc<dyn Store>,
         sources: HashMap<SourceId, Arc<dyn Source>>,
-        media: HashMap<SourceId, Arc<dyn MediaProvider>>,
+        media: crate::plugin::SharedMedia,
         players: HashMap<SourceId, Arc<dyn Player>>,
         plugins: Vec<Arc<dyn Plugin>>,
         media_cache: Arc<MediaCache>,
@@ -1061,11 +1061,8 @@ impl Session {
             self.view.invalidate_remote_playlists(id);
             self.prune_synthetic_hotkeys();
         }
-        // Also pushed to the scan driver's own live wiring, so a source
-        // wired up after startup isn't stuck behind a walk-thread snapshot
-        // frozen at spawn time — see `ScanDriver::update_wiring`.
         if let Some(scan) = &self.scan {
-            scan.update_wiring(id.clone(), wiring.media.clone(), wiring.player.clone());
+            scan.update_wiring(id.clone(), wiring.player.clone());
         }
         if let Some(m) = wiring.media {
             self.media.insert(id.clone(), m);
@@ -1901,7 +1898,7 @@ impl Session {
     /// `CoreEvent::CacheFallbackReady` to retry playback.
     fn spawn_cache_fallback_decode(&mut self, track: Track) {
         self.pending_cache_fallback = Some(track.id);
-        let media = self.media.clone();
+        let media = self.media.snapshot();
         let players = self.players.clone();
         let media_cache = self.media_cache.clone();
         let bus = self.bus.clone();

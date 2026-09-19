@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use medley_core::{
-    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LastPlayed, Layout, LogBuf, MediaCache, MediaProvider, Player,
+    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LastPlayed, Layout, LogBuf, MediaCache, Player, SharedMedia,
     PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, TrackId, Uuid,
 };
 #[cfg(any(feature = "spotify", feature = "soundcloud", feature = "soulseek"))]
@@ -324,7 +324,7 @@ fn install_wiring(
     w: Wiring,
     id: &SourceId,
     sources: &mut HashMap<SourceId, Arc<dyn Source>>,
-    media: &mut HashMap<SourceId, Arc<dyn MediaProvider>>,
+    media: &SharedMedia,
     players: &mut HashMap<SourceId, Arc<dyn Player>>,
 ) {
     if let Some(s) = w.source {
@@ -348,7 +348,7 @@ fn install_wiring(
 fn register_plugin(
     plugin: Arc<dyn Plugin>,
     sources: &mut HashMap<SourceId, Arc<dyn Source>>,
-    media: &mut HashMap<SourceId, Arc<dyn MediaProvider>>,
+    media: &SharedMedia,
     players: &mut HashMap<SourceId, Arc<dyn Player>>,
     plugins: &mut Vec<Arc<dyn Plugin>>,
 ) {
@@ -492,7 +492,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // HTTP source doubles as its own MediaProvider. `local` (imported files)
     // always gets a player below regardless of this flag.
     let mut sources: HashMap<SourceId, Arc<dyn Source>> = HashMap::new();
-    let mut media: HashMap<SourceId, Arc<dyn MediaProvider>> = HashMap::new();
+    let media = SharedMedia::default();
     // Only pushed to when the spotify/soundcloud/soulseek cargo features are built.
     #[allow(unused_mut)]
     let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
@@ -516,7 +516,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // SoundCloud never populates `Wiring::player` (its playback goes
         // through the shared `rodio` below, not yet built at this point in
         // startup) — a throwaway map here loses nothing.
-        register_plugin(plugin, &mut sources, &mut media, &mut HashMap::new(), &mut plugins);
+        register_plugin(plugin, &mut sources, &media, &mut HashMap::new(), &mut plugins);
     }
 
     #[cfg(feature = "soulseek")]
@@ -538,7 +538,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // Soulseek never populates `Wiring::player` — playback goes through
         // the shared `rodio` below (once the download lands on disk it's a
         // plain local file, same as an http/soundcloud track).
-        register_plugin(plugin, &mut sources, &mut media, &mut HashMap::new(), &mut plugins);
+        register_plugin(plugin, &mut sources, &media, &mut HashMap::new(), &mut plugins);
     }
 
     // Built before `media_cache` (which needs it) rather than down by the
@@ -568,12 +568,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // Imported local files carry `source = "local"`; route them to the same
     // RodioPlayer so `Session::play_track` finds it.
     players.insert(SourceId::from("local"), rodio.clone());
-    if media.contains_key(&SourceId::from("soundcloud")) {
+    if media.contains(&SourceId::from("soundcloud")) {
         // SoundCloud's MediaProvider yields a plain CDN URL; RodioPlayer
         // downloads it exactly like an http track.
         players.insert(SourceId::from("soundcloud"), rodio.clone());
     }
-    if media.contains_key(&SourceId::from("soulseek")) {
+    if media.contains(&SourceId::from("soulseek")) {
         // Soulseek's MediaProvider blocks until its slskd download lands on
         // disk, then yields a plain local path — RodioPlayer just reads it.
         players.insert(SourceId::from("soulseek"), rodio.clone());
@@ -593,7 +593,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             cfg.volume,
             media_cache.clone(),
         ));
-        register_plugin(plugin, &mut sources, &mut media, &mut players, &mut plugins);
+        register_plugin(plugin, &mut sources, &media, &mut players, &mut plugins);
     }
 
     // BpmPlugin is registered into the running driver further down instead

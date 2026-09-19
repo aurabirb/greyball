@@ -266,13 +266,8 @@ struct Inner {
     failures: Mutex<HashMap<(&'static str, TrackId), u32>>,
     /// Tracks currently serving out a `FAILURE_COOLDOWN`, and when it ends.
     failure_cooldown: Mutex<HashMap<(&'static str, TrackId), Instant>>,
-    /// The live, currently-registered set — seeded from `spawn`'s initial
-    /// maps, then kept current by `ScanDriver::update_wiring` as later
-    /// `Plugin::setup()` completions register a source's player/media
-    /// provider. `run`'s walk thread re-reads this every tick instead of a
-    /// frozen snapshot captured at spawn time, so a source wired up after
-    /// startup (e.g. a deferred OAuth login) is picked up without a restart.
-    media: Mutex<HashMap<SourceId, Arc<dyn MediaProvider>>>,
+    /// Shared with the session and player; `players` is kept current by `update_wiring`. Re-read every tick.
+    media: crate::plugin::SharedMedia,
     players: Mutex<HashMap<SourceId, Arc<dyn Player>>>,
 }
 
@@ -282,7 +277,7 @@ pub struct ScanDriver {
 }
 
 impl ScanDriver {
-    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>, cache_full: bool) -> Self {
+    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>, cache_full: bool, media: crate::plugin::SharedMedia) -> Self {
         Self {
             inner: Arc::new(Inner {
                 plugins: Mutex::new(plugins),
@@ -295,7 +290,7 @@ impl ScanDriver {
                 idle_since: Mutex::new(None),
                 failures: Mutex::new(HashMap::new()),
                 failure_cooldown: Mutex::new(HashMap::new()),
-                media: Mutex::new(HashMap::new()),
+                media,
                 players: Mutex::new(HashMap::new()),
             }),
         }
@@ -314,11 +309,9 @@ impl ScanDriver {
         &self,
         catalog: Arc<Catalog>,
         store: Arc<dyn Store>,
-        media: HashMap<SourceId, Arc<dyn MediaProvider>>,
         players: HashMap<SourceId, Arc<dyn Player>>,
         media_cache: Arc<MediaCache>,
     ) {
-        *self.inner.media.lock().unwrap() = media;
         *self.inner.players.lock().unwrap() = players;
         let inner = self.inner.clone();
         thread::Builder::new()
@@ -327,21 +320,8 @@ impl ScanDriver {
             .expect("failed to spawn scan-driver thread");
     }
 
-    /// Registers a source's newly-available player/media-provider after
-    /// startup (called wherever `Session::apply_wiring` runs) — mirrors
-    /// `apply_wiring`'s own "each field independently, `None` leaves the
-    /// existing entry untouched" semantics, so a `setup()` that only
-    /// produces a player doesn't wipe out an already-working media-provider
-    /// entry for the same source, or vice versa.
-    pub fn update_wiring(
-        &self,
-        id: SourceId,
-        media: Option<Arc<dyn MediaProvider>>,
-        player: Option<Arc<dyn Player>>,
-    ) {
-        if let Some(m) = media {
-            self.inner.media.lock().unwrap().insert(id.clone(), m);
-        }
+    /// Registers a source's newly-available player after startup (`Session::apply_wiring`).
+    pub fn update_wiring(&self, id: SourceId, player: Option<Arc<dyn Player>>) {
         if let Some(p) = player {
             self.inner.players.lock().unwrap().insert(id, p);
         }
@@ -429,7 +409,7 @@ fn run(
         // snapshot moved in at spawn time, so a source wired up after
         // startup (`ScanDriver::update_wiring`) is visible on the very next
         // tick instead of never.
-        let media = inner.media.lock().unwrap().clone();
+        let media = inner.media.snapshot();
         let players = inner.players.lock().unwrap().clone();
         let plugins = inner.plugins.lock().unwrap().clone();
         let ctx = ScanCtx { media: &media, players: &players, media_cache: &media_cache };

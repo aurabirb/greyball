@@ -119,3 +119,22 @@ pub trait Plugin: Send + Sync {
         String::new()
     }
 }
+
+/// Live media-provider registry shared by the session, scan driver and player, so a provider wired after setup reaches all of them.
+#[derive(Clone, Default)]
+pub struct SharedMedia(Arc<std::sync::RwLock<std::collections::HashMap<SourceId, Arc<dyn MediaProvider>>>>);
+
+impl SharedMedia {
+    pub fn insert(&self, id: SourceId, m: Arc<dyn MediaProvider>) {
+        self.0.write().unwrap().insert(id, m);
+    }
+
+    pub fn contains(&self, id: &SourceId) -> bool {
+        self.0.read().unwrap().contains_key(id)
+    }
+
+    /// Cheap Arc-clone copy, so callers never hold the lock across a blocking fetch.
+    pub fn snapshot(&self) -> std::collections::HashMap<SourceId, Arc<dyn MediaProvider>> {
+        self.0.read().unwrap().clone()
+    }
+}

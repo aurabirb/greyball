@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use medley_core::{
-    Bus, Config, MediaCache, MediaProvider, Player, Plugin, ScanDriver, ScanPlugin, Session, Source,
+    Bus, Config, MediaCache, Player, Plugin, ScanDriver, ScanPlugin, Session, Source,
     SourceId, Store,
 };
 
@@ -24,7 +24,7 @@ pub fn build_session(
     bus: Bus,
     store: Arc<dyn Store>,
     sources: HashMap<SourceId, Arc<dyn Source>>,
-    media: HashMap<SourceId, Arc<dyn MediaProvider>>,
+    media: medley_core::SharedMedia,
     players: HashMap<SourceId, Arc<dyn Player>>,
     plugins: Vec<Arc<dyn Plugin>>,
     scan_plugins: Vec<Arc<dyn ScanPlugin>>,
@@ -46,8 +46,8 @@ pub fn build_session(
     // Always spawned, even with an empty initial plugin list — plugins that
     // only become available after async setup register later via
     // `ScanDriver::register_plugin`.
-    let driver = Arc::new(ScanDriver::new(scan_plugins, cache_full));
-    driver.spawn(session.catalog.clone(), store, media, players, media_cache);
+    let driver = Arc::new(ScanDriver::new(scan_plugins, cache_full, media));
+    driver.spawn(session.catalog.clone(), store, players, media_cache);
     session.scan = Some(driver);
     session
 }
