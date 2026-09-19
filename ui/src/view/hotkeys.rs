@@ -117,7 +117,7 @@ impl MedleyView {
     pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) {
         // A key the shell or a list reads first would never reach its binding.
         if keybindings::is_fixed(key) || Nav::of(&Event::Char(key)).is_some() {
-            self.feedback = Some(format!("Can't bind '{key}': it means the same everywhere"));
+            self.feedback = Some(format!("Can't bind '{key}': it is a fixed key"));
             return;
         }
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));

@@ -46,10 +46,11 @@ impl Cell {
 
 /// A rendered list row; every column is a `Cell` produced by `render_cell`.
 pub(super) struct Row {
-    tags: Cell,
+    /// A track's attribute tags; a top-level playlist's key.
+    pub(super) tags: Cell,
     main: Cell,
     /// One letter per hotkey-bound playlist holding this track, italic while that membership is pending.
-    pub(super) hotkeys: Cell,
+    hotkeys: Cell,
     source: Cell,
     duration: Cell,
     current: bool,

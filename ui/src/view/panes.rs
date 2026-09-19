@@ -2,13 +2,14 @@ use cursive::{Printer, Rect, Vec2};
 use cursive::event::EventResult;
 use cursive::theme::ColorStyle;
 
-use core::{Axis, PaneLayoutConfig, Side};
+use core::{Axis, PaneLayoutConfig, Session, Side};
 
-use crate::screen::{Kind, ListKind, Placement};
+use crate::screen::{Kind, ListKind, PLAYLIST_KEYS, Placement};
 
 use super::{Focus, MedleyView};
 use super::modal::draw_modal_frame;
 use super::input::Editing;
+use super::track_list::TrackList;
 use super::window::WindowId;
 
 /// Rows reserved at the very top of the terminal and bottom.
@@ -199,6 +200,22 @@ impl MedleyView {
                 self.focus = Focus::Window(id);
             }
         }
+    }
+
+    /// The `TogglePlaylistKeys` key: closes the playlist keys window when it has focus, else shows it at its top level.
+    pub(super) fn toggle_playlist_keys(&mut self) {
+        let Some(id) = self.windows.named(PLAYLIST_KEYS) else { return };
+        if self.focus == Focus::Window(id) && self.close_window(id) {
+            return;
+        }
+        // The playlist the user came from: open in the active list, else in any other window, else the one playing.
+        let lists = std::iter::once(self.active_list_id()).chain(self.windows.ids().filter(|&other| other != id));
+        let open = lists.filter_map(|id| self.windows[id].list()).find_map(TrackList::open_target);
+        let from = open.or_else(|| self.with_session(Session::playing_playlist));
+        if let Some(list) = self.windows[id].list_mut() {
+            list.show_top(from);
+        }
+        self.show(id);
     }
 
     /// Moves `id`, keeping a shown window shown and a focused one focused; only `cover` lets it take the whole screen.

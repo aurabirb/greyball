@@ -199,45 +199,6 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Playlist hotkey rework — two parts, both built on the existing `Modal::HotkeyCapture`/
-  `capture_event` → `ModalOutcome::Bind`/`Unbind` path (`ui/src/view/hotkeys.rs`, `modal.rs`) and `Session::bind_hotkey`
-  (`core/src/app.rs`). Purpose: mid track-sorting (often from the Queue or another pane, not the
-  Playlists screen) get a quick reminder of which key is on which playlist, move a key to a
-  different playlist, or add a playlist, without leaving the current view.
-  (1) Direct assign on the Playlists screen: with a playlist row selected (local or remote —
-  `selected_hotkey_target`), pressing any single-character key that isn't a built-in's effective key
-  (`keybindings::builtin_at`) (re)assigns that key to the selected playlist immediately — no modal,
-  no Enter — the counterpart of how a playlist key pressed on a track toggles membership. A key
-  already on another playlist moves (report the steal in the status line, as `bind_captured_key`
-  does). Keys this screen's raw handlers consume first (`x` export, `:`, Enter, …) stay theirs —
-  see the raw-handler hotkey bug above; don't make them assignable.
-  (2) `` ` `` from anywhere opens a second instance of the Playlists window, floating — a bordered
-  box over the current view, not fullscreen (`Placement::Floating`, `ui/src/view/README.md` — reuse
-  it, don't build a second one) — with its
-  own state but the same behavior as the tabbed one: own cursor/scroll, own open local/remote
-  playlist and drill-in/back navigation, own filter, and every Playlists-screen key working in it,
-  including (1)'s direct assign, Backspace clearing the selected playlist's key, `x` export and
-  the existing scrolling keys/wheel. No duplication: it is one more `TrackList` of kind Playlists
-  (`ui/src/view/track_list.rs`) under its own `WindowId` in `Windows` (`window.rs`), shown in the
-  floating placement; nothing Playlists-specific goes inline in `MedleyView`, whose `hotkey_target`
-  already asks the focused window first. Shared data (`Session` playlists, `ViewCache`, hotkeys) stays shared, so an
-  assign/rename/add in one instance shows in the other on the next draw. Differences are instance
-  settings, not forks of the code: the floating instance sorts playlists with an assigned key
-  first, then the rest (each group in its usual order), re-sorting after an assign with the cursor
-  following its row; on open it preselects the playlist the user came from (an open local/remote
-  playlist in the tabbed instance, or the playing context's playlist) at the top level — showing
-  the list with keys, not drilled in — else keeps its previous cursor; Esc at its top level (and
-  `` ` `` again) closes it, keeping its state for next time. The hotkey column must be visible in
-  the list rows (add it to the shared row builder if the Playlists list doesn't show it already).
-  The bottom hint line keeps its current role (hint ↔ bind/steal/refusal feedback) with the Enter
-  step dropped. Adding a playlist mid-work comes for free through whatever the Playlists window
-  already offers (`:newplaylist`); the new row should appear selected in the floating instance.
-  Consequences to handle in the same change: `` ` `` is `BuiltinAction::OpenHotkeyMenu`'s default
-  key and today opens the fullscreen built-ins remap menu — retarget that built-in to the floating
-  Playlists instance; built-in remapping stays reachable through `:keys` (which the merged
-  Help/hotkey window below takes over, along with `?`) — update `command::HELP`, the help text and
-  the hint texts that mention either; delete the Playlists-window backtick override
-  in `on_shell_key` and the standalone `Modal::HotkeyCapture`/`draw_capture`, which (1) and (2) replace.
 - [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
   — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
   `HelpModal`/`help_lines`/`build_help_lines` (`ui/src/view/help.rs`) and `HotkeyMenu`/`menu_rows`
@@ -280,13 +241,13 @@
   Home/End and the wheel as in the current menus; Tab/Shift-Tab jump to the next/previous section
   (move the cursor to its first item and scroll its title to the top of the box — just a scroll to
   position, no tab strip); Esc or `?` closes.
-  Rebinding: Enter on a row starts the existing one-keystroke capture (`hotkey_capture`/
-  `bind_captured_key`), Backspace clears that row's binding back to its default/none
-  (`clear_selected_hotkey`), with bind/steal/refusal feedback on the box's bottom hint line as
+  Rebinding: Enter on a row starts the existing one-keystroke capture (`capture_event` →
+  `MedleyView::bind_hotkey`), Backspace clears that row's binding back to its default/none
+  (`MedleyView::clear_hotkey`), with bind/steal/refusal feedback on the box's bottom hint line as
   today. Almost every row should be bindable: rows backed by a `BuiltinAction` already are; give
   `:commands` that take no argument and the actions now hard-coded as raw keys in `on_event` a
-  bindable target too (extending `BuiltinAction`/`HotkeyTarget` — this also settles the raw-handler
-  hotkey bug above, since one table then knows every taken key). Rows that can't sensibly be bound
+  bindable target too (extending `BuiltinAction`/`HotkeyTarget`, and shrinking `keybindings::fixed`,
+  the keys no hotkey can take, by each one that becomes bindable). Rows that can't sensibly be bound
   (commands needing an argument, fixed keys like Esc/Enter/arrows) show their key but refuse Enter
   with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
   `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
@@ -386,8 +347,8 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item under Features): (1) the playlist hotkey
-  rework; (2) the merged Help/hotkey window; (3) the status-row widget, the title scrubber. The
+- [ ] UI architecture work order (each step is an item under Features): (1) the merged Help/hotkey
+  window; (2) the status-row widget, the title scrubber. The
   `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels lock and a `split` axis
   helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use

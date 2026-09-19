@@ -79,25 +79,44 @@ impl From<core::PaneMode> for Placement {
     }
 }
 
-/// A startup window: the name `:panes`, `:window` and `state.toml` know it by, and whether it starts as a tab.
+/// Where a startup window is placed before any layout is restored.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Home {
+    Tab,
+    /// Placed by `Config::panes`' mode.
+    Pane,
+    Float,
+}
+
+/// A startup window: the name `:panes`, `:window` and `state.toml` know it by, and its instance settings.
 pub struct Startup {
     pub name: &'static str,
     pub kind: Kind,
-    pub tabbed: bool,
+    pub home: Home,
+    /// A Playlists list puts the playlists that have a key first.
+    pub keyed_first: bool,
 }
 
-/// Every window startup builds, tabs first in tab order; Queue and History each have a tab and a pane instance.
-pub const WINDOWS: [Startup; 10] = [
-    Startup { name: "now-playing", kind: Kind::List(ListKind::NowPlaying), tabbed: true },
-    Startup { name: "playlists", kind: Kind::List(ListKind::Playlists), tabbed: true },
-    Startup { name: "search", kind: Kind::List(ListKind::Search), tabbed: true },
-    Startup { name: "history-tab", kind: Kind::List(ListKind::History), tabbed: true },
-    Startup { name: "queue-tab", kind: Kind::List(ListKind::Queue), tabbed: true },
-    Startup { name: "log", kind: Kind::Log, tabbed: false },
-    Startup { name: "settings", kind: Kind::Settings, tabbed: false },
-    Startup { name: "vis", kind: Kind::Vis, tabbed: false },
-    Startup { name: "queue", kind: Kind::List(ListKind::Queue), tabbed: false },
-    Startup { name: "history", kind: Kind::List(ListKind::History), tabbed: false },
+const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {
+    Startup { name, kind, home, keyed_first: false }
+}
+
+/// The window the `TogglePlaylistKeys` key opens over whatever is shown.
+pub const PLAYLIST_KEYS: &str = "playlist-keys";
+
+/// Every window startup builds, tabs first in tab order; Queue, History and Playlists each have two instances.
+pub const WINDOWS: [Startup; 11] = [
+    startup("now-playing", Kind::List(ListKind::NowPlaying), Home::Tab),
+    startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
+    startup("search", Kind::List(ListKind::Search), Home::Tab),
+    startup("history-tab", Kind::List(ListKind::History), Home::Tab),
+    startup("queue-tab", Kind::List(ListKind::Queue), Home::Tab),
+    startup("log", Kind::Log, Home::Pane),
+    startup("settings", Kind::Settings, Home::Pane),
+    startup("vis", Kind::Vis, Home::Pane),
+    startup("queue", Kind::List(ListKind::Queue), Home::Pane),
+    startup("history", Kind::List(ListKind::History), Home::Pane),
+    Startup { keyed_first: true, ..startup(PLAYLIST_KEYS, Kind::List(ListKind::Playlists), Home::Float) },
 ];
 
 /// The window `Config::initial_screen` names; anything unrecognized starts on Search.

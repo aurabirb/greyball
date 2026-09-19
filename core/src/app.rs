@@ -71,7 +71,7 @@ pub enum BuiltinAction {
     Wedge,
     Like,
     Unlike,
-    OpenHotkeyMenu,
+    TogglePlaylistKeys,
     OpenHelp,
 }
 
@@ -98,7 +98,7 @@ impl BuiltinAction {
         // instead (`ui::command`), leaving 'l'/'L' free for "like"/"unlike".
         (BuiltinAction::Like, 'l'),
         (BuiltinAction::Unlike, 'L'),
-        (BuiltinAction::OpenHotkeyMenu, '`'),
+        (BuiltinAction::TogglePlaylistKeys, '`'),
         (BuiltinAction::OpenHelp, '?'),
     ];
 
@@ -131,7 +131,7 @@ impl BuiltinAction {
             BuiltinAction::Wedge => "wedge",
             BuiltinAction::Like => "like",
             BuiltinAction::Unlike => "unlike",
-            BuiltinAction::OpenHotkeyMenu => "open-hotkey-menu",
+            BuiltinAction::TogglePlaylistKeys => "toggle-playlist-keys",
             BuiltinAction::OpenHelp => "open-help",
         }
     }
@@ -159,7 +159,7 @@ impl BuiltinAction {
             BuiltinAction::Wedge => "wedge selected track to queue front",
             BuiltinAction::Like => "add selected track to Liked Songs",
             BuiltinAction::Unlike => "remove selected track from Liked Songs (confirms first)",
-            BuiltinAction::OpenHotkeyMenu => "open hotkeys menu",
+            BuiltinAction::TogglePlaylistKeys => "open or close the playlist keys window",
             BuiltinAction::OpenHelp => "open help/shortcuts screen",
         }
     }
@@ -198,6 +198,8 @@ pub enum Command {
         /// Liked Songs) that may still be loading — lets `advance`
         /// re-check the live list instead of stopping at a stale snapshot's end.
         remote: Option<(SourceId, BrowseNode)>,
+        /// The local playlist `tracks` is, if it is one.
+        local: Option<PlaylistId>,
         /// The originating context's display name (a playlist name, "Search
         /// results", "Queue", a remote folder's name, ...), for Now
         /// Playing's title — `None` when the call site has no natural name.
@@ -301,6 +303,7 @@ pub enum Dispatch {
     ScanMode(crate::scan::ScanMode),
     /// A result the user asked for and should acknowledge.
     Done(String),
+    PlaylistCreated(PlaylistId),
     /// `:link` holds its first row and waits for the second.
     LinkPending,
     /// Blocked or not applicable right now, and why; a real failure is `dispatch`'s `Err`.
@@ -338,6 +341,7 @@ struct PlaybackContext {
     index: usize,
     /// See `Command::PlayContext::remote`.
     remote: Option<(SourceId, BrowseNode)>,
+    local: Option<PlaylistId>,
     /// See `Command::PlayContext::name`.
     name: Option<String>,
     /// Remaining draw order for shuffle mode: a randomized permutation of
@@ -512,6 +516,7 @@ impl Session {
                     tracks: p.items,
                     index,
                     remote: None,
+                    local: None,
                     name: (!p.name.is_empty()).then_some(p.name),
                     shuffle_bag: Vec::new(),
                 }
@@ -627,11 +632,11 @@ impl Session {
                 self.play_now(id);
                 Ok(Dispatch::Ok)
             }
-            Command::PlayContext { tracks, index, remote, name } => {
+            Command::PlayContext { tracks, index, remote, local, name } => {
                 let Some(&id) = tracks.get(index) else {
                     return Ok(Dispatch::Ok);
                 };
-                self.shown.write().context = Some(PlaybackContext { tracks: Vec::new(), index, remote, name, shuffle_bag: Vec::new() });
+                self.shown.write().context = Some(PlaybackContext { tracks: Vec::new(), index, remote, local, name, shuffle_bag: Vec::new() });
                 self.set_context_tracks(tracks);
                 self.save_now_playing_context();
                 // `play_now` never touches the manual queue's contents
@@ -723,7 +728,7 @@ impl Session {
                     items: vec![],
                 };
                 self.save_playlist(&p)?;
-                Ok(Dispatch::Ok)
+                Ok(Dispatch::PlaylistCreated(p.id))
             }
             Command::AddToPlaylist { track, playlist } => {
                 let mut p = self
@@ -1336,6 +1341,13 @@ impl Session {
     /// issued `Command::PlayContext` had no natural name for it.
     pub fn playing_context_name(&self) -> Option<String> {
         self.shown.context.as_ref().and_then(|c| c.name.clone())
+    }
+
+    /// The playlist the playing context was started from, if it was one.
+    pub fn playing_playlist(&self) -> Option<HotkeyTarget> {
+        let ctx = self.shown.context.as_ref()?;
+        let remote = ctx.remote.clone().map(|(source, node)| HotkeyTarget::Remote(source, node));
+        remote.or(ctx.local.map(HotkeyTarget::Local))
     }
 
     /// A window of the playing context's tracks (`offset..offset+limit`) —

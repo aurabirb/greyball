@@ -411,7 +411,7 @@ impl View for MedleyView {
         let bottom = printer.size.y.saturating_sub(2);
         let focused = placed.iter().position(|placed| placed.id == self.focused_id()).map(|i| &frame.windows[i]);
         let assignable = matches!(focused, Some(WindowFrame::List(list)) if list.assignable);
-        let line = self.hint_line(assignable, chrome.help_key);
+        let line = self.hint_line(assignable, chrome);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.

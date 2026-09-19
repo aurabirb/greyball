@@ -20,7 +20,7 @@ impl Notice {
             Err(e) => return Some(Notice::failed(e.to_string())),
         };
         Some(match outcome {
-            Dispatch::Ok | Dispatch::Quit => return None,
+            Dispatch::Ok | Dispatch::Quit | Dispatch::PlaylistCreated(_) => return None,
             Dispatch::Queued(n) => Notice::Flash(format!("Queued: {n} tracks")),
             Dispatch::Wedged(n) => Notice::Flash(format!("Wedged: {n} tracks")),
             Dispatch::ShuffleSet(on) => Notice::Flash(format!("Shuffle: {}", if on { "on" } else { "off" })),

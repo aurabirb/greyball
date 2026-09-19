@@ -10,8 +10,10 @@ use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, Sourc
 
 use crate::command;
 use crate::keybindings::Action;
+use crate::screen::PLAYLIST_KEYS;
 
-use super::MedleyView;
+use super::{Focus, MedleyView};
+use super::frame::Chrome;
 use super::help::HelpModal;
 use super::modal::Modal;
 use super::notice::Notice;
@@ -144,6 +146,13 @@ impl MedleyView {
     pub(crate) fn run(&mut self, cmd: Command) -> EventResult {
         match self.with_session_mut(|s| s.dispatch(cmd)) {
             Ok(Dispatch::Quit) => EventResult::with_cb(|c: &mut Cursive| c.quit()),
+            Ok(Dispatch::PlaylistCreated(id)) => {
+                let list = self.active_list_id();
+                if let Some(list) = self.windows[list].list_mut() {
+                    list.select_playlist(HotkeyTarget::Local(id));
+                }
+                EventResult::consumed()
+            }
             result => Notice::of_dispatch(result).map_or_else(EventResult::consumed, |n| self.notify(n)),
         }
     }
@@ -219,6 +228,10 @@ impl MedleyView {
             }
             Action::OpenHotkeyMenu => {
                 self.open_hotkey_menu();
+                EventResult::consumed()
+            }
+            Action::TogglePlaylistKeys => {
+                self.toggle_playlist_keys();
                 EventResult::consumed()
             }
             Action::OpenHelp => {
@@ -308,18 +321,22 @@ impl MedleyView {
     }
 
     /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
-    pub(super) fn hint_line(&self, assignable: bool, help_key: Option<char>) -> String {
+    pub(super) fn hint_line(&self, assignable: bool, chrome: &Chrome) -> String {
         match &self.editing {
             Editing::Search => format!("/{}", self.buffer),
             Editing::CommandLine => format!(":{}", self.buffer),
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
+                let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
+                let keys_key = key(chrome.keys_key);
                 if assignable {
-                    return "  [key] assign   [Backspace] clear   [Enter] open".to_string();
+                    let keys = self.windows.named(PLAYLIST_KEYS);
+                    let closes = self.open.iter().any(|&(id, _)| Some(id) == keys && Focus::Window(id) == self.focus);
+                    let close = if closes { format!("   [{keys_key}] close") } else { String::new() };
+                    return format!("  [key] assign   [Backspace] clear   [Enter] open{close}");
                 }
-                let help_key = help_key.map(String::from).unwrap_or_default();
-                format!("  [{help_key}] help")
+                format!("  [{}] help   [{keys_key}] playlist keys", key(chrome.help_key))
             }),
         }
     }

@@ -24,6 +24,7 @@ use super::window::{Ctx, WindowOutcome};
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// One row of a Playlists window's top-level list.
+#[derive(Clone)]
 pub(super) enum TopRow {
     Local(PlaylistId),
     Remote(SourceId, String, BrowseNode),
@@ -105,17 +106,26 @@ pub(super) struct TrackList {
     query: Option<String>,
     /// Bumped whenever `open` or `query` changes — the list-identity part of every memo key.
     view_gen: u64,
+    /// The top level lists the playlists that have a key first.
+    keyed_first: bool,
+    /// The playlist whose top-level row the next layout pass puts the cursor on.
+    select: Option<HotkeyTarget>,
     /// When and on which row the last left click landed.
     last_click: Option<(Instant, usize)>,
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
     matches: Memo<(u64, u64), Arc<[TrackId]>>,
     frame: Memo<(u64, u64, usize, usize, bool), Arc<ListFrame>>,
+    /// The top-level rows in this window's order, keyed on the playlists, remote playlists and hotkeys generations.
+    top: Memo<(u64, u64, u64), Arc<[TopRow]>>,
 }
 
 impl TrackList {
-    pub(super) fn new(kind: ListKind) -> Self {
+    pub(super) fn new(kind: ListKind, keyed_first: bool) -> Self {
         Self {
             kind,
+            keyed_first,
+            select: None,
+            top: Memo::default(),
             state: ListState::default(),
             open: Open::default(),
             query: None,
@@ -240,16 +250,50 @@ impl TrackList {
         }
     }
 
+    /// The top-level rows as this window lists them: what the cursor, a click, Enter and a bound key all index.
+    fn top(&self, s: &Session) -> Arc<[TopRow]> {
+        self.top.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), s.hotkeys_gen()), || {
+            let mut rows = top_rows(s);
+            if self.keyed_first {
+                rows.sort_by_key(|row| s.playlist_hotkey(&row.target()).is_none());
+            }
+            rows.into()
+        })
+    }
+
     fn top_row(&self, s: &Session) -> Option<TopRow> {
-        top_rows(s).into_iter().nth(self.state.cursor)
+        self.top(s).get(self.state.cursor).cloned()
+    }
+
+    /// The open playlist.
+    pub(super) fn open_target(&self) -> Option<HotkeyTarget> {
+        match &self.open {
+            Open::TopLevel => None,
+            Open::Local(id) => Some(HotkeyTarget::Local(*id)),
+            Open::Remote(sid, _, node) => Some(HotkeyTarget::Remote(sid.clone(), node.clone())),
+        }
+    }
+
+    /// Puts the cursor on `target`'s row of the top level, if that is where this window is.
+    pub(super) fn select_playlist(&mut self, target: HotkeyTarget) {
+        if self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel) {
+            self.select = Some(target);
+        }
+    }
+
+    /// Back to the top level, the cursor on `target`, else on the playlist it leaves, else where it was.
+    pub(super) fn show_top(&mut self, target: Option<HotkeyTarget>) {
+        let left = self.open_target();
+        if left.is_some() {
+            self.reset_for_new_list(Open::TopLevel);
+        }
+        self.select = target.or(left);
     }
 
     /// The playlist (local or remote) selected or open, if this is a Playlists window.
     pub(super) fn selected_hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
-        match (self.kind, &self.open) {
-            (ListKind::Playlists, Open::Local(id)) => Some(HotkeyTarget::Local(*id)),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => Some(HotkeyTarget::Remote(sid.clone(), node.clone())),
-            (ListKind::Playlists, Open::TopLevel) => self.top_row(s).as_ref().map(TopRow::target),
+        match self.kind {
+            ListKind::Playlists => self.open_target().or_else(|| self.top_row(s).as_ref().map(TopRow::target)),
             _ => None,
         }
     }
@@ -266,7 +310,7 @@ impl TrackList {
             (ListKind::History, _) => s.queue.history_len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
             (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
-            (ListKind::Playlists, Open::TopLevel) => top_rows(s).len(),
+            (ListKind::Playlists, Open::TopLevel) => self.top(s).len(),
         }
     }
 
@@ -292,7 +336,8 @@ impl TrackList {
                 Open::Remote(sid, _, node) => Some((sid.clone(), node.clone())),
                 _ => None,
             };
-            return WindowOutcome::Run(Command::PlayContext { tracks, index, remote, name: self.context_name(s) });
+            let (local, name) = (self.open_local(), self.context_name(s));
+            return WindowOutcome::Run(Command::PlayContext { tracks, index, remote, local, name });
         }
         if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;
@@ -370,12 +415,12 @@ impl TrackList {
             }
             (ListKind::Playlists, Open::TopLevel) => {
                 let playlists = s.playlists();
-                top_rows(s)
-                    .into_iter()
+                self.top(s)
+                    .iter()
                     .skip(offset)
                     .take(limit)
                     .map(|row| {
-                        let mut r = match &row {
+                        let mut r = match row {
                             TopRow::Local(id) => {
                                 let p = playlists.iter().find(|p| p.id == *id);
                                 let name = p.map(|p| p.name.clone()).unwrap_or_default();
@@ -385,7 +430,7 @@ impl TrackList {
                             TopRow::Remote(sid, name, _) => plain_row(format!("[{sid}] {name}")),
                         };
                         let key = s.playlist_hotkey(&row.target());
-                        r.hotkeys = Cell::plain(key.map(String::from).unwrap_or_default());
+                        r.tags = Cell::plain(key.map(String::from).unwrap_or_default());
                         r
                     })
                     .collect()
@@ -433,8 +478,9 @@ impl TrackList {
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
     pub(super) fn relayout(&mut self, resized: bool, s: &Session, rect: Rect) {
         let len = self.len(s);
-        self.state.cursor = self.state.cursor.min(len.saturating_sub(1));
-        self.state.relayout(resized, len, Self::body(rect).height());
+        let selected = self.select.take().and_then(|target| self.top(s).iter().position(|row| row.target() == target));
+        self.state.cursor = selected.unwrap_or(self.state.cursor).min(len.saturating_sub(1));
+        self.state.relayout(resized || selected.is_some(), len, Self::body(rect).height());
     }
 
     /// Brings the scroll window back around the cursor.
@@ -475,7 +521,7 @@ impl TrackList {
                 WindowOutcome::Consumed
             }
             ListEvent::Close if !matches!(self.open, Open::TopLevel) => {
-                self.reset_for_new_list(Open::TopLevel);
+                self.show_top(None);
                 WindowOutcome::Consumed
             }
             ListEvent::Close => WindowOutcome::Ignored,
@@ -485,18 +531,20 @@ impl TrackList {
     }
 
     /// On a top-level playlist row a free key binds that playlist and Backspace clears its key.
-    fn assign(&self, event: &Event, s: &Session) -> WindowOutcome {
+    fn assign(&mut self, event: &Event, s: &Session) -> WindowOutcome {
         if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;
         }
         let Some(target) = self.top_row(s).as_ref().map(TopRow::target) else { return WindowOutcome::Ignored };
-        if *event == Event::Key(Key::Backspace) {
-            return WindowOutcome::Unbind(target);
-        }
         let hotkeys = s.hotkeys().into_iter().collect();
-        match key_name(event).and_then(|key| keybindings::bindable(&key, &hotkeys)) {
-            Some(key) => WindowOutcome::Bind(target, key),
-            None => WindowOutcome::Ignored,
-        }
+        let key = key_name(event).and_then(|key| keybindings::bindable(&key, &hotkeys));
+        let outcome = match key {
+            _ if *event == Event::Key(Key::Backspace) => WindowOutcome::Unbind(target.clone()),
+            Some(key) => WindowOutcome::Bind(target.clone(), key),
+            None => return WindowOutcome::Ignored,
+        };
+        // The rows re-sort under the cursor once the key lands; it stays on this playlist.
+        self.select = Some(target);
+        outcome
     }
 }

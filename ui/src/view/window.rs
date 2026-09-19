@@ -6,7 +6,7 @@ use cursive::event::{Event, Key, MouseEvent};
 
 use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
-use crate::screen::{Kind, Placement, WINDOWS};
+use crate::screen::{Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
 
 use super::log::LogPane;
@@ -64,7 +64,7 @@ pub(super) enum WindowFrame {
 }
 
 enum Body {
-    List(TrackList),
+    List(Box<TrackList>),
     Log(LogPane),
     Settings(SettingsPane),
     Vis(Arc<Vis>),
@@ -80,14 +80,14 @@ pub(super) struct Window {
 impl Window {
     pub(super) fn list(&self) -> Option<&TrackList> {
         match &self.body {
-            Body::List(list) => Some(list),
+            Body::List(list) => Some(list.as_ref()),
             _ => None,
         }
     }
 
     pub(super) fn list_mut(&mut self) -> Option<&mut TrackList> {
         match &mut self.body {
-            Body::List(list) => Some(list),
+            Body::List(list) => Some(list.as_mut()),
             _ => None,
         }
     }
@@ -172,22 +172,28 @@ pub(super) struct Windows {
 }
 
 impl Windows {
-    /// One window per `WINDOWS` entry, in its order; the pane windows are placed by `panes`.
+    /// One window per `WINDOWS` entry, in its order; the `Home::Pane` ones are placed by `panes`.
     pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>, panes: Placement) -> Self {
         let placements = Placements { of: Vec::new(), generation: 0 };
         let mut windows = Self { items: Vec::new(), placements, log, vis };
         for startup in &WINDOWS {
-            windows.add(startup.kind, if startup.tabbed { Placement::Tabbed } else { panes });
+            let placement = match startup.home {
+                Home::Tab => Placement::Tabbed,
+                Home::Pane => panes,
+                Home::Float => Placement::Floating,
+            };
+            windows.add(startup, placement);
         }
         windows
     }
 
-    fn add(&mut self, kind: Kind, placement: Placement) -> WindowId {
+    fn add(&mut self, startup: &Startup, placement: Placement) -> WindowId {
+        let kind = startup.kind;
         let body = match kind {
             Kind::Log => Body::Log(LogPane::new(self.log.clone())),
             Kind::Settings => Body::Settings(SettingsPane::default()),
             Kind::Vis => Body::Vis(self.vis.clone()),
-            Kind::List(list) => Body::List(TrackList::new(list)),
+            Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
         self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)) });
         self.placements.of.push(placement);
@@ -207,9 +213,9 @@ impl Windows {
         WINDOWS[id.0].name
     }
 
-    /// The windows `:panes <mode>` without a name places: those that are not tabs now.
+    /// The windows `:panes <mode>` without a name places: not a tab now, and not one whose job is to float.
     pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.ids().filter(|&id| self.placement(id) != Placement::Tabbed)
+        self.ids().filter(|&id| self.placement(id) != Placement::Tabbed && WINDOWS[id.0].home != Home::Float)
     }
 
     pub(super) fn placements(&self) -> &Placements {

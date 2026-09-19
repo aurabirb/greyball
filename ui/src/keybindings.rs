@@ -17,8 +17,10 @@ pub enum Action {
     Tab(usize),
     /// UI-local: open the `:` command line.
     CommandLine,
-    /// UI-local: open the built-ins remap menu.
+    /// UI-local: open the built-ins remap menu (`:keys`).
     OpenHotkeyMenu,
+    /// UI-local: open the playlist keys window over the view, or close it when it has focus.
+    TogglePlaylistKeys,
     /// UI-local: rotate the shared embedded-pane dock through
     /// right+vertical -> bottom+horizontal -> left+vertical ->
     /// top+horizontal -> back to right+vertical (`view::PANE_LAYOUT_CYCLE`)
@@ -116,7 +118,7 @@ pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyT
             .map(|id| Action::Command(Command::Like(id)))
             .unwrap_or(Action::None),
         BuiltinAction::Unlike => selected.map(Action::ConfirmUnlike).unwrap_or(Action::None),
-        BuiltinAction::OpenHotkeyMenu => Action::OpenHotkeyMenu,
+        BuiltinAction::TogglePlaylistKeys => Action::TogglePlaylistKeys,
         BuiltinAction::OpenHelp => Action::OpenHelp,
     }
 }
@@ -155,7 +157,7 @@ pub const RAW_KEYS: &[(&str, &str)] = &[
     ("M", "move the focused window: tabbed, embedded, screen, float"),
     ("E", "clear the queue"),
     ("Q", "quit"),
-    ("`", "open the hotkeys menu"),
+    ("`", "open the playlist keys window over the view; again, or Esc, closes it"),
     ("x", "export the selected or open local playlist as M3U"),
     ("other keys", "on a row of the Playlists list: bind that key to the playlist (Backspace clears it)"),
     ("?", "open this help/shortcuts screen"),

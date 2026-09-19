@@ -12,11 +12,13 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   (`track_list.rs`, every list kind: Now Playing, Playlists, Search, History, Queue), the `LogPane`,
   the `SettingsPane` or `Vis`.
 - `Windows` is an open store: `WindowId` is an opaque index that encodes neither kind nor placement,
-  and `Windows::add(kind, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(ListKind)`,
+  and `Windows::add(startup, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(ListKind)`,
   `Log`, `Settings`, `Vis`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
   `ListKind`s). Startup adds one window per entry of `screen::WINDOWS`, which gives each the name
   `:panes`, `:window` and `state.toml` know it by: the five tabs (`now-playing`, `playlists`, `search`,
-  `history-tab`, `queue-tab`) and the five panes (`log`, `settings`, `vis`, `queue`, `history`). The Queue
+  `history-tab`, `queue-tab`), the five panes (`log`, `settings`, `vis`, `queue`, `history`) and
+  `playlist-keys`. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
+  placed by `Config::panes`, or floating) and carries its instance settings. The Queue
   tab and the Queue pane are two instances of one kind, each with its own cursor, scroll window, filter
   and memos; nothing may assume a window is the only instance of its kind, that it is a list, that it
   is fullscreen-wide, or that it starts at column 0. Nothing looks a window up by kind: `Windows::named`
@@ -27,7 +29,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Windows::place` is its one write and bumps `Placements::generation`. `MedleyView::set_placement` is
   the one caller: it keeps `tabs` and `open` in step, keeps a shown window shown and a focused one
   focused, and refuses to move the last tab (a flash). `:panes [<window>] <placement>` goes through it
-  (without a name: every window that is not a tab right now; to `screen` it only closes an open window), and so does the
+  (without a name: every window that is not a tab right now, but for a `Home::Float` one, whose job is
+  to float; to `screen` it only closes an open window), and so does the
   `CyclePlacement` key (`M`), which moves the focused window Tabbed → Docked → Screen → Floating and
   flashes the new placement.
 - The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
@@ -37,6 +40,16 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   order and z-order, each with the focus it opened over. `show(id)` brings any window into view (its
   tab, else opened and focused) and is what `/`, `:hist` and `:open <playlist link>` use; `toggle_window`
   (`:window <name>`, `:log`, …) opens or closes a non-tab window and switches to a tabbed one.
+- `playlist-keys` is a second Playlists window, the key overview meant to be opened mid-work: it
+  starts floating and closed, and differs from the Playlists tab by one instance setting,
+  `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order).
+  The `TogglePlaylistKeys` key (backtick) runs `toggle_playlist_keys`: close it when it has focus,
+  else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
+  came from (open in the active list, else in any other window, else `Session::playing_playlist`),
+  else on the playlist it was left in, else where it was. The hint row reads the focused window's
+  frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open
+  hint, plus the closing key when that window is the open `playlist-keys`. Everything else — placement, `:window`,
+  `M`, Esc closing a focused float, persistence — is what any window has.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
@@ -67,7 +80,12 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
-  playlist, a remote one), its `/`-filter query and two memos. `reset_for_new_list` is the only way
+  playlist, a remote one), its `/`-filter query and three memos. `TrackList::top` is the one
+  function that orders a Playlists window's top-level rows; the cursor, a click, Enter, the row
+  builder and a bound key all index it. `select` names the playlist the next `relayout` puts the
+  cursor on, which is how the cursor stays on a playlist whose row a bind just re-sorted, lands on
+  a playlist `:newplaylist` made while the window was the active list (`Dispatch::PlaylistCreated`),
+  and returns to the playlist Esc backed out of. `reset_for_new_list` is the only way
   `Open` changes and `set_query` the only way the filter does; both reset the selection and bump
   `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
   (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
@@ -93,6 +111,7 @@ build closure against its key.
 | memo | key | reads |
 | --- | --- | --- |
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
+| `TrackList::top` (ordered top-level rows) | playlists, remote-playlists and hotkeys generations | local and remote playlists, which have a key, `keyed_first` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
