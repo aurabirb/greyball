@@ -16,6 +16,14 @@ impl Notice {
         Notice::Popup(msg.into())
     }
 
+    pub(super) fn nothing_playing() -> Notice {
+        Notice::Flash("nothing is playing".to_string())
+    }
+
+    pub(super) fn not_in_list() -> Notice {
+        Notice::Flash("the playing track is not in this list".to_string())
+    }
+
     pub(super) fn of_dispatch(result: core::Result<Dispatch>) -> Option<Notice> {
         let outcome = match result {
             Ok(outcome) => outcome,

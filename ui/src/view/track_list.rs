@@ -252,6 +252,16 @@ impl TrackList {
         }
     }
 
+    /// Moves the cursor to the occurrence of `track` nearest it; false when the list does not hold it.
+    pub(super) fn reveal(&mut self, track: TrackId, s: &Session) -> bool {
+        let cursor = self.state.cursor;
+        let nearest = self.visible_track_ids(s).iter().enumerate().filter(|(_, id)| **id == track).map(|(i, _)| i).min_by_key(|i| i.abs_diff(cursor));
+        if let Some(i) = nearest {
+            self.state.cursor = i;
+        }
+        nearest.is_some()
+    }
+
     pub(super) fn selected_track(&self, s: &Session) -> Option<TrackId> {
         self.visible_track_ids(s).get(self.state.cursor).copied()
     }

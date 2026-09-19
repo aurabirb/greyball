@@ -164,6 +164,36 @@ impl MedleyView {
         }
     }
 
+    pub(crate) fn seek(&mut self, ms: i64) -> EventResult {
+        let result = self.run(Command::Seek(ms));
+        self.reveal_playing(false);
+        result
+    }
+
+    /// Cursor onto the playing track in the active list; only the hotkey (`announce`) says when it can't.
+    pub(crate) fn reveal_playing(&mut self, announce: bool) -> EventResult {
+        let id = self.active_list_id();
+        let session = self.session.clone();
+        let found = {
+            let s = session.lock().unwrap();
+            match s.now_playing_id() {
+                None => Err(Notice::nothing_playing()),
+                Some(track) => match self.windows[id].list_mut().is_some_and(|list| list.reveal(track, &s)) {
+                    true => Ok(()),
+                    false => Err(Notice::not_in_list()),
+                },
+            }
+        };
+        match found {
+            Ok(()) => {
+                self.clamp_scroll();
+                EventResult::consumed()
+            }
+            Err(notice) if announce => self.notify(notice),
+            Err(_) => EventResult::consumed(),
+        }
+    }
+
     pub(crate) fn notify(&mut self, notice: Notice) -> EventResult {
         match notice {
             Notice::Flash(text) => {
@@ -214,6 +244,8 @@ impl MedleyView {
                 }
                 EventResult::consumed()
             }
+            Action::Seek(ms) => self.seek(ms),
+            Action::RevealPlaying => self.reveal_playing(true),
             Action::CommandLine => {
                 self.editing = Editing::CommandLine;
                 self.buffer.clear();

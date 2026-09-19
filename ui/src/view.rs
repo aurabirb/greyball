@@ -8,7 +8,7 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use core::{Command, Layout, LogBuf, PaneLayoutConfig, Session};
+use core::{Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
@@ -355,8 +355,8 @@ impl MedleyView {
                 self.cycle_focus(matches!(event, Event::Shift(_)));
                 EventResult::consumed()
             }
-            Event::Key(Key::Right) => self.run(Command::Seek(5000)),
-            Event::Key(Key::Left) => self.run(Command::Seek(-5000)),
+            Event::Key(Key::Right) => self.seek(5000),
+            Event::Key(Key::Left) => self.seek(-5000),
             &Event::Char(key) => {
                 let (sel, hotkeys) = self.with_session(|s| {
                     let sel = self.active_list().and_then(|list| list.selected_track(s));

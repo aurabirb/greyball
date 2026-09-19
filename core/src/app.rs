@@ -73,6 +73,7 @@ pub enum BuiltinAction {
     Unlike,
     SwitchPlaylists,
     OpenHelp,
+    RevealPlaying,
 }
 
 impl BuiltinAction {
@@ -100,6 +101,7 @@ impl BuiltinAction {
         (BuiltinAction::Unlike, 'L'),
         (BuiltinAction::SwitchPlaylists, '`'),
         (BuiltinAction::OpenHelp, '?'),
+        (BuiltinAction::RevealPlaying, 'c'),
     ];
 
     /// This action's hardcoded default key — panics only if `ALL` is missing
@@ -133,6 +135,7 @@ impl BuiltinAction {
             BuiltinAction::Unlike => "unlike",
             BuiltinAction::SwitchPlaylists => "switch-playlists",
             BuiltinAction::OpenHelp => "open-help",
+            BuiltinAction::RevealPlaying => "reveal-playing",
         }
     }
 

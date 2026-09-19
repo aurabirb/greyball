@@ -134,6 +134,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::Previous, "previous track", "< always works too."),
     builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s", "→ always works too."),
     builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s", "← always works too."),
+    builtin(Section::Player, BuiltinAction::RevealPlaying, "select the playing track in the active window", "Seeking does this too."),
     builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track", ""),
     builtin(Section::Tracks, BuiltinAction::Wedge, "wedge the selected track to the front of the queue", ""),
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),

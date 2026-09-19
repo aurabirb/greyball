@@ -50,6 +50,10 @@ pub enum Action {
     ConfirmUnlike(TrackId),
     /// UI-local: export the selected or open local playlist as M3U.
     ExportPlaylist,
+    /// UI-local: seek by this many ms, then reveal the playing track.
+    Seek(i64),
+    /// UI-local: put the cursor on the playing track in the active list.
+    RevealPlaying,
     /// Nothing bound.
     None,
 }
@@ -102,8 +106,8 @@ pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTa
     match action {
         BuiltinAction::Next => Action::Command(Command::Next),
         BuiltinAction::Previous => Action::Command(Command::Previous),
-        BuiltinAction::SeekForward => Action::Command(Command::Seek(5000)),
-        BuiltinAction::SeekBack => Action::Command(Command::Seek(-5000)),
+        BuiltinAction::SeekForward => Action::Seek(5000),
+        BuiltinAction::SeekBack => Action::Seek(-5000),
         BuiltinAction::AddToPlaylistOrNew => match selected {
             Some(id) => Action::AddToPlaylistPrompt(id),
             None => Action::NewPlaylistPrompt,
@@ -128,6 +132,7 @@ pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTa
         BuiltinAction::Unlike => selected.map(Action::ConfirmUnlike).unwrap_or(Action::None),
         BuiltinAction::SwitchPlaylists => Action::SwitchPlaylists,
         BuiltinAction::OpenHelp => Action::OpenHelp,
+        BuiltinAction::RevealPlaying => Action::RevealPlaying,
     }
 }
 

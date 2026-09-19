@@ -282,19 +282,6 @@
   (`self.cursor[screen] = idx; self.clamp_scroll()`), waiting for a remote playlist to paginate far
   enough if needed; if the context is gone, fall back to wherever the track can be found (library/
   Liked Songs), else do nothing. Select only — don't start playback.
-- [ ] Add a hotkey (a `BuiltinAction` with a default key and a Help row in `ui/src/items.rs`,
-  rebindable like the other built-ins; no `:` command) that selects the actively playing track in the
-  active window and scrolls it into view — the cursor moves onto it, the way `click_row` does
-  (`self.cursor[screen] = idx; self.clamp_scroll()`); no-op with a flash when nothing plays or the
-  playing track isn't in the window's list. The seek keys (`,` `.` and Left/Right) should do the same
-  after seeking, by running that one action rather than a second implementation.
-  Suspected fix for the seek keys: all four end in `self.run(Command::Seek(±5000))` (`MedleyView::on_event`, `ui/src/view.rs`, for
-  Left/Right; `,`/`.` via `keybindings.rs`'s `BuiltinAction::SeekForward/SeekBack`) — in `run`, after a
-  successful `Command::Seek`, find the playing track's index in the current screen's list (the
-  position-aware lookup from the duplicate-marker bug above; `visible_track_ids` for identity
-  otherwise) and move the cursor there the way `click_row` does (`self.cursor[screen] = idx;
-  self.clamp_scroll();`, which scrolls it into view) — no-op when the playing track isn't in the list
-  on screen. Don't do it for mouse scrubber seeks.
 - [ ] Add a hard-redraw key (a `BuiltinAction` with a default key and a Help row in `ui/src/items.rs`,
   rebindable like the other built-ins; no `:` command, e.g. Ctrl-L if the key table can carry a
   control key, else a plain letter) that clears the whole screen (`Cursive::clear`, so nothing stale
