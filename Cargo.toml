@@ -7,6 +7,7 @@ members = [
     "sources/soundcloud",
     "sources/soulseek",
     "sources/bpm",
+    "sources/waveform",
     "player",
     "ui",
     "app",

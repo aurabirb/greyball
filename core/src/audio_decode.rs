@@ -17,7 +17,7 @@ use symphonia::core::probe::Hint;
 
 use crate::media_cache::MediaCache;
 use crate::traits::ReadSeek;
-use crate::types::SourceId;
+use crate::types::{Rendition, SourceId, Track};
 
 /// Wraps a `Box<dyn ReadSeek + Send>` (not `Sync`) so symphonia's
 /// `MediaSource` (which requires `Sync`) accepts it. Sound because the
@@ -48,14 +48,9 @@ impl<R: Read + Seek + Send> MediaSource for SourceAdapter<R> {
     }
 }
 
-/// Decode `audio` to interleaved stereo f32 frames, auto-detecting the
-/// container/codec. `max_frames` (`None` for the whole file) stops decoding
-/// once that many frames are in. `None` on a decode failure or a stream too
-/// short to be useful.
-pub fn decode_stereo_prefix(
-    audio: Box<dyn ReadSeek + Send>,
-    max_frames: Option<usize>,
-) -> Option<(Vec<[f32; 2]>, u32)> {
+/// Streams `audio` as stereo f32 frames in decoder-sized blocks, auto-detecting the container/codec;
+/// `on_block` returns `false` to stop early. The sample rate, or `None` when nothing could be decoded.
+pub fn decode_blocks(audio: Box<dyn ReadSeek + Send>, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Option<u32> {
     let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio)), Default::default());
     let probed = symphonia::default::get_probe()
         .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
@@ -67,18 +62,32 @@ pub fn decode_stereo_prefix(
     let mut decoder =
         symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
 
-    let mut frames: Vec<[f32; 2]> = Vec::new();
-
+    let mut block: Vec<[f32; 2]> = Vec::new();
     while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
             continue;
         }
         let Ok(decoded) = decoder.decode(&packet) else { continue };
-        push_frames(decoded, &mut frames);
-        if max_frames.is_some_and(|m| frames.len() >= m) {
+        block.clear();
+        push_frames(decoded, &mut block);
+        if !on_block(&block) {
             break;
         }
     }
+    Some(sample_rate)
+}
+
+/// Decode `audio` to stereo f32 frames. `max_frames` (`None` for the whole file) stops decoding once
+/// that many frames are in. `None` on a decode failure or a stream too short to be useful.
+pub fn decode_stereo_prefix(
+    audio: Box<dyn ReadSeek + Send>,
+    max_frames: Option<usize>,
+) -> Option<(Vec<[f32; 2]>, u32)> {
+    let mut frames: Vec<[f32; 2]> = Vec::new();
+    let sample_rate = decode_blocks(audio, |block| {
+        frames.extend_from_slice(block);
+        max_frames.is_none_or(|m| frames.len() < m)
+    })?;
     if let Some(m) = max_frames {
         frames.truncate(m);
     }
@@ -86,6 +95,28 @@ pub fn decode_stereo_prefix(
     // Require at least a second — anything shorter isn't useful for
     // analysis.
     (frames.len() >= sample_rate as usize).then_some((frames, sample_rate))
+}
+
+/// The track's audio for analysis: its cached file, else fetched via `audio` and stored in `media_cache`.
+pub fn open_analysis_audio(
+    track: &Track,
+    audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
+    media_cache: &MediaCache,
+) -> Option<Box<dyn ReadSeek + Send>> {
+    let cached = track
+        .renditions
+        .iter()
+        .find_map(|r| media_cache.cached_path(&r.source, &r.uri))
+        .and_then(|p| std::fs::File::open(p).ok());
+    if let Some(file) = cached {
+        return Some(Box::new(file));
+    }
+    let (r, audio) = audio()?;
+    let raw = read_all(audio).inspect_err(|e| log::warn!("\"{}\" — couldn't read audio to analyze: {e}", track.title)).ok()?;
+    if let Err(e) = media_cache.put(&r.source, &r.uri, &raw) {
+        log::debug!("\"{}\" — couldn't populate media cache: {e}", track.title);
+    }
+    Some(Box::new(io::Cursor::new(raw)))
 }
 
 /// Convert one decoded packet's samples (any symphonia sample format, any

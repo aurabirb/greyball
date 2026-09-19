@@ -512,6 +512,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
         // only seeds the initial mode.
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
+        scan.register_plugin(Arc::new(waveform::WaveformPlugin::new(bpm_min_interval_secs)));
     }
     for problem in &config_problems {
         session.warn("config", problem);

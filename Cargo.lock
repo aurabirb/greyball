@@ -107,6 +107,7 @@ dependencies = [
  "toml",
  "ui",
  "url",
+ "waveform",
  "zbus",
 ]
 
@@ -4262,6 +4263,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "waveform"
+version = "0.1.69"
+dependencies = [
+ "core",
+ "log",
 ]
 
 [[package]]

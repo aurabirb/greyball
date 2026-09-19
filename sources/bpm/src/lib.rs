@@ -94,41 +94,11 @@ impl ScanPlugin for BpmPlugin {
         media_cache: &MediaCache,
     ) -> Outcome {
         let max_frames = (ANALYSIS_SECONDS * SAMPLE_RATE) as usize;
-        let cached = track
-            .renditions
-            .iter()
-            .find_map(|r| media_cache.cached_path(&r.source, &r.uri))
-            .and_then(|p| std::fs::File::open(p).ok())
-            .and_then(|f| core::audio_decode::decode_stereo_prefix(Box::new(f), Some(max_frames)));
-        let stereo = match cached {
-            Some((stereo, _)) => stereo,
-            None => {
-                let Some((r, audio)) = audio() else {
-                    log::debug!("bpm: \"{}\" — no audio to analyze, skipping", track.title);
-                    return Outcome::Skip;
-                };
-                let Ok(raw) = core::audio_decode::read_all(audio) else {
-                    log::warn!("bpm: \"{}\" — couldn't read audio to analyze, skipping", track.title);
-                    return Outcome::Skip;
-                };
-                // Decode from a copy: `raw` itself (already-fetched,
-                // already-unencrypted bytes) is what populates `media_cache`
-                // below, as-is — no re-encode needed or wanted.
-                let Some((stereo, _)) = core::audio_decode::decode_stereo_prefix(
-                    Box::new(std::io::Cursor::new(raw.clone())),
-                    Some(max_frames),
-                ) else {
-                    log::warn!(
-                        "bpm: \"{}\" — decode failed or too short to analyze, skipping",
-                        track.title
-                    );
-                    return Outcome::Skip;
-                };
-                if let Err(e) = media_cache.put(&r.source, &r.uri, &raw) {
-                    log::debug!("bpm: \"{}\" — couldn't populate media cache: {e}", track.title);
-                }
-                stereo
-            }
+        let Some((stereo, _)) = core::audio_decode::open_analysis_audio(track, audio, media_cache)
+            .and_then(|a| core::audio_decode::decode_stereo_prefix(a, Some(max_frames)))
+        else {
+            log::debug!("bpm: \"{}\" — no decodable audio to analyze, skipping", track.title);
+            return Outcome::Skip;
         };
         match estimate_tempo(&onset_envelope(&downmix(&stereo))) {
             Some(bpm) => {

@@ -23,6 +23,7 @@ pub mod search;
 pub mod store;
 pub mod traits;
 pub mod types;
+pub mod waveform;
 mod view_cache;
 
 pub use app::{
