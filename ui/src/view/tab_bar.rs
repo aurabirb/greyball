@@ -3,14 +3,35 @@ use cursive::theme::{BaseColor, Color, ColorStyle, Effect};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use core::Command;
+use core::{Command, TrackId};
 
+use std::sync::Arc;
+
+use super::memo::Memo;
 use super::status_line::StatusLine;
 use super::text::{in_span, scroll_title};
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
 /// Background for the active tab only — every other tab uses the terminal's default colors, unstyled.
 const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
+
+/// The resampled waveform of the last (track, width, envelope length).
+pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
+
+/// Bars from one to eight eighths tall.
+const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+/// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
+fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
+    (0..width)
+        .map(|x| {
+            let lo = x * envelope.len() / width;
+            let hi = ((x + 1) * envelope.len() / width).max(lo + 1).min(envelope.len());
+            let peak = envelope[lo..hi].iter().copied().max().unwrap_or(0);
+            (peak as usize * 8).div_ceil(255).min(8) as u8
+        })
+        .collect()
+}
 
 /// A tab's rendered button text; `n` is its number key.
 fn tab_label(n: usize, name: &str, collapsed: bool) -> String {
@@ -31,7 +52,7 @@ pub(super) enum TabBarHit {
     Title(Command),
 }
 
-/// Row 0 of the screen: a tab per tabbed window, the transport buttons, then the now-playing marquee, which doubles as a scrubber.
+/// The top two rows: on row 0 a tab per tabbed window, the transport buttons and the now-playing marquee (a scrubber too), with the track's waveform between them.
 pub(super) struct TabBar<'a> {
     /// The tabbed windows' names, in tab order.
     pub(super) tabs: &'a [String],
@@ -100,8 +121,8 @@ impl TabBar<'_> {
         (detail_start + detail_w - text.width(), text)
     }
 
-    /// Draws the bar across row 0 of `printer`, the marquee right-aligned in whatever room is left.
-    pub(super) fn draw(&self, printer: &Printer) {
+    /// Draws the bar across `printer`, the marquee right-aligned in whatever room is left.
+    pub(super) fn draw(&self, printer: &Printer, levels_memo: &WaveformMemo) {
         let layout = self.layout(printer.size.x);
         for &(i, start, w) in &layout.tabs {
             let text: String = tab_label(i + 1, &self.tabs[i], layout.collapsed).chars().take(w).collect();
@@ -116,6 +137,15 @@ impl TabBar<'_> {
             printer.print((start, 0), label);
         }
         let (start, text) = self.title(&layout);
+        let wave_start = layout.detail.0;
+        let wave_end = if text.is_empty() { layout.detail.0 + layout.detail.1 } else { start.saturating_sub(TRANSPORT_GAP) };
+        let wave_w = wave_end.saturating_sub(wave_start);
+        if wave_w > 0 && !self.status.waveform.is_empty() {
+            let envelope = &self.status.waveform;
+            let levels = levels_memo
+                .get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || resample(envelope, wave_w));
+            self.draw_waveform(printer, wave_start, &levels);
+        }
         if !text.is_empty() {
             let played = match self.status.duration_ms {
                 0 => 0,
@@ -133,6 +163,30 @@ impl TabBar<'_> {
             printer.with_color(ColorStyle::title_primary(), |p| {
                 p.with_effect(Effect::Underline, |p| p.print((start, 0), done));
                 p.print((start + done.width(), 0), rest);
+            });
+        }
+    }
+
+    fn draw_waveform(&self, printer: &Printer, start: usize, levels: &[u8]) {
+        let played = match self.status.duration_ms {
+            0 => 0,
+            d => levels.len() * self.status.position_ms.min(d) as usize / d as usize,
+        };
+        for (x, &level) in levels.iter().enumerate() {
+            let style = if x < played { ColorStyle::title_primary() } else { ColorStyle::title_secondary() };
+            printer.with_color(style, |p| {
+                let at = start + x;
+                match level {
+                    0 => {}
+                    8 => {
+                        p.print((at, 0), "█");
+                        p.with_effect(Effect::Reverse, |p| p.print((at, 1), " "));
+                    }
+                    a => {
+                        p.print((at, 0), GLYPHS[a as usize - 1]);
+                        p.with_effect(Effect::Reverse, |p| p.print((at, 1), GLYPHS[7 - a as usize]));
+                    }
+                }
             });
         }
     }

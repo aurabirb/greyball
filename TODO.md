@@ -140,45 +140,14 @@
   the `format!` of the row) and `on_event`'s scrubber hit-test/seek math (`frac = (x - start) /
   width`) read the same numbers — both call sites currently pass `bar: STATUS_BAR_WIDTH` and
   `totaltime.width()` in; guard the seek math against a 0-width bar.
-- [ ] Draw a two-row mirrored ("thick") waveform overview of the entire playing track — the whole
-  song's amplitude envelope left to right, like SoundCloud's, not a live oscilloscope — in the top
-  bar (`TabBar::draw` in `ui/src/view/tab_bar.rs`), in the empty stretch between the tabs/transport cluster
-  on the left and the right-aligned now-playing title, built from `▁▂▃▄▅▆▇█`. Thickness comes from
-  inverting the palette on the second row: the upper row prints level `a` (1–8) normally, so the bar
-  rises from that row's bottom edge; the lower row prints the complementary glyph `8 - a` with
-  `Effect::Reverse`, whose inverted cell shows `a` eighths hanging down from that row's top edge —
-  the two halves meet at the row boundary into one symmetric shape. E.g. upper
-  `▅▄▃▃▃▂▂▂▆▅▄▃▃▂▂▂▇▆▄▃` over lower (reversed) `▃▄▅▅▅▆▆▆▂▃▄▅▅▆▆▆▁▂▄▅`. Edge levels: `a = 8` is `█`
-  over a reversed space; `a = 0` is a plain space in both rows (don't print a reversed `█`). Reverse
-  must swap the same fg/bg pair the upper row draws with, so both halves come out the same color —
-  check it in a real-terminal screenshot (AGENTS.md), since `capture-pane` text can't show it. Rows:
-  the top bar is one row today (`TAB_BAR_ROWS = 1`), so this needs a second one — grow the top bar
-  to 2 rows (`TAB_BAR_ROWS` feeds the pane-band math in `split`/`shift` and the mouse row offsets;
-  grep every use) with tabs, transport and title staying on row 0 and only the widget using row 1.
-  Data: a per-track envelope computed once, not the live `AudioTap` — decode the whole file to PCM
-  and reduce it to a fixed number of peak (or RMS) buckets (a few hundred `u8`s, normalized to the
-  track's own max so quiet masters still fill the height), persisted with the track's other scan
-  metadata so it's computed once per track. The scan-plugin seam already does this shape of work:
-  `BpmPlugin` (`sources/bpm/src/lib.rs`) decodes via `core::audio_decode::decode_stereo_prefix`
-  (first minute only — the waveform needs the whole track, so pass no frame cap / stream the decode
-  in blocks rather than holding all PCM in memory) and stores its result as generic scan metadata;
-  add the waveform as a sibling plugin on that seam. For a track that's still downloading, build it
-  progressively instead of waiting for the file: the playing track's bytes already land in a growing
+- [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
+  progressively for a track still downloading — the playing track's bytes already land in a growing
   file (`StreamingReader`/`open_streaming_url`, `player/src/rodio_player.rs`), so decode what has
-  arrived, publish the buckets filled so far, and let the widget draw left to right as the download
-  advances (undownloaded columns stay blank); each bucket's share of the track comes from the known
-  duration. Persist only once complete. The now-playing track takes priority over background scans. SoundCloud tracks carry a ready-made `waveform_url` in the
-  API response — use it there instead of decoding if it's cheap to wire. No envelope yet (not
-  scanned, uncached stream, scan paused) → draw nothing. Render: resample the stored buckets to the
-  widget's column count (max per column), map to 0–8. Draw the played part (columns left of
-  `position / duration`) in the title/highlight color and the rest dimmed, so it reads as progress.
-  Layout: the widget spans `transport_end + gap .. title_start - gap`, computed after the title
-  (the title keeps priority and its current width; the widget just fills what's left and vanishes
-  when fewer than a few columns remain, and on the collapsed-tabs layout if there's no room) — it
-  must not shift the tabs, transport buttons, or title, nor their click targets. Redraw: it only
-  changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
-  along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
-  levels per (track, width) rather than recomputing each frame.
+  arrived with `core::audio_decode::decode_blocks`, publish the buckets filled so far and let the
+  widget draw left to right as the download advances (undownloaded columns blank, each bucket's
+  share of the track from the known duration); persist only once complete. SoundCloud tracks carry a
+  ready-made `waveform_url` in the API response — use it there instead of decoding if it's cheap to
+  wire.
 - [ ] With Help as the active tab nothing but a tab digit, `?` or the mouse leaves it: it consumes Tab
   for its sections and only a float or `screen` window closes on Esc. Decide whether a tabbed or docked
   Help should give Tab back to the shell's focus cycle.

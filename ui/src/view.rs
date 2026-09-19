@@ -22,7 +22,7 @@ use memo::Memo;
 use modal::Modal;
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
 use status_line::StatusLine;
-use tab_bar::{TabBar, TabBarHit};
+use tab_bar::{TabBar, TabBarHit, WaveformMemo};
 use text::Marquee;
 use track_list::TrackList;
 use warnings::warnings_label;
@@ -99,6 +99,7 @@ pub struct MedleyView {
     /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
     follow_sig: Memo<(WindowId, u64, (u64, usize))>,
     chrome: Memo<(u64, u64), Arc<Chrome>>,
+    waveform: WaveformMemo,
 }
 
 impl MedleyView {
@@ -134,6 +135,7 @@ impl MedleyView {
             marquee: Marquee::new(),
             follow_sig: Memo::default(),
             chrome: Memo::default(),
+            waveform: Memo::default(),
         };
         if let Some(layout) = layout {
             view.restore(&layout);
@@ -433,7 +435,7 @@ impl View for MedleyView {
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
         if !covered {
             TabBar { tabs: &self.tab_names(), active: self.active_tab(), status: &frame.status, marquee_offset }
-                .draw(printer);
+                .draw(printer, &self.waveform);
             let y = printer.size.y.saturating_sub(1);
             let width = Widget::status_width(widget.as_ref(), printer.size.x);
             frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);

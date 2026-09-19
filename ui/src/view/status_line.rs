@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use cursive::Printer;
 use cursive::theme::ColorStyle;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, PlayerState, Session, TrackId};
+use core::{Command, PlayerState, Session, TrackId, waveform};
 
 use crate::screen::Corners;
 
@@ -17,19 +19,22 @@ const BAR_WIDTH: usize = 24;
 pub(super) struct StatusCore {
     now_playing: String,
     now_playing_id: Option<TrackId>,
+    /// Empty until the track has been scanned.
+    waveform: Arc<[u8]>,
     state: PlayerState,
     shuffle: bool,
 }
 
 impl StatusCore {
     pub(super) fn snapshot(s: &Session) -> Self {
-        let id = s.now_playing_id();
+        let track = s.now_playing();
         Self {
-            now_playing: s
-                .now_playing()
+            now_playing: track
+                .as_ref()
                 .map(|t| format!("{} - {}", t.display_artist(), t.title))
                 .unwrap_or_else(|| "nothing playing".to_string()),
-            now_playing_id: id,
+            now_playing_id: s.now_playing_id(),
+            waveform: track.and_then(|t| t.attrs.get(waveform::ATTR).map(|hex| waveform::decode(hex))).unwrap_or_default().into(),
             state: s.player_status().state,
             shuffle: s.shuffle(),
         }
@@ -44,6 +49,8 @@ impl StatusCore {
 pub(super) struct StatusLine {
     /// "artist - title" of the playing track.
     pub(super) now_playing: String,
+    pub(super) now_playing_id: Option<TrackId>,
+    pub(super) waveform: Arc<[u8]>,
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
     pub(super) duration_ms: u32,
@@ -76,6 +83,8 @@ impl StatusLine {
     pub(super) fn assemble(core: &StatusCore, position_ms: u32, duration_ms: u32, bpm_tag: String) -> Self {
         Self {
             now_playing: core.now_playing.clone(),
+            now_playing_id: core.now_playing_id,
+            waveform: core.waveform.clone(),
             state: core.state,
             position_ms,
             duration_ms,
