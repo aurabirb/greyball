@@ -236,6 +236,16 @@
   bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
+- [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
+  as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
+  reach it through `show(id)` + the shell's search text field (`Editing::Search`,
+  `ui/src/view/input.rs`), which was written for "Search is the active tab": where the query input
+  is drawn and which window gets focus after Enter; results arriving while the docked window isn't
+  focused; the `searching` flag in `Ctx`/the list frame key and the loading mark; Enter/`q`/playlist
+  hotkeys acting on `active_list()` rather than the docked Search list; the leading-digit handling
+  in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
+  `/` from another list jumps to the docked one. Make the window the unit: everything Search does
+  as a tab it does in any placement, through the same `TrackList` paths.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
