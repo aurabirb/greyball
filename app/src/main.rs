@@ -82,6 +82,12 @@ fn load_vis_fps() -> Option<u32> {
     u32::try_from(v.get("vis_fps")?.as_integer()?).ok()
 }
 
+fn load_status_line() -> Option<bool> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("status_line")?.as_bool()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -205,6 +211,7 @@ fn load_layout() -> Option<Layout> {
 fn save_state(
     volume: f32,
     vis_fps: Option<u32>,
+    status_line: Option<bool>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
@@ -214,6 +221,9 @@ fn save_state(
     let mut text = format!("volume = {volume:?}\n");
     if let Some(fps) = vis_fps {
         text.push_str(&format!("vis_fps = {fps}\n"));
+    }
+    if let Some(shown) = status_line {
+        text.push_str(&format!("status_line = {shown}\n"));
     }
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
@@ -369,6 +379,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let config_vis_fps = cfg.vis.limit();
     if let Some(fps) = load_vis_fps() {
         cfg.vis.fps = fps;
+    }
+    let config_status_line = cfg.status_line;
+    if let Some(shown) = load_status_line() {
+        cfg.status_line = shown;
     }
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
@@ -647,7 +661,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     let vis_fps = Some(s.cfg.vis.limit()).filter(|&fps| fps != config_vis_fps);
-    save_state(s.player_status().volume, vis_fps, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
+    save_state(s.player_status().volume, vis_fps, status_line, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

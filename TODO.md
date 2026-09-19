@@ -169,21 +169,6 @@
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
-- [ ] Let the bottom status row (the last screen row: `{prev} {playpause} {next}  {title}
-  {curtime} {scrubber} {totaltime}  {bpm} {shuffle}` — the `StatusLine` widget in
-  `ui/src/view/status_line.rs`, drawn at the end of `draw` and hit-tested in `on_event`) be
-  switched on or off from the Settings UI (a checkbox there, persisted like the other settings —
-  not config-file-only). Its role is the compatibility-mode player interface — the plain fallback
-  that works on any terminal/font, while the richer player UI lives in the top bar (title
-  scrubber, waveform) — so its scrubber switches from the Unicode `━╍` bar to ASCII:
-  `progress_bar` draws e.g. `=` for the played part and `-` for the rest (keep `-` for unknown
-  duration; settle the exact characters in a real-terminal screenshot), removing the ambiguous-width
-  glyphs the stale-rightmost-column bug above suspects. The playback control glyphs (`PREV_ICON`/
-  `player_action_glyph`/`NEXT_ICON`) stay as they are for now. When off, the row isn't reserved at all: `BOTTOM_BAR_ROWS` stops being a
-  constant 1 and becomes 0, feeding `split`, `required_size`/
-  `MedleyView::placed`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
-  assume the status row exists (check the warnings button, which draws through `MedleyView::slots`, and
-  the command line). Toggling applies immediately, without a restart.
 - [ ] Building on the status-row widget above: let it be placed either up top next to the
   tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
   leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the

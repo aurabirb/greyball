@@ -5,7 +5,6 @@ use core::Side;
 use crate::screen::{Corner, Placement};
 
 use super::modal::Modal;
-use super::panes::BOTTOM_BAR_ROWS;
 use super::status_line::StatusLine;
 use super::warnings::warnings_rect;
 use super::window::{Window, WindowId};
@@ -58,7 +57,7 @@ impl MedleyView {
         Slots { left: self.slot(placed, Corner::Left), right: self.slot(placed, Corner::Right) }
     }
 
-    /// A window docked along the bottom edge offers no bottom corner: another surface is nearer.
+    /// A window docked along the bottom edge offers no bottom corner while the scrubber line is shown: that is nearer.
     fn docked_at_bottom(&self, id: WindowId) -> bool {
         self.windows.placement(id) == Placement::Docked && self.pane_cfg.side == Side::Bottom
     }
@@ -70,8 +69,8 @@ impl MedleyView {
         }
         let size = self.last_screen_size;
         let x = if corner == Corner::Left { 0 } else { size.x.checked_sub(1)? };
-        let point = Vec2::new(x, size.y.checked_sub(BOTTOM_BAR_ROWS + 1)?);
-        if self.fullscreen().is_none() && StatusLine::CORNERS.offers(corner) {
+        let point = Vec2::new(x, size.y.checked_sub(self.bar_rows() + 1)?);
+        if self.status_line && self.fullscreen().is_none() && StatusLine::CORNERS.offers(corner) {
             let host = placed.iter().rev().find(|placed| placed.frame.contains(point))?.id;
             return Some(Slot { row: Rect::from_size((0, size.y - 1), (size.x, 1)), scrubber: true, host });
         }
@@ -81,7 +80,7 @@ impl MedleyView {
         };
         placed
             .iter()
-            .filter(|placed| !self.docked_at_bottom(placed.id))
+            .filter(|placed| !(self.status_line && self.docked_at_bottom(placed.id)))
             .filter_map(|placed| {
                 let row = self.windows[placed.id].status_rect().filter(|_| Window::CORNERS.offers(corner))?;
                 Some(Slot { row, scrubber: false, host: placed.id })
@@ -100,7 +99,7 @@ impl MedleyView {
         Self::warnings_widget(&self.slots(&self.placed()), self.warn_count())
     }
 
-    /// Where the input line draws: the left slot's row up to the button when that is wide enough, else the whole bottom line.
+    /// Where the input line draws: the left slot's row up to the button when that is wide enough, else the whole last screen row.
     pub(super) fn input_rect(&self, slots: &Slots, widget: Option<&Widget>) -> Rect {
         let clipped = |row: Rect| {
             let beside = widget.filter(|widget| widget.rect.top() == row.top() && widget.rect.left() >= row.left());

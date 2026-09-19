@@ -169,7 +169,7 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     }
     let filled = ((pos as f64 / dur as f64) * width as f64).round() as usize;
     let filled = filled.min(width);
-    format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
+    format!("{}{}", "=".repeat(filled), "-".repeat(width - filled))
 }
 
 /// Bracketed BPM-scan status tag next to the scrubber — read fresh every frame, never cached.

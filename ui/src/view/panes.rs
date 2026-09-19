@@ -14,7 +14,6 @@ use super::window::WindowId;
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
 
-pub(super) const BOTTOM_BAR_ROWS: usize = 1;
 
 /// `Action::CyclePaneLayout`'s rotation, one `(side, stack)` step per press.
 pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
@@ -25,8 +24,8 @@ pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
 ];
 
 /// The main content rect and one rect per docked window, first = nearest the main content.
-pub(super) fn split(total: Vec2, open_panes: &[WindowId], cfg: PaneLayoutConfig) -> (Rect, Vec<(WindowId, Rect)>) {
-    let band = Vec2::new(total.x, total.y.saturating_sub(TAB_BAR_ROWS + BOTTOM_BAR_ROWS));
+pub(super) fn split(total: Vec2, bottom_rows: usize, open_panes: &[WindowId], cfg: PaneLayoutConfig) -> (Rect, Vec<(WindowId, Rect)>) {
+    let band = Vec2::new(total.x, total.y.saturating_sub(TAB_BAR_ROWS + bottom_rows));
     if open_panes.is_empty() {
         return (Rect::from_size((0, TAB_BAR_ROWS), band), Vec::new());
     }
@@ -117,8 +116,8 @@ pub(super) fn split(total: Vec2, open_panes: &[WindowId], cfg: PaneLayoutConfig)
 const CASCADE: Vec2 = Vec2 { x: 4, y: 2 };
 
 /// A floating window's border box: three fifths of the area between the fixed rows, cascaded from the centre by `slot`.
-pub(super) fn float_rect(total: Vec2, slot: usize) -> Rect {
-    let band_h = total.y.saturating_sub(TAB_BAR_ROWS + BOTTOM_BAR_ROWS);
+pub(super) fn float_rect(total: Vec2, bottom_rows: usize, slot: usize) -> Rect {
+    let band_h = total.y.saturating_sub(TAB_BAR_ROWS + bottom_rows);
     let size = Vec2::new((total.x * 3 / 5).max(40).min(total.x), (band_h * 3 / 5).max(11).min(band_h));
     let room = Vec2::new(total.x, band_h) - size;
     let origin = (room / 2 + CASCADE * slot).or_min(room);

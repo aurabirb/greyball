@@ -23,6 +23,8 @@ pub(super) enum SettingsEntry {
     Scan { enabled: bool, available: bool },
     /// Vis frame-rate limit — live; Enter steps through `VIS_FPS_STEPS`.
     VisFps(u32),
+    /// The bottom scrubber row shown or hidden — live.
+    StatusLine(bool),
 }
 
 const VIS_FPS_STEPS: [u32; 6] = [10, 15, 20, 30, 45, 60];
@@ -34,6 +36,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::Scan { enabled, available: true } => {
             format!("[{}] bpm scan", if *enabled { "x" } else { " " })
         }
+        SettingsEntry::StatusLine(shown) => format!("[{}] status line", if *shown { "x" } else { " " }),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
     }
@@ -56,6 +59,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
         available: s.scan.is_some(),
     });
     v.push(SettingsEntry::VisFps(cfg.vis.limit()));
+    v.push(SettingsEntry::StatusLine(cfg.status_line));
     v.push(SettingsEntry::Info(String::new()));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
     v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
@@ -124,6 +128,10 @@ impl MedleyView {
                 let next = VIS_FPS_STEPS.into_iter().find(|&step| step > fps).unwrap_or(VIS_FPS_STEPS[0]);
                 self.with_session_mut(|s| s.set_vis_fps(next));
                 self.vis.set_fps(next);
+            }
+            SettingsEntry::StatusLine(shown) => {
+                self.with_session_mut(|s| s.set_status_line(!shown));
+                self.status_line = !shown;
             }
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
         }

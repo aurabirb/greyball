@@ -1679,6 +1679,11 @@ impl Session {
         vis.fps = vis.limit();
     }
 
+    pub fn set_status_line(&mut self, shown: bool) {
+        self.touch();
+        Arc::make_mut(&mut self.cfg).status_line = shown;
+    }
+
     /// Live scan on/off — reaches `ScanMode::Disabled`, which `B` deliberately never does.
     pub fn set_scan_enabled(&mut self, enabled: bool) {
         self.touch();

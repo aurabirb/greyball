@@ -81,6 +81,8 @@ pub struct MedleyView {
     active: WindowId,
     /// Whole-terminal size as of the last layout pass.
     last_screen_size: Vec2,
+    /// Mirrors `cfg.status_line`: whether the scrubber row is reserved.
+    status_line: bool,
     editing: Editing,
     buffer: String,
     /// The focused window's status row's one transient message, cleared by the next input event or once `FLASH_LIFETIME` has passed.
@@ -106,13 +108,13 @@ pub struct MedleyView {
 impl MedleyView {
     /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on its first tab.
     pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
-        let pane_cfg = {
+        let (pane_cfg, session_status_line) = {
             let mut s = session.lock().unwrap();
             // `command::parse` reads the item table first, so a plugin word spelled like an item never runs.
             for (word, _) in s.plugin_command_help().into_iter().filter(|(word, _)| crate::items::named(word).is_some()) {
                 s.warn("commands", &format!("plugin command :{word} is shadowed by the built-in command of that spelling"));
             }
-            s.cfg.panes
+            (s.cfg.panes, s.cfg.status_line)
         };
         let vis = crate::vis::Vis::spawn(session.clone());
         let windows = Windows::new(log, vis.clone(), pane_cfg.mode.into());
@@ -125,6 +127,7 @@ impl MedleyView {
             active,
             focus: Focus::Window(active),
             last_screen_size: Vec2::new(0, 0),
+            status_line: session_status_line,
             editing: Editing::None,
             buffer: String::new(),
             feedback: None,
@@ -243,16 +246,20 @@ impl MedleyView {
         let plain = |(id, rect)| Placed { id, rect, frame: rect };
         let (main_rect, docked) = match self.fullscreen() {
             Some(_) => (Rect::from_size((0, 0), size), Vec::new()),
-            None => split(size, &self.open_in(Placement::Docked).collect::<Vec<_>>(), self.pane_cfg),
+            None => split(size, self.bar_rows(), &self.open_in(Placement::Docked).collect::<Vec<_>>(), self.pane_cfg),
         };
         // A float's cascade slot is its rank by id among the open ones, so raising one moves none.
         let mut slots: Vec<WindowId> = self.open_in(Placement::Floating).collect();
         slots.sort();
         let floating = self.open_in(Placement::Floating).map(|id| {
-            let frame = float_rect(size, slots.iter().position(|&slot| slot == id).unwrap_or(0));
+            let frame = float_rect(size, self.bar_rows(), slots.iter().position(|&slot| slot == id).unwrap_or(0));
             Placed { id, rect: float_body(frame), frame }
         });
         std::iter::once((self.main_id(), main_rect)).chain(docked).map(plain).chain(floating).collect()
+    }
+
+    fn bar_rows(&self) -> usize {
+        usize::from(self.status_line)
     }
 
     fn visible(&self) -> Vec<WindowId> {
@@ -439,9 +446,11 @@ impl View for MedleyView {
         if !covered {
             TabBar { tabs: &self.tab_names(), active: self.active_tab(), status: &frame.status, marquee_offset }
                 .draw(printer, &self.waveform);
-            let y = printer.size.y.saturating_sub(1);
-            let width = Widget::status_width(widget.as_ref(), printer.size.x);
-            frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);
+            if self.status_line {
+                let y = printer.size.y.saturating_sub(1);
+                let width = Widget::status_width(widget.as_ref(), printer.size.x);
+                frame.status.draw(&printer.windowed(Rect::from_size((0, y), (width, 1))), marquee_offset);
+            }
         }
         if let Some(input) = self.input_line() {
             let rect = self.input_rect(&slots, widget.as_ref());
@@ -543,7 +552,7 @@ impl MedleyView {
                     _ => EventResult::consumed(),
                 };
             }
-            if local.y == size.y.saturating_sub(1) {
+            if self.status_line && local.y == size.y.saturating_sub(1) {
                 let status = self.with_session(StatusLine::snapshot);
                 let widget = self.current_widget();
                 let width = Widget::status_width(widget.as_ref(), size.x);
