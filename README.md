@@ -2,7 +2,7 @@
 source plugins (a local/HTTP directory, Spotify and SoundCloud), with a link 
 tool for treating the same track from different sources as one entry.
 
-<img width="1009" height="712" alt="image" src="https://github.com/user-attachments/assets/7e371dde-fe31-46a5-a30b-a3f95bfebeb2" />
+<img width="1812" height="958" alt="image" src="https://github.com/user-attachments/assets/48fc37b5-b127-4e15-af64-991afa619d9d" />
 
 
 ## Screens & keys
