@@ -322,23 +322,27 @@ impl MedleyView {
         Some(EventResult::consumed())
     }
 
-    /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
-    pub(super) fn hint_line(&self, chrome: &Chrome) -> String {
+    /// The text being typed, prompt included.
+    pub(super) fn input_line(&self) -> Option<String> {
         match &self.editing {
-            Editing::Search => format!("/{}", self.buffer),
-            Editing::CommandLine => format!(":{}", self.buffer),
-            Editing::PluginSetup(_) => format!("> {}", self.buffer),
-            Editing::Filter => format!("/{}", self.buffer),
-            Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
-                if let Some(hint) = self.screen_hint() {
-                    return format!("  {hint}");
-                }
-                let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
-                let keys_key = key(chrome.keys_key);
-                let close = if self.fullscreen().is_some() { "   [Esc] close" } else { "" };
-                format!("  [{}] help   [{keys_key}] playlist keys{close}", key(chrome.help_key))
-            }),
+            Editing::Search | Editing::Filter => Some(format!("/{}", self.buffer)),
+            Editing::CommandLine => Some(format!(":{}", self.buffer)),
+            Editing::PluginSetup(_) => Some(format!("> {}", self.buffer)),
+            Editing::None => None,
         }
+    }
+
+    /// The hint row when nothing is typed there: transient feedback, else a key hint; all session data comes from the frame.
+    pub(super) fn hint_line(&self, chrome: &Chrome) -> String {
+        self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
+            if let Some(hint) = self.screen_hint() {
+                return format!("  {hint}");
+            }
+            let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
+            let keys_key = key(chrome.keys_key);
+            let close = if self.fullscreen().is_some() { "   [Esc] close" } else { "" };
+            format!("  [{}] help   [{keys_key}] playlist keys{close}", key(chrome.help_key))
+        })
     }
 
     /// `:open <url-or-path>`'s remote-link case.

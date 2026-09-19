@@ -324,7 +324,7 @@ impl MedleyView {
         let floats = shown.iter().position(|&id| self.windows.placement(id) == Placement::Floating).unwrap_or(shown.len());
         shown[floats..].sort();
         let mut order: Vec<Focus> = shown.into_iter().map(Focus::Window).collect();
-        if self.warnings_widget(&placed, warn_count).is_some() {
+        if Self::warnings_widget(&self.slots(&placed), warn_count).is_some() {
             order.push(Focus::Warnings);
         }
         order
@@ -427,7 +427,14 @@ impl View for MedleyView {
             _ => None,
         };
         let bottom = printer.size.y.saturating_sub(if covered { 1 } else { 2 });
-        let line = self.hint_line(chrome);
+        let slots = self.slots(&placed);
+        let widget = Self::warnings_widget(&slots, chrome.warn_count);
+        let input = self.input_line();
+        let input_rect = Self::input_rect(&slots, widget.as_ref()).filter(|_| input.is_some());
+        let line = match (&input, input_rect) {
+            (Some(input), None) => input.clone(),
+            _ => self.hint_line(chrome),
+        };
         // Cursor position in the main list / its length, right-aligned.
         let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
         let style = if covered { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
@@ -443,7 +450,9 @@ impl View for MedleyView {
             }
         });
 
-        let widget = self.warnings_widget(&placed, chrome.warn_count);
+        if let (Some(input), Some(rect)) = (&input, input_rect) {
+            printer.windowed(rect).with_color(ColorStyle::primary(), |p| p.print((0, 0), &pad(input, p.size.x)));
+        }
         if !covered {
             let y = printer.size.y.saturating_sub(1);
             let width = Widget::status_width(widget.as_ref(), printer.size.x);
@@ -504,7 +513,7 @@ impl MedleyView {
 
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(local) = position.checked_sub(*offset)
-            && let Some(widget) = self.warnings_widget(&self.placed(), self.warn_count())
+            && let Some(widget) = self.current_widget()
             && widget.rect.contains(local)
         {
             self.open_warnings();
@@ -532,7 +541,7 @@ impl MedleyView {
             }
             if local.y == size.y.saturating_sub(1) {
                 let status = self.with_session(StatusLine::snapshot);
-                let widget = self.warnings_widget(&self.placed(), self.warn_count());
+                let widget = self.current_widget();
                 let width = Widget::status_width(widget.as_ref(), size.x);
                 return match status.click(local.x, width) {
                     Some(cmd) => self.run(cmd),
@@ -565,8 +574,7 @@ impl MedleyView {
                 self.open_warnings();
                 return EventResult::consumed();
             }
-            let placed = self.placed();
-            let host = self.warnings_widget(&placed, self.warn_count()).map_or(self.main_id(), |widget| widget.host);
+            let host = self.current_widget().map_or(self.main_id(), |widget| widget.host);
             self.focus_window(host);
         }
 

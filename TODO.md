@@ -186,8 +186,8 @@
   `zz-scratch*`) waiting for this.
 ### Features
 - [ ] Corner slots: replace the global bottom hint/command row with a shared "corner slot" mechanism,
-  in two remaining shippable steps (one commit each; the second only after the first is pushed). The
-  slot function is `MedleyView::slots` (`ui/src/view/corners.rs`); the warnings button already draws through it. Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
+  in one remaining step. The slot function is `MedleyView::slots` (`ui/src/view/corners.rs`); the
+  warnings button and the `:command`/search input line (`input_rect`, `INPUT_FLOOR`) already draw through it. Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
   the shell hint text, the command/search line, flash feedback, the cursor/total readout and,
   right-aligned, the red warnings button (`warnings_label`, `Focus::Warnings`, the
   focus order, the click hit-test in `on_event`); the per-window status row is now a generic window
@@ -198,10 +198,7 @@
     status line (`StatusLine`) offers the RIGHT slot only; modal windows (picker, warnings modal,
     confirm dialogs — anything drawn over the whole screen) offer NOTHING, so a widget never
     appears under or over a modal. A surface with no status row offers nothing. A window docked along the bottom edge (dock side `Bottom`) offers neither bottom corner, so the nearest-slot function skips it (`MedleyView::docked_at_bottom`).
-  - Step 2: the `:command` (and search) input line draws in the bottom-left slot through the same
-    function. Width floor: a slot narrower than a usable command line (a docked pane can be ~30
-    columns) is not enough, so below the floor the input line spans the whole bottom line instead.
-  - Step 3: delete the global row: hint text and flashes (`Notice::Status`) move into the focused
+  - Remaining step: delete the global row: hint text and flashes (`Notice::Status`) move into the focused
     window's own status row (guess to verify); the cursor/total count stops being a shell feature —
     each list window draws its own `cursor/total unit` in its own status row if it wants one (today
     only the main list has it, so docked and floating lists gain a count) and the shell's readout

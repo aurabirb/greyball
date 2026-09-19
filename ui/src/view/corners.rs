@@ -13,6 +13,9 @@ use super::warnings::warnings_rect;
 use super::window::WindowId;
 use super::{MedleyView, Placed};
 
+/// The narrowest slot a command line is drawn in; a docked pane can be about 30 columns.
+const INPUT_FLOOR: usize = 40;
+
 /// The nearest bottom-line region a surface offers to one screen corner.
 pub(super) struct Slot {
     /// The surface's bottom line, in screen coordinates.
@@ -89,10 +92,22 @@ impl MedleyView {
             .min_by_key(|slot| reach(slot.row))
     }
 
-    /// The warnings button, when there are warnings and a right slot to hold it.
-    pub(super) fn warnings_widget(&self, placed: &[Placed], count: usize) -> Option<Widget> {
-        let slots = self.slots(placed);
+    /// The warnings button, when there are warnings and the right slot can hold it.
+    pub(super) fn warnings_widget(slots: &Slots, count: usize) -> Option<Widget> {
         let slot = slots.at(Corner::Right).filter(|_| count > 0)?;
         Some(Widget { rect: warnings_rect(count, slot.row), scrubber: slot.scrubber, host: slot.host })
+    }
+
+    /// The warnings button as drawn now, for input handling outside `draw`.
+    pub(super) fn current_widget(&self) -> Option<Widget> {
+        Self::warnings_widget(&self.slots(&self.placed()), self.warn_count())
+    }
+
+    /// Where the input line draws: the left slot's row up to the button, when that is wide enough; else `None`, and the line spans the whole bottom line.
+    pub(super) fn input_rect(slots: &Slots, widget: Option<&Widget>) -> Option<Rect> {
+        let row = slots.at(Corner::Left)?.row;
+        let beside = widget.filter(|widget| widget.rect.top() == row.top() && widget.rect.left() >= row.left());
+        let width = beside.map_or(row.width(), |widget| widget.rect.left() - row.left());
+        Some(Rect::from_size(row.top_left(), (width, 1))).filter(|rect| rect.width() >= INPUT_FLOOR)
     }
 }
