@@ -125,7 +125,7 @@ pub const ITEMS: &[Item] = &[
         Cmd::Panes,
         BuiltinAction::PromptPanes,
         &["panes", "p"],
-        "[<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
+        "[<window>] [tabbed|docked|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
         "Window names as for :window; without one, every window that is not a tab moves. A startup tab stays tabbed: naming it moves its companion window (tabbed closes it).",
     ),
@@ -161,8 +161,8 @@ pub const ITEMS: &[Item] = &[
         "On a row of a Playlists list; Bksp clears it. With a track selected, a playlist's key adds it to or removes it from that playlist.",
     ),
     builtin(Section::Windows, BuiltinAction::SwitchPlaylists, "switch to the other Playlists window", "Opens the playlist keys window over the view when it is closed; on that window floating, closes it."),
-    builtin(Section::Windows, BuiltinAction::CyclePlacement, "move the focused window: tabbed, embedded, screen, float", ""),
-    builtin(Section::Windows, BuiltinAction::CyclePaneLayout, "cycle the embedded-pane layout", ""),
+    builtin(Section::Windows, BuiltinAction::CyclePlacement, "move the focused window: tabbed, docked, screen, float", ""),
+    builtin(Section::Windows, BuiltinAction::CyclePaneLayout, "cycle the docked-pane layout", ""),
 ];
 
 /// The item `word` names, by any of its spellings.

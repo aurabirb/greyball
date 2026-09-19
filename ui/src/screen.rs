@@ -60,7 +60,7 @@ impl Placement {
     pub fn word(self) -> &'static str {
         match self {
             Placement::Tabbed => "tabbed",
-            Placement::Docked => "embedded",
+            Placement::Docked => "docked",
             Placement::Screen => "screen",
             Placement::Floating => "float",
         }

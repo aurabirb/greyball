@@ -24,7 +24,7 @@ pub enum Action {
     CommandLine,
     /// UI-local: switch to the other Playlists window, opening the playlist keys window when none is shown.
     SwitchPlaylists,
-    /// UI-local: rotate the shared embedded-pane dock through
+    /// UI-local: rotate the shared docked-pane dock through
     /// right+vertical -> bottom+horizontal -> left+vertical ->
     /// top+horizontal -> back to right+vertical (`view::PANE_LAYOUT_CYCLE`)
     /// — one key instead of four `:panes <side> <stack>` combos.

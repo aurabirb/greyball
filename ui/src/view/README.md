@@ -23,7 +23,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   and memos; nothing may assume a window is the only instance of its kind, that it is a list, that it
   is fullscreen-wide, or that it starts at column 0. Nothing looks a window up by kind: `Windows::named`
   resolves a name to the id startup gave it.
-- Each window has a `Placement` (`Tabbed`, `Docked`, `Screen`, `Floating`; `tabbed`, `embedded`, `screen`,
+- Each window has a `Placement` (`Tabbed`, `Docked`, `Screen`, `Floating`; `tabbed`, `docked`, `screen`,
   `float` wherever the user reads or types one), held in `Windows::placements` apart from the windows
   so a `Ctx` can lend the Settings pane all of them while one window is borrowed mutably;
   `Windows::place` is its one write and bumps `Placements::generation`. `MedleyView::set_placement` is
