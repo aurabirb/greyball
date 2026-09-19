@@ -90,6 +90,7 @@ pub(super) struct StatusCtx<'a> {
     pub(super) place: Option<String>,
     pub(super) help_key: Option<char>,
     pub(super) keys_key: Option<char>,
+    pub(super) like_key: Option<char>,
     /// Cells at the row's right end the shell draws over.
     pub(super) reserved: usize,
 }

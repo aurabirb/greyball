@@ -497,7 +497,10 @@ impl TrackList {
     pub(super) fn idle(&self, frame: &ListFrame, placement: Placement, status: &StatusCtx) -> String {
         let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
         let mut hints = match frame.assignable {
-            true => vec!["[key] assign".to_string(), "[Backspace] clear".into()],
+            true => {
+                let like = status.like_key.map(|key| format!("[{key}] like"));
+                ["[key] assign".to_string(), "[Backspace] clear".into()].into_iter().chain(like).collect()
+            }
             false => vec![format!("[{}] help", key(status.help_key)), format!("[{}] playlist keys", key(status.keys_key))],
         };
         hints.extend(placement.closes_on_esc().then(|| "[Esc] close".to_string()));

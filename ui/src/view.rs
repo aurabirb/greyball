@@ -423,6 +423,7 @@ impl View for MedleyView {
                 place,
                 help_key: chrome.help_key,
                 keys_key: chrome.keys_key,
+                like_key: chrome.like_key,
                 reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect.width()),
             };
             window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);
