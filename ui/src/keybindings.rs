@@ -57,7 +57,7 @@ pub enum Action {
 impl Action {
     /// A key about the windows themselves, which a window shown over the view still lets through.
     pub fn is_window_action(&self) -> bool {
-        matches!(self, Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp)
+        matches!(self, Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp)
     }
 }
 

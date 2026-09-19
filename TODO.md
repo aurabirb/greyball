@@ -85,11 +85,6 @@
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
 
-- [ ] Switching to a tab with the keyboard (the tab digit keys, Tab/Shift-Tab focus cycling) must focus
-  that tab's window, so it receives the following key presses itself rather than the previously
-  focused window or the shell. Check the mouse tab click does the same, and that a companion or
-  float focused before the switch doesn't keep the keyboard.
-
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded

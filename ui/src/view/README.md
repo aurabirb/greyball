@@ -38,7 +38,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   companion it goes Docked → Screen → Floating → closed (focus back to what it opened over).
 - The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
   appended, never empty. `active` is the one shown; when it moves away its right neighbour takes over.
-  `1`-`9` and a tab click select by position (`Action::Tab`); `tab_names` labels them by kind. `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
+  `1`-`9` and a tab click select by position (`Action::Tab`) and focus that tab's window, whatever had focus; `tab_names` labels them by kind. `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
   order and z-order, each with the focus it opened over. `show(id)` brings any window into view (its
   tab, else opened and focused) and is what `/`, `:hist` and `:open <playlist link>` use; `toggle_window`
   (`:window <name>`, `:log`, …) opens or closes a non-tab window and switches to a tabbed one.
@@ -71,7 +71,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
   re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
-  to the top), so focus leaves it by `?`, Esc or the mouse; tabbed or docked, Tab and
+  to the top), so focus leaves it by `?`, Esc, a tab digit or the mouse; tabbed or docked, Tab and
   Shift-Tab cycle focus as anywhere and Esc does nothing (`Window::hint(over)` words the hint to
   match). Enter on a row with a bindable
   target stores that target and its name in `capturing`, so what the next character binds is what the
@@ -93,7 +93,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   hidden tab. A fullscreen list lets every shell key through, acting on its own selection (`/` filters it, `:`, `q`, playlist keys,
   `+`, `?`); a digit, like anything that `activate`s a tab, closes the fullscreen window and shows
   that tab. A floating or fullscreen window that is no list owns the keyboard: a key it ignores is dropped but for those `Action::is_window_action` names
-  (`:`, `M`, backtick, `?`) and Tab/Shift-Tab, which cycle focus. Esc closes it once it has no use for it.
+  (`:`, `M`, backtick, `?`, a tab digit) and Tab/Shift-Tab, which cycle focus. Esc closes it once it has no use for it.
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
@@ -270,7 +270,7 @@ on `revision` — it is read fresh or kept in its own small cache.
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
    user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
    it when ignored, and a key a focused floating or fullscreen window that is no list ignores goes no further unless
-   it is a window action or Tab/Shift-Tab; Enter never goes on to the main list past a window shown over the view. What is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
+   it is a window action (a tab digit included) or Tab/Shift-Tab; Enter never goes on to the main list past a window shown over the view. What is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

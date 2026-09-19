@@ -166,14 +166,12 @@ impl MedleyView {
         true
     }
 
-    /// Makes `id` the active tab, closing what covers it; focus follows only from what it replaces.
+    /// Makes `id` the active tab and focuses it, closing what covers it.
     fn activate(&mut self, id: WindowId) {
         while let Some(screen) = self.fullscreen() {
             self.close_window(screen);
         }
-        if self.focus == Focus::Window(self.active) {
-            self.focus = Focus::Window(id);
-        }
+        self.focus_window(id);
         self.active = id;
         self.kick_playlists(id);
     }
@@ -209,9 +207,7 @@ impl MedleyView {
         } else if !self.close_window(id) {
             self.open.push((id, self.focus));
             self.kick_playlists(id);
-            if self.windows.placement(id) != Placement::Docked {
-                self.focus = Focus::Window(id);
-            }
+            self.focus_window(id);
         }
     }
 
