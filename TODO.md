@@ -51,7 +51,7 @@
   glyph macOS Terminal/iTerm renders wider or narrower than that (emoji, variation selectors, CJK,
   ambiguous-width box/transport glyphs like `━╍⏸`) pushes a line into or short of the last column,
   leaving leftovers cursive's diffing never rewrites; (3) resize handling — `Event::WindowResize`
-  should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`PaneLayout::main_rect`
+  should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`MedleyView::placed`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
   and wide-glyph titles on screen.
 - [ ] Playback has been seen to skip to the next track while the UI was stuck busy (e.g. during heavy
@@ -135,7 +135,7 @@
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
   hammered; surface the failure in the warnings list rather than silently showing nothing.
-- [ ] Decided behaviour fixes, one pass (after per-window stage B):
+- [ ] Decided behaviour fixes, one pass:
   - The warnings modal opens only from a click on the `⚠ warnings (N)` button's own span, not from
     anywhere on the hint row (hit-test with the same span `draw` uses for the button).
   - The mouse wheel scrolls a fullscreen (`Screen`-placement) Log/Settings pane like a docked one.
@@ -309,36 +309,23 @@
   (commands needing an argument, fixed keys like Esc/Enter/arrows) show their key but refuse Enter
   with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
   `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
-- [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
-  (`Screen::ALL` in `ui/src/screen.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
-  (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
-  **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
-  main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
-  **screen** (fullscreen over everything, Esc returns — today's `PaneMode::Screen`/`Modal::Pane`),
-  and **floating** (a bordered box over the current view, not fullscreen — this item owns that
-  presentation; the playlist hotkey rework and the merged Help/hotkey window build on it).
-  Every window is already a rect-drawn `Window` instance in `Windows` (`ui/src/view/window.rs`,
-  model in `ui/src/view/README.md`), but placement is still derived from two families: a
-  `WindowId::Tab` can only be the active tab, a `WindowId::Pane` has only `Screen`/`Embedded`
-  (`PaneLayout::mode_overrides`, `:panes <pane> <screen|embedded>`, `toggle_pane`), and Queue/History
-  exist as two instances — a tab and a pane. Unify them: one four-value mode per window instance
-  (extend `core::config::PaneMode`; no `Screen`/`Embedded` leftovers or aliases) held next to the
-  instance, deciding whether Queue/History stay two instances or become one, with the tab bar
-  (`tab_layout`/`draw_tab_bar`/tab click hit-test, number-key screen switching) built from
-  whichever windows are currently tabbed instead of the fixed `Screen::ALL` array, and `focus_order`/
-  `Focus` covering docked and floating windows. Toggle: a key (and `:panes <window> <mode>`) that
-  cycles the focused window's mode tabbed → docked → screen → floating, applied immediately (not
-  "next time it's toggled" as `pane_mode_overrides` is now), plus a way to target a window that
-  isn't focused/visible. Floating windows need a size/position rule — start simple (centered,
-  sized to a fraction of the screen, one at a time on top) rather than mouse drag/resize. Keep at
-  least one window tabbed so the main area is never empty. Persist each window's mode (and open/
-  closed state for non-tabbed ones) in `state.toml` next to volume and hotkeys (`save_state`,
-  `app/src/main.rs`) and show it in Settings in place of the `panes.mode` info line. The
-  code this reshapes is `PaneLayout` (`ui/src/view/panes.rs`) and `MedleyView::visible`/`layout`. Do
-  it before the playlist hotkey rework and the merged Help/hotkey window, in two stages, each
-  shippable: (B) the floating mode — a rect from the shell, a border, focus and mouse routing through
-  `send`, `Modal`s taking a floating `Rect` instead of `modal_rect`'s whole screen; (C) the toggle
-  key, `:panes <window> <mode>`, persistence and the Settings display.
+- [ ] Per-window mode toggle, so the layout can be rearranged: every window — tab or pane — can be
+  switched between the four `Placement`s (`ui/src/view/window.rs`, model in `ui/src/view/README.md`):
+  tabbed, docked, screen and floating. Windows already store their placement, `Windows` can add an
+  instance of any `Kind`, and `:panes [<pane>] <screen|embedded|float>` re-places the five pane
+  windows live. What is left: a key that cycles the focused window's placement tabbed → docked →
+  screen → floating; `:panes` accepting every window (tab windows too, plus a way to target one that
+  isn't focused or visible) and the value `tabbed`; the tab bar (`TabBar`, tab click hit-test,
+  number-key switching, `MedleyView::screen`) built from whichever windows are currently `Tabbed`
+  instead of `Screen::ALL`, keeping at least one window tabbed so the main area is never empty — at
+  which point `Screen` is only the list kind and `Windows::tab` goes; deciding whether Queue/History
+  stay two instances or become one; merging `core::config::PaneMode` into the four-value placement
+  (no `Embedded` alias); persisting each window's placement and open/closed state in `state.toml`
+  next to volume and hotkeys (`save_state`, `app/src/main.rs`); and showing per-window placement in
+  Settings in place of the `panes.mode` info line, which only reflects the last `:panes <mode>`
+  given without a pane name. Floating windows all share one centered rect (`panes::float_rect`), so
+  only the top one is visible; give them distinct rects before two are meant to show at once. Do
+  this before the playlist hotkey rework and the merged Help/hotkey window.
 - [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
   track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
   pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
@@ -410,7 +397,7 @@
   glyphs the stale-rightmost-column bug above suspects. The playback control glyphs (`PREV_ICON`/
   `player_action_glyph`/`NEXT_ICON`) stay as they are for now. When off, the row isn't reserved at all: `BOTTOM_BAR_ROWS` stops being a
   constant 2 and becomes 1 (hint/command line only), feeding `split`, `required_size`/
-  `PaneLayout::main_rect`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
+  `MedleyView::placed`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
   assume the status row exists (check the warnings button, the row-count readout and the command
   line, which sit on the hint row above it). Toggling applies immediately, without a restart.
 - [ ] Building on the status-row widget above: let it be placed either up top next to the
@@ -442,8 +429,8 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item below or under Features): (1) per-window
-  modes stages B and C; (2) the playlist hotkey rework, the merged Help/hotkey window, the status-row
+- [ ] UI architecture work order (each step is an item below or under Features): (1) the per-window
+  mode toggle; (2) the playlist hotkey rework, the merged Help/hotkey window, the status-row
   widget, the title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis
   levels lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use

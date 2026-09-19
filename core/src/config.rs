@@ -192,6 +192,8 @@ pub enum PaneMode {
     /// Drawn in a slice of the main screen, alongside the primary content.
     #[default]
     Embedded,
+    /// A bordered box over the current view.
+    Float,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

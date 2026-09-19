@@ -1,7 +1,7 @@
 # View component model
 
 `MedleyView` (`../view.rs`) is the only cursive `View` and is only the shell: screen layout (tab bar,
-window rects from `PaneLayout::split`, hint row, status row), focus, the open `Modal`, command dispatch
+window rects from `MedleyView::placed`, hint row, status row), focus, the open `Modal`, command dispatch
 (`run`) and the session locks. Everything that shows content is a window instance or a modal; the
 files here are those components plus `impl MedleyView` blocks grouped by concern.
 
@@ -11,20 +11,32 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   in — the one rect `draw`, hit-testing and `relayout` share. Its body is a `TrackList`
   (`track_list.rs`, every list kind: Now Playing, Playlists, Search, History, Queue), the `LogPane`,
   the `SettingsPane` or `Vis`.
-- `Windows` holds every instance by `WindowId`: `Tab(Screen)` for the five tabs, `Pane(Pane)` for the
-  five dockable panes. The Queue tab and the Queue pane are two instances of one kind, each with its own
-  cursor, scroll window, filter and memos; nothing in a component may assume it is the only instance of
-  its kind, that it is fullscreen-wide, or that it starts at column 0.
-- Placement is where the shell shows an instance, not a property of it: the active tab (`screen`) in
-  the main rect, `PaneLayout::open` panes docked around it, a `PaneMode::Screen` pane fullscreen as
-  `Modal::Pane`. A Queue/History pane in `Screen` mode switches to its tab instead of layering.
+- `Windows` is an open store: `WindowId` is an opaque index that encodes neither kind nor placement,
+  and `Windows::add(kind, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(Screen)`,
+  `Log`, `Settings`, `Vis`). Startup adds a `Tabbed` list per `Screen` and one pane window per `:panes`
+  name. The Queue tab and the Queue pane are two instances of one kind, each with its own cursor,
+  scroll window, filter and memos; nothing may assume a window is the only instance of its kind, that
+  it is fullscreen-wide, or that it starts at column 0. Only `Windows::tab`/`find`, which resolve a
+  tab or a command's pane name to an id, look a window up by kind.
+- Each instance stores its `Placement` (`Tabbed`, `Docked`, `Screen`, `Floating`); `:panes [<pane>]
+  <screen|embedded|float>` sets it through `set_placement`, which moves an open window at once (to
+  fullscreen it only closes it). A `Tabbed` window shows while it is the active tab (`screen`);
+  `MedleyView::open` lists the other open windows, oldest first, which is both dock order and z-order,
+  each with the focus it opened over. `placed()` derives every shown window's rect, bottom first: the
+  active tab, the `Docked` ones around it (`panes::split`), then each `Floating` one's `float_body`
+  inside `float_rect` — a centered box three fifths of the area between the fixed rows, recomputed
+  from the screen size. An open `Screen` window is shown alone, above a footer hint; it takes every
+  key, drops the mouse, and Esc closes it. A `Screen` list window switches to its kind's tab instead.
+- A floating window's own title row sits in the top border of the box the shell draws around it
+  (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window
+  focuses it and closing one hands focus back; focusing a floating window raises it (`focus_window`).
 - `Window` API, all of it called by the shell only:
   - `relayout(rect, s)` from `MedleyView::layout`: stores the rect; a list clamps its cursor into the
     list and re-follows it when the height changed.
   - `frame(ctx) -> WindowFrame`: the window's session-derived draw data, taken under the frame's one
     lock and memoized inside the component (`ListFrame` rows, Settings entries; Log and Vis are `Live`).
   - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
-    window is drawn unfocused: only docked windows show the `[title]` focus marker.
+    window is drawn unfocused: only docked and floating windows show the `[title]` focus marker.
   - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
     `ToggleSetting(row)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
@@ -129,17 +141,20 @@ on `revision` — it is read fresh or kept in its own small cache.
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
-   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`, `Pane`), so there is
+   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`), so there is
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
-   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`).
-   `Modal::Pane` forwards keys to its window and drops mouse events.
+   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`). Next an
+   open `Screen` window takes every event (`on_fullscreen_event`).
 4. Fixed-row mouse: row 0 → `TabBar::click`; bottom-2 → the warnings modal (anywhere on the row);
    bottom → `StatusLine::click`.
-5. Any other mouse event: `send` offers it to each visible window; the one it lands in takes focus.
+5. Any other mouse event goes to the topmost shown window whose rect — a floating one's whole box —
+   contains it, and that window takes focus; a click outside a floating window reaches what is under
+   it and closes nothing.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
-   `send` offers the key to the focused window, then the active tab's; what both ignore goes to
-   `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
+   `send` offers the key to the focused window, then the active tab's — except Esc with a floating
+   window focused, which only that window sees and which closes it when ignored; what both ignore goes
+   to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

@@ -5,11 +5,10 @@ use cursive::theme::ColorStyle;
 
 use core::{PaneLayoutConfig, ScanMode, Session, TOGGLABLE_SOURCES};
 
-use crate::command::Pane;
+use crate::screen::Kind;
 
 use super::MedleyView;
 use super::memo::Memo;
-use super::panes::pane_title;
 use super::scroll::ListState;
 use super::text::pad;
 use super::window::Ctx;
@@ -81,7 +80,7 @@ impl SettingsPane {
     }
 
     pub(super) fn draw(&self, printer: &Printer, entries: &[SettingsEntry], focused: bool) {
-        let mut title = pane_title(Pane::Settings).to_string();
+        let mut title = Kind::Settings.label().to_string();
         if focused {
             title = format!("[{title}]");
         }
@@ -97,7 +96,7 @@ impl SettingsPane {
 impl MedleyView {
     /// Enter/Space on row `cursor` of the Settings window.
     pub(super) fn toggle_setting(&mut self, cursor: usize) {
-        let pane_cfg = self.panes.cfg;
+        let pane_cfg = self.pane_cfg;
         let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
             return;
         };

@@ -6,32 +6,12 @@ use std::path::PathBuf;
 
 use core::{Axis, Command, PaneMode, Session, Side, TrackId};
 
-/// An optional, toggleable side pane. UI-local — not a `core::Command`, since
-/// "is this pane open" is view state, not application state.
-/// `Queue`/`History` reuse the exact same track-list rendering/navigation as
-/// their numbered-screen form (`Screen::Queue`/`Screen::History`) — the pane system
-/// just adds a second way to reach them (docked alongside another screen)
-/// on top of the pre-existing "switch to it" one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Pane {
-    Log,
-    Settings,
-    /// The real-audio bar-eq pane (`:vis`).
-    Vis,
-    Queue,
-    History,
-}
+use crate::screen::{Kind, Screen};
 
-/// A `:panes` argument: `[<pane>] [screen|embedded] [left|right|top|bottom]
-/// [horizontal|vertical]`, in any order (the pane name, if present, must
-/// come first). Fields left `None` leave the current value alone — `view`
-/// applies the patch to its live `PaneLayoutConfig`. `pane`: which pane's
-/// own placement to override (`:panes queue screen`); `None` patches the
-/// shared default every not-yet-overridden pane falls back to (`:panes
-/// screen`, unchanged from before per-pane placement existed).
+/// A `:panes` argument; `None` fields stay as they are, `pane: None` targets every pane window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanePatch {
-    pub pane: Option<Pane>,
+    pub pane: Option<Kind>,
     pub mode: Option<PaneMode>,
     pub side: Option<Side>,
     pub stack: Option<Axis>,
@@ -57,7 +37,7 @@ pub enum Parsed {
     /// `help` — show the command list in a modal.
     Help,
     /// `log` / `settings` — open/close that pane.
-    TogglePane(Pane),
+    TogglePane(Kind),
     /// `vis` — toggle the visualizer pane open/closed.
     Vis,
     /// `panes ...` — change where open panes render.
@@ -105,9 +85,9 @@ pub const HELP: &[(&str, &str)] = &[
     ("togglescan", "toggle the background scan (bpm, ...) between active and cache-only"),
     ("toggleshuffle", "toggle queue shuffle"),
     (
-        "panes [<pane>] [screen|embedded] [left|right|top|bottom] [horizontal|vertical]",
-        "change where a pane renders — every pane places independently; \
-         omit <pane> to change the shared default for panes with no override yet",
+        "panes [<pane>] [screen|embedded|float] [left|right|top|bottom] [horizontal|vertical]",
+        "change where a pane renders (float: a box over the current view) — \
+         omit <pane> to place every pane",
     ),
     (
         "keys",
@@ -177,16 +157,13 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
             })
         }
         "exportm3u" => Err("usage: export <playlist> [path]".into()),
-        "log" => Ok(Parsed::TogglePane(Pane::Log)),
-        "settings" => Ok(Parsed::TogglePane(Pane::Settings)),
+        "log" => Ok(Parsed::TogglePane(Kind::Log)),
+        "settings" => Ok(Parsed::TogglePane(Kind::Settings)),
         "vis" if rest.is_empty() => Ok(Parsed::Vis),
         "vis" => Err("usage: vis".into()),
-        "queue" => Ok(Parsed::TogglePane(Pane::Queue)),
-        // Distinct from "hist": that one switches the main screen to
-        // History outright; this docks/undocks it as a pane, same as
-        // `log`/`settings`/`vis` — which one wins depends on that pane's
-        // own placement (`:panes history ...`), see `Pane::Queue`'s doc.
-        "history" => Ok(Parsed::TogglePane(Pane::History)),
+        "queue" => Ok(Parsed::TogglePane(Kind::List(Screen::Queue))),
+        // Unlike "hist", this toggles the History pane window per its own placement.
+        "history" => Ok(Parsed::TogglePane(Kind::List(Screen::History))),
         "togglescan" => Ok(Parsed::Ready(Command::ToggleScan)),
         "toggleshuffle" => Ok(Parsed::Ready(Command::ToggleShuffle)),
         "hist" => Ok(Parsed::History),
@@ -237,21 +214,16 @@ pub(crate) fn split_paths(rest: &str) -> Vec<PathBuf> {
     out
 }
 
-/// `panes [screen|embedded] [left|right|top|bottom] [horizontal|vertical]` —
-/// any subset, any order; an empty line is a no-op patch (useful to just
-/// check it parses).
 fn parse_pane_patch(rest: &str) -> Result<PanePatch, String> {
     let mut patch = PanePatch::default();
     let mut toks = rest.split_whitespace().peekable();
-    // An optional leading pane name targets this patch at just that pane's
-    // own placement override instead of the shared default (`PanePatch`).
     if let Some(&first) = toks.peek() {
         let pane = match first.to_ascii_lowercase().as_str() {
-            "log" => Some(Pane::Log),
-            "settings" => Some(Pane::Settings),
-            "vis" => Some(Pane::Vis),
-            "queue" => Some(Pane::Queue),
-            "history" => Some(Pane::History),
+            "log" => Some(Kind::Log),
+            "settings" => Some(Kind::Settings),
+            "vis" => Some(Kind::Vis),
+            "queue" => Some(Kind::List(Screen::Queue)),
+            "history" => Some(Kind::List(Screen::History)),
             _ => None,
         };
         if pane.is_some() {
@@ -263,6 +235,7 @@ fn parse_pane_patch(rest: &str) -> Result<PanePatch, String> {
         match tok.to_ascii_lowercase().as_str() {
             "screen" => patch.mode = Some(PaneMode::Screen),
             "embedded" => patch.mode = Some(PaneMode::Embedded),
+            "float" => patch.mode = Some(PaneMode::Float),
             "left" => patch.side = Some(Side::Left),
             "right" => patch.side = Some(Side::Right),
             "top" => patch.side = Some(Side::Top),
@@ -271,7 +244,7 @@ fn parse_pane_patch(rest: &str) -> Result<PanePatch, String> {
             "vertical" => patch.stack = Some(Axis::Vertical),
             other => {
                 return Err(format!(
-                    "usage: panes [<pane>] [screen|embedded] [left|right|top|bottom] [horizontal|vertical] (unknown {other:?})"
+                    "usage: panes [<pane>] [screen|embedded|float] [left|right|top|bottom] [horizontal|vertical] (unknown {other:?})"
                 ));
             }
         }

@@ -1,14 +1,12 @@
-use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseEvent};
 
-use core::{Command, LogBuf, PaneLayoutConfig, Session};
+use core::{Command, LogBuf, PaneLayoutConfig, PaneMode, Session};
 
-use crate::command::Pane;
-use crate::screen::Screen;
+use crate::screen::{Kind, Screen};
 use crate::vis::Vis;
 
 use super::log::LogPane;
@@ -16,11 +14,27 @@ use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::settings::{SettingsEntry, SettingsPane};
 use super::track_list::{ListFrame, TrackList};
 
-/// One window instance: a tab's, or a dockable pane's — the Queue tab and the Queue pane are two instances of one kind.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum WindowId {
-    Tab(Screen),
-    Pane(Pane),
+/// One window instance; says nothing about its kind or where it is shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct WindowId(usize);
+
+/// Where the shell shows a window: as the active tab, docked beside it, fullscreen, or in a box over the view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Placement {
+    Tabbed,
+    Docked,
+    Screen,
+    Floating,
+}
+
+impl From<PaneMode> for Placement {
+    fn from(mode: PaneMode) -> Self {
+        match mode {
+            PaneMode::Screen => Placement::Screen,
+            PaneMode::Embedded => Placement::Docked,
+            PaneMode::Float => Placement::Floating,
+        }
+    }
 }
 
 /// What the shell hands a window under its one session lock.
@@ -57,15 +71,13 @@ enum Body {
 
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
 pub(super) struct Window {
+    pub(super) kind: Kind,
+    pub(super) placement: Placement,
     body: Body,
     rect: Rect,
 }
 
 impl Window {
-    fn new(body: Body) -> Self {
-        Self { body, rect: Rect::from_size((0, 0), (0, 0)) }
-    }
-
     pub(super) fn list(&self) -> Option<&TrackList> {
         match &self.body {
             Body::List(list) => Some(list),
@@ -151,33 +163,62 @@ impl Window {
     }
 }
 
-/// Every window instance, by id.
-pub(super) struct Windows(HashMap<WindowId, Window>);
+/// Every window instance, by id; ids stay valid because windows are never removed.
+pub(super) struct Windows {
+    items: Vec<Window>,
+    log: Arc<LogBuf>,
+    vis: Arc<Vis>,
+}
 
 impl Windows {
-    pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>) -> Self {
-        let tabs = Screen::ALL.map(|screen| (WindowId::Tab(screen), Body::List(TrackList::new(screen))));
-        let panes = [
-            (Pane::Log, Body::Log(LogPane::new(log))),
-            (Pane::Settings, Body::Settings(SettingsPane::default())),
-            (Pane::Vis, Body::Vis(vis)),
-            (Pane::Queue, Body::List(TrackList::new(Screen::Queue))),
-            (Pane::History, Body::List(TrackList::new(Screen::History))),
-        ];
-        let panes = panes.map(|(pane, body)| (WindowId::Pane(pane), body));
-        Self(tabs.into_iter().chain(panes).map(|(id, body)| (id, Window::new(body))).collect())
+    /// A tab per screen and one window per `:panes` name, placed by `pane_mode`.
+    pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>, pane_mode: PaneMode) -> Self {
+        let mut windows = Self { items: Vec::new(), log, vis };
+        for screen in Screen::ALL {
+            windows.add(Kind::List(screen), Placement::Tabbed);
+        }
+        for kind in [Kind::Log, Kind::Settings, Kind::Vis, Kind::List(Screen::Queue), Kind::List(Screen::History)] {
+            windows.add(kind, pane_mode.into());
+        }
+        windows
+    }
+
+    fn add(&mut self, kind: Kind, placement: Placement) -> WindowId {
+        let body = match kind {
+            Kind::Log => Body::Log(LogPane::new(self.log.clone())),
+            Kind::Settings => Body::Settings(SettingsPane::default()),
+            Kind::Vis => Body::Vis(self.vis.clone()),
+            Kind::List(screen) => Body::List(TrackList::new(screen)),
+        };
+        self.items.push(Window { kind, placement, body, rect: Rect::from_size((0, 0), (0, 0)) });
+        WindowId(self.items.len() - 1)
+    }
+
+    /// Every window that is not a tab.
+    pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + '_ {
+        (0..self.items.len()).map(WindowId).filter(|&id| self[id].placement != Placement::Tabbed)
+    }
+
+    pub(super) fn tab(&self, screen: Screen) -> WindowId {
+        self.find(Kind::List(screen), true).expect("`Windows::new` builds a tab per screen")
+    }
+
+    /// The first `kind` window that is (`tabbed`) or is not a tab.
+    pub(super) fn find(&self, kind: Kind, tabbed: bool) -> Option<WindowId> {
+        let is = |w: &Window| w.kind == kind && (w.placement == Placement::Tabbed) == tabbed;
+        self.items.iter().position(is).map(WindowId)
     }
 }
 
 impl Index<WindowId> for Windows {
     type Output = Window;
     fn index(&self, id: WindowId) -> &Window {
-        &self.0[&id]
+        &self.items[id.0]
     }
 }
 
 impl IndexMut<WindowId> for Windows {
     fn index_mut(&mut self, id: WindowId) -> &mut Window {
-        self.0.get_mut(&id).expect("every window id is built in `Windows::new`")
+        &mut self.items[id.0]
     }
 }

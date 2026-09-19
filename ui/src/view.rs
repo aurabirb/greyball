@@ -10,24 +10,23 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, LogBuf, Session};
+use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
-use crate::command::Pane;
 use crate::keybindings::Action;
 use crate::screen::Screen;
 
 use frame::Chrome;
 use input::{Editing, key_name};
 use memo::Memo;
-use modal::Modal;
-use panes::PaneLayout;
+use modal::{Modal, modal_body};
+use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
 use track_list::TrackList;
 use warnings::{defocuses_warnings, warnings_label};
-use window::{Ctx, WindowFrame, WindowId, WindowOutcome, Windows};
+use window::{Ctx, Placement, WindowFrame, WindowId, WindowOutcome, Windows};
 
 mod frame;
 mod help;
@@ -56,11 +55,10 @@ pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
 pub use status_line::window_title_track_text;
 pub use transport::player_state_glyph;
 
-/// Which pane navigation keys (arrows/j-k/PgUp/PgDn) go to.
+/// What navigation keys (arrows/j-k/PgUp/PgDn) go to.
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
-    Main,
-    Pane(Pane),
+    Window(WindowId),
     /// The bottom-row warnings button — `Enter` opens the warnings modal.
     Warnings,
 }
@@ -76,7 +74,10 @@ pub struct MedleyView {
     buffer: String,
     /// The hint row's one transient message, cleared by the next input event.
     feedback: Option<String>,
-    panes: PaneLayout,
+    /// Dock side and stacking, shared by every docked window.
+    pane_cfg: PaneLayoutConfig,
+    /// Open non-tab windows, oldest first — dock order, and z-order — each with the focus it opened over.
+    open: Vec<(WindowId, Focus)>,
     /// Which window currently receives nav keys; `Tab` cycles it.
     focus: Focus,
     vis: Arc<crate::vis::Vis>,
@@ -91,16 +92,19 @@ impl MedleyView {
     pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> Self {
         let pane_cfg = session.lock().unwrap().cfg.panes;
         let vis = crate::vis::Vis::spawn(session.clone());
+        let screen = Screen::from_config(initial_screen);
+        let windows = Windows::new(log, vis.clone(), pane_cfg.mode);
         Self {
             session,
-            screen: Screen::from_config(initial_screen),
-            windows: Windows::new(log, vis.clone()),
+            screen,
+            focus: Focus::Window(windows.tab(screen)),
+            windows,
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
             feedback: None,
-            panes: PaneLayout::new(pane_cfg),
-            focus: Focus::Main,
+            pane_cfg,
+            open: Vec::new(),
             vis,
             modal: None,
             marquee: Marquee::new(),
@@ -110,19 +114,35 @@ impl MedleyView {
     }
 
     fn main_id(&self) -> WindowId {
-        WindowId::Tab(self.screen)
+        self.windows.tab(self.screen)
     }
 
     fn focused_id(&self) -> WindowId {
         match self.focus {
-            Focus::Pane(pane) => WindowId::Pane(pane),
-            Focus::Main | Focus::Warnings => self.main_id(),
+            Focus::Window(id) => id,
+            Focus::Warnings => self.main_id(),
         }
     }
 
-    /// The active tab's window, then each docked one.
+    /// The newest open fullscreen window, shown alone.
+    fn fullscreen(&self) -> Option<WindowId> {
+        self.open_in(Placement::Screen).last()
+    }
+
+    /// Every shown window and its rect, bottom first: the active tab, the docked windows, the floating ones.
+    fn placed(&self) -> Vec<(WindowId, Rect)> {
+        let size = self.last_screen_size;
+        if let Some(id) = self.fullscreen() {
+            return vec![(id, modal_body(Rect::from_size((0, 0), size), false))];
+        }
+        let docked: Vec<WindowId> = self.open_in(Placement::Docked).collect();
+        let (main_rect, docked) = split(size, &docked, self.pane_cfg);
+        let floating = self.open_in(Placement::Floating).map(|id| (id, float_body(float_rect(size))));
+        std::iter::once((self.main_id(), main_rect)).chain(docked).chain(floating).collect()
+    }
+
     fn visible(&self) -> Vec<WindowId> {
-        std::iter::once(self.main_id()).chain(self.panes.open.iter().map(|&p| WindowId::Pane(p))).collect()
+        self.placed().into_iter().map(|(id, _)| id).collect()
     }
 
     /// The list selection-based commands act on: the focused window's, else the active tab's.
@@ -135,12 +155,12 @@ impl MedleyView {
     }
 
     fn ctx<'a>(&self, s: &'a Session) -> Ctx<'a> {
-        Ctx { s, pane_cfg: self.panes.cfg, searching: self.editing == Editing::Search }
+        Ctx { s, pane_cfg: self.pane_cfg, searching: self.editing == Editing::Search }
     }
 
     /// Offers `event` to each of `ids` under one session lock; the first window not ignoring it, and its outcome.
     fn send(&mut self, ids: &[WindowId], event: &Event) -> Option<(WindowId, WindowOutcome)> {
-        let (session, pane_cfg, searching) = (self.session.clone(), self.panes.cfg, self.editing == Editing::Search);
+        let (session, pane_cfg, searching) = (self.session.clone(), self.pane_cfg, self.editing == Editing::Search);
         let guard = session.lock().unwrap();
         let ctx = Ctx { s: &guard, pane_cfg, searching };
         ids.iter().find_map(|&id| match self.windows[id].on_event(event, &ctx) {
@@ -163,13 +183,10 @@ impl MedleyView {
 
     /// Hands each visible window its rect, under the one lock a layout pass takes; effects on change run here, never in `draw`.
     fn layout(&mut self) {
-        let (main_rect, pane_rects) = self.panes.split(self.last_screen_size);
-        let rects = std::iter::once((self.main_id(), main_rect))
-            .chain(pane_rects.into_iter().map(|(pane, rect)| (WindowId::Pane(pane), rect)));
         let session = self.session.clone();
         let warn_count = {
             let s = session.lock().unwrap();
-            for (id, rect) in rects {
+            for (id, rect) in self.placed() {
                 self.windows[id].relayout(rect, &s);
             }
             self.follow_scan(&s);
@@ -194,16 +211,9 @@ impl MedleyView {
         }
     }
 
-    /// `Main`, each docked pane in stack order, then the warnings button; `warn_count` comes from the caller's lock.
+    /// Every shown window, bottom first, then the warnings button; `warn_count` comes from the caller's lock.
     fn focus_order_given(&self, warn_count: usize) -> Vec<Focus> {
-        // `panes.open` only ever holds docked panes (see `toggle_pane`).
-        let mut order = if self.panes.open.is_empty() {
-            vec![Focus::Main]
-        } else {
-            std::iter::once(Focus::Main)
-                .chain(self.panes.open.iter().map(|&p| Focus::Pane(p)))
-                .collect()
-        };
+        let mut order: Vec<Focus> = self.visible().into_iter().map(Focus::Window).collect();
         if warn_count > 0 {
             order.push(Focus::Warnings);
         }
@@ -217,12 +227,15 @@ impl MedleyView {
     fn cycle_focus(&mut self) {
         let order = self.focus_order();
         let idx = order.iter().position(|f| *f == self.focus).unwrap_or(0);
-        self.focus = order[(idx + 1) % order.len()];
+        match order[(idx + 1) % order.len()] {
+            Focus::Window(id) => self.focus_window(id),
+            Focus::Warnings => self.focus = Focus::Warnings,
+        }
     }
 
     fn clamp_focus_given(&mut self, warn_count: usize) {
         if !self.focus_order_given(warn_count).contains(&self.focus) {
-            self.focus = Focus::Main;
+            self.focus = Focus::Window(self.main_id());
         }
     }
 
@@ -283,17 +296,25 @@ impl View for MedleyView {
             self.draw_modal(modal, printer);
             return;
         }
+        if let Some(id) = self.fullscreen() {
+            self.draw_fullscreen(id, printer);
+            return;
+        }
 
         // One lock for the whole frame: every session-derived value comes out here, then rendering runs without it.
         let visible = self.visible();
         let frame = self.frame(&visible);
-        for (&id, window_frame) in visible.iter().zip(&frame.windows) {
-            // The active tab's window carries no focus marker.
-            let marked = matches!(id, WindowId::Pane(pane) if self.focus == Focus::Pane(pane));
-            self.windows[id].draw(printer, marked, window_frame);
+        if self.open_in(Placement::Docked).next().is_some() {
+            draw_separator(self.pane_cfg.side, printer, self.windows[self.main_id()].rect());
         }
-        if visible.len() > 1 {
-            self.panes.draw_separator(printer, self.windows[self.main_id()].rect());
+        for (&id, window_frame) in visible.iter().zip(&frame.windows) {
+            let window = &self.windows[id];
+            // The active tab's window carries no focus marker.
+            let marked = id != self.main_id() && self.focus == Focus::Window(id);
+            if window.placement == Placement::Floating {
+                draw_float_frame(printer, float_rect(self.last_screen_size), marked);
+            }
+            window.draw(printer, marked, window_frame);
         }
 
         let chrome = &frame.chrome;
@@ -389,6 +410,9 @@ impl MedleyView {
         if self.modal.is_some() {
             return self.on_modal_event(event);
         }
+        if let Some(id) = self.fullscreen() {
+            return self.on_fullscreen_event(id, event);
+        }
 
         // Fixed rows of the whole screen: the tab bar on top, the hint row and the status line at the bottom.
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
@@ -402,7 +426,7 @@ impl MedleyView {
                 if let Some(TabBarHit::Transport(button)) = hit {
                     return self.run(button.command());
                 }
-                self.focus = Focus::Main;
+                self.focus = Focus::Window(self.main_id());
                 return match hit {
                     Some(TabBarHit::Tab(target)) => self.handle_action(Action::Screen(target)),
                     _ => EventResult::consumed(),
@@ -421,14 +445,17 @@ impl MedleyView {
             }
         }
 
-        // A mouse event goes to whichever visible window it lands in, which takes focus; wheel scrolls stay put.
-        if matches!(event, Event::Mouse { .. }) {
-            let visible = self.visible();
-            let Some((id, outcome)) = self.send(&visible, event) else { return EventResult::Ignored };
-            self.focus = match id {
-                WindowId::Pane(pane) => Focus::Pane(pane),
-                WindowId::Tab(_) => Focus::Main,
-            };
+        // A mouse event goes to the topmost window it lands in, border included, which takes focus; wheel scrolls stay put.
+        if let Event::Mouse { offset, position, .. } = event {
+            let hit = position.checked_sub(*offset).and_then(|pos| {
+                self.visible().into_iter().rev().find(|&id| {
+                    let window = &self.windows[id];
+                    let floating = window.placement == Placement::Floating;
+                    if floating { float_rect(self.last_screen_size) } else { window.rect() }.contains(pos)
+                })
+            });
+            let Some((id, outcome)) = hit.and_then(|id| self.send(&[id], event)) else { return EventResult::Ignored };
+            self.focus_window(id);
             return self.apply(outcome);
         }
 
@@ -437,13 +464,19 @@ impl MedleyView {
                 self.open_warnings();
                 return EventResult::consumed();
             }
-            self.focus = Focus::Main;
+            self.focus = Focus::Window(self.main_id());
         }
 
         // A key goes to the focused window, then the active tab's, then the shell.
         let ids = [self.focused_id(), self.main_id()];
-        match self.send(if ids[0] == ids[1] { &ids[..1] } else { &ids }, event) {
+        // Esc the focused floating window has no use for closes it, before the tab beneath sees it.
+        let closing = *event == Event::Key(Key::Esc) && self.windows[ids[0]].placement == Placement::Floating;
+        match self.send(if ids[0] == ids[1] || closing { &ids[..1] } else { &ids }, event) {
             Some((_, outcome)) => self.apply(outcome),
+            None if closing => {
+                self.close_window(ids[0]);
+                self.vis_fps_cb()
+            }
             None => self.on_shell_key(event),
         }
     }

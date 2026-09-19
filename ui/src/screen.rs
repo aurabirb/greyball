@@ -1,5 +1,23 @@
 
-use crate::command::Pane;
+/// What a window shows; any number of windows may share one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    List(Screen),
+    Log,
+    Settings,
+    Vis,
+}
+
+impl Kind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::List(screen) => screen.label(),
+            Kind::Log => "Log",
+            Kind::Settings => "Settings",
+            Kind::Vis => "Vis",
+        }
+    }
+}
 
 /// A main-content screen, declared in tab-bar and number-key order.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -16,7 +34,7 @@ impl Screen {
     pub const ALL: [Screen; 5] =
         [Screen::NowPlaying, Screen::Playlists, Screen::Search, Screen::History, Screen::Queue];
 
-    /// The bare tab name, shared by the tab strip and the docked Queue/History pane title.
+    /// The bare name of the tab and of every list window of this kind.
     pub fn label(self) -> &'static str {
         match self {
             Screen::NowPlaying => "Now Playing",
@@ -47,14 +65,4 @@ impl Screen {
             _ => Screen::Search,
         }
     }
-
-    /// The screen whose list a docked pane shows, `None` for a non-list pane.
-    pub fn from_pane(pane: Pane) -> Option<Screen> {
-        match pane {
-            Pane::Queue => Some(Screen::Queue),
-            Pane::History => Some(Screen::History),
-            Pane::Log | Pane::Settings | Pane::Vis => None,
-        }
-    }
 }
-

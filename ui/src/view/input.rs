@@ -7,18 +7,17 @@ use cursive::views::Dialog;
 
 use core::{Command, CoreEvent, Dispatch, PlaylistId, Plugin, SourceId, TrackId};
 
-use crate::command::{self, Pane};
+use crate::command;
 use crate::keybindings::Action;
-use crate::screen::Screen;
+use crate::screen::{Kind, Screen};
 
-use super::MedleyView;
+use super::{Focus, MedleyView};
 use super::help::HelpModal;
 use super::modal::Modal;
 use super::notice::Notice;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
 use super::track_list::TrackList;
-use super::window::WindowId;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
@@ -75,13 +74,13 @@ impl MedleyView {
                 if parsed == command::Parsed::Help {
                     return self.handle_action(Action::OpenHelp);
                 }
-                // `Screen` mode: fullscreen, one at a time.
-                if let command::Parsed::TogglePane(pane) = parsed {
-                    self.toggle_pane(pane);
-                    return self.vis_fps_cb();
-                }
-                if command::Parsed::Vis == parsed {
-                    self.toggle_pane(Pane::Vis);
+                let toggled = match parsed {
+                    command::Parsed::TogglePane(kind) => Some(kind),
+                    command::Parsed::Vis => Some(Kind::Vis),
+                    _ => None,
+                };
+                if let Some(id) = toggled.and_then(|kind| self.windows.find(kind, false)) {
+                    self.toggle_window(id);
                     return self.vis_fps_cb();
                 }
                 if command::Parsed::History == parsed {
@@ -93,20 +92,24 @@ impl MedleyView {
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
                     // `side`/`stack` stay shared layout geometry regardless of `patch.pane`.
                     if let Some(side) = patch.side {
-                        self.panes.cfg.side = side;
+                        self.pane_cfg.side = side;
                     }
                     if let Some(stack) = patch.stack {
-                        self.panes.cfg.stack = stack;
+                        self.pane_cfg.stack = stack;
                     }
                     if let Some(mode) = patch.mode {
-                        match patch.pane {
-                            Some(pane) => {
-                                self.panes.mode_overrides.insert(pane, mode);
+                        let ids: Vec<_> = match patch.pane {
+                            Some(kind) => self.windows.find(kind, false).into_iter().collect(),
+                            None => {
+                                self.pane_cfg.mode = mode;
+                                self.windows.panes().collect()
                             }
-                            None => self.panes.cfg.mode = mode,
+                        };
+                        for id in ids {
+                            self.set_placement(id, mode.into());
                         }
                     }
-                    return EventResult::consumed();
+                    return self.vis_fps_cb();
                 }
                 if parsed == command::Parsed::OpenBrowse {
                     let session = self.session.clone();
@@ -208,6 +211,9 @@ impl MedleyView {
                     list.set_query(None);
                 }
                 self.screen = n;
+                if self.focus == Focus::Window(left) {
+                    self.focus = Focus::Window(self.main_id());
+                }
                 // Switching to Search focuses the input immediately, same as `/`.
                 if n == Screen::Search {
                     self.editing = Editing::Search;
@@ -234,9 +240,9 @@ impl MedleyView {
             }
             Action::ConfirmUnlike(id) => self.confirm_unlike(id),
             Action::CyclePaneLayout => {
-                let cur = (self.panes.cfg.side, self.panes.cfg.stack);
+                let cur = (self.pane_cfg.side, self.pane_cfg.stack);
                 let next = PANE_LAYOUT_CYCLE.iter().position(|&c| c == cur).map_or(0, |i| (i + 1) % PANE_LAYOUT_CYCLE.len());
-                (self.panes.cfg.side, self.panes.cfg.stack) = PANE_LAYOUT_CYCLE[next];
+                (self.pane_cfg.side, self.pane_cfg.stack) = PANE_LAYOUT_CYCLE[next];
                 EventResult::consumed()
             }
             Action::None => EventResult::Ignored,
@@ -307,7 +313,7 @@ impl MedleyView {
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
                 // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                if self.screen == Screen::Playlists && hotkey_target_selected {
+                if hotkey_target_selected {
                     return "  [`] set hotkey".to_string();
                 }
                 let help_key = help_key.map(String::from).unwrap_or_default();
@@ -330,7 +336,8 @@ impl MedleyView {
                     core::BrowseNode::Root => String::new(),
                 };
                 let result = self.handle_action(Action::Screen(Screen::Playlists));
-                if let Some(list) = self.windows[WindowId::Tab(Screen::Playlists)].list_mut() {
+                let id = self.main_id();
+                if let Some(list) = self.windows[id].list_mut() {
                     list.open_remote(sid, name, node);
                 }
                 result

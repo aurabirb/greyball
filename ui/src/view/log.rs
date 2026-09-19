@@ -6,9 +6,8 @@ use cursive::theme::ColorStyle;
 
 use core::LogBuf;
 
-use crate::command::Pane;
+use crate::screen::Kind;
 
-use super::panes::pane_title;
 use super::scroll::bound_offset;
 use super::text::{pad, wrap};
 
@@ -102,7 +101,7 @@ impl LogPane {
 
     /// Title row plus the wrapped lines, newest at the bottom.
     pub(super) fn draw(&self, printer: &Printer, focused: bool) {
-        let mut title = pane_title(Pane::Log).to_string();
+        let mut title = Kind::Log.label().to_string();
         if self.scroll > 0 {
             title.push_str(" (scrolled, PgDn to catch up)");
         }
