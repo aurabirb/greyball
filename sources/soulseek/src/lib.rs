@@ -17,6 +17,7 @@
 //! can be turned off entirely via `[soulseek] enabled = false`.
 
 mod client;
+mod docker;
 mod persist;
 mod plugin;
 mod source;

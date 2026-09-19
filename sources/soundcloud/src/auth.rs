@@ -4,7 +4,7 @@
 //! here — SoundCloud has largely stopped granting new API app
 //! registrations, so no client_id/secret pair to drive one exists. The
 //! token has to come from a user pasting it in (see
-//! `SetupKind::TextInput` in `sources_soundcloud::plugin`), so this module
+//! `Plugin::setup_prompt` in `sources_soundcloud::plugin`), so this module
 //! is just local read/write — collecting the string itself is entirely the
 //! caller's problem now, not this crate's.
 //!

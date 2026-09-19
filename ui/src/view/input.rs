@@ -23,8 +23,8 @@ pub(super) enum Editing {
     None,
     Search,
     CommandLine,
-    /// Collecting a `SetupKind::TextInput` value for the warnings-panel plugin selected.
-    PluginSetup(SourceId),
+    /// Collecting the answers to a warnings-panel plugin's `setup_prompt`s, one per Enter.
+    PluginSetup(SourceId, Vec<String>),
     /// Typing the media cache directory (Settings).
     CacheDir,
     /// Screen-local fuzzy filter (`/` on any track-list screen other than Search itself).
@@ -136,8 +136,14 @@ impl MedleyView {
                     Err(e) => self.notify(Notice::failed(e)),
                 }
             }
-            Editing::PluginSetup(id) => {
-                self.run_plugin_setup(id, Some(text));
+            Editing::PluginSetup(id, mut answers) => {
+                answers.push(text);
+                let more = self.with_session(|s| s.plugin(&id).and_then(|p| p.setup_prompt(&answers))).is_some();
+                if more {
+                    self.editing = Editing::PluginSetup(id, answers);
+                } else {
+                    self.run_plugin_setup(id, answers);
+                }
                 EventResult::consumed()
             }
             Editing::CacheDir => match self.with_session_mut(|s| s.set_media_cache_dir(&text)) {
@@ -367,7 +373,7 @@ impl MedleyView {
         match &self.editing {
             Editing::Search | Editing::Filter => Some(format!("/{}", self.buffer)),
             Editing::CommandLine => Some(format!(":{}", self.buffer)),
-            Editing::PluginSetup(_) => Some(format!("> {}", self.buffer)),
+            Editing::PluginSetup(..) => Some(format!("> {}", self.buffer)),
             Editing::CacheDir => Some(format!("cache dir> {}", self.buffer)),
             Editing::None => None,
         }
