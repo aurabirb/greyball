@@ -431,6 +431,10 @@ pub struct Session {
     /// The `Player` actually driving `now_playing`, set in `start_playback` —
     /// can differ from `Track::best_rendition`'s player after a fallback.
     now_playing_player: Option<Arc<dyn Player>>,
+    /// The `(source, uri)` handed to that player and the track it plays: a cache-fallback
+    /// rendition (`cache_rendition`) is not in the store's rendition index, so player events
+    /// resolve against this first.
+    now_playing_rendition: Option<(SourceId, String, TrackId)>,
     link_pick: Option<TrackId>,
 
     /// Playlist hotkeys (backtick-bound single keys, one target per key and
@@ -540,6 +544,7 @@ impl Session {
             warned: Revised::new(Warned { plugin_health: Vec::new(), failures: Vec::new() }),
             progress: (0, 0),
             now_playing_player: None,
+            now_playing_rendition: None,
             link_pick: None,
             hotkeys: Hotkeys::default(),
             view: ViewCache::default(),
@@ -986,15 +991,27 @@ impl Session {
         }
     }
 
+    /// The track a player event's rendition belongs to — what `start_playback` handed the player
+    /// (the only way a cache-fallback `local` rendition maps back), else the store's index.
+    fn event_track(&self, source: &SourceId, uri: &str) -> Result<Option<TrackId>> {
+        if let Some((s, u, id)) = &self.now_playing_rendition
+            && s == source
+            && u == uri
+        {
+            return Ok(Some(*id));
+        }
+        Ok(self.store.track_by_rendition(source, uri)?.map(|t| t.id))
+    }
+
     fn on_player_event(&mut self, pe: &PlayerEvent) -> Result<bool> {
         match pe {
             PlayerEvent::Loading { source, uri } | PlayerEvent::Playing { source, uri } => {
-                if let Some(t) = self.store.track_by_rendition(source, uri)? {
-                    self.shown.write().now_playing = Some(t.id);
+                if let Some(id) = self.event_track(source, uri)? {
+                    self.shown.write().now_playing = Some(id);
                     if matches!(pe, PlayerEvent::Playing { .. })
                         && let Some(scan) = &self.scan
                     {
-                        scan.prioritize(t.id);
+                        scan.prioritize(id);
                     }
                 }
                 if matches!(pe, PlayerEvent::Playing { .. }) {
@@ -1012,7 +1029,7 @@ impl Session {
                 position_ms,
                 duration_ms,
             } => {
-                self.progress = (*position_ms, self.known_duration(*duration_ms));
+                self.update_progress(*position_ms, *duration_ms);
                 Ok(true)
             }
             PlayerEvent::Paused => {
@@ -1026,25 +1043,24 @@ impl Session {
             PlayerEvent::Finished { source, uri } => {
                 // Only advance if the finished rendition maps to the track the
                 // queue currently considers playing (guards stale Finished).
-                let finished = self.store.track_by_rendition(source, uri)?.map(|t| t.id);
+                let finished = self.event_track(source, uri)?;
                 let current = self.queue.get_current();
                 if let Some(id) = finished
                     && Some(id) == current
                 {
-                    let drained_at = self.progress.0;
-                    if drained_at > 0 {
-                        let _ = self.catalog.patch(id, |t| {
-                            if t.duration_ms == 0 {
-                                t.duration_ms = drained_at;
-                            }
-                        });
+                    // A decoder that never reported a length: the drained position is it.
+                    let (drained_at, known) = self.progress;
+                    if known == 0 && drained_at > 0 {
+                        self.learn_duration(id, drained_at);
                     }
                     self.advance(false);
+                } else {
+                    log::warn!("player: ignoring Finished for {source} {uri}: not the current track");
                 }
                 Ok(true)
             }
             PlayerEvent::PreloadHint { source, uri } => {
-                let hinted = self.store.track_by_rendition(source, uri)?.map(|t| t.id);
+                let hinted = self.event_track(source, uri)?;
                 if hinted.is_some() && hinted == self.queue.get_current() {
                     self.preload_upcoming();
                 }
@@ -1055,8 +1071,9 @@ impl Session {
                 // Only the track the queue still considers current is worth a
                 // fallback retry — a stale failure for whatever played before
                 // the user already moved on must not hijack playback.
-                if let Some(t) = self.store.track_by_rendition(source, uri)?
-                    && self.queue.get_current() == Some(t.id)
+                if let Some(id) = self.event_track(source, uri)?
+                    && self.queue.get_current() == Some(id)
+                    && let Some(t) = self.store.get_track(id)?
                 {
                     self.failed_playback_sources.push(source.clone());
                     let retry = match Resolver::resolve_playback_excluding(&t, &self.failed_playback_sources) {
@@ -1103,11 +1120,11 @@ impl Session {
                 // the source announces it directly and this is the one place
                 // that reacts — same `prioritize` a plain `Playing` already
                 // does as a first (possibly premature) attempt.
-                if let Some(t) = self.store.track_by_rendition(source, uri)?
+                if let Some(id) = self.event_track(source, uri)?
                     && let Some(scan) = &self.scan
                 {
-                    log::debug!("app: materialized {source} {uri} -> prioritizing {:?}", t.id);
-                    scan.prioritize(t.id);
+                    log::debug!("app: materialized {source} {uri} -> prioritizing {id:?}");
+                    scan.prioritize(id);
                 }
                 Ok(true)
             }
@@ -1609,6 +1626,10 @@ impl Session {
         // a previous one — see `pending_cache_fallback`'s doc.
         self.pending_cache_fallback = None;
         self.failed_playback_sources.clear();
+        // `current` is what `Finished` and the shown duration are checked against, so every play path sets it.
+        if self.queue.get_current() != Some(id) {
+            self.queue.set_current(Some(id));
+        }
         let Some(track) = self.store.get_track(id).ok().flatten() else {
             return;
         };
@@ -1647,8 +1668,11 @@ impl Session {
         }
         p.load(r, false, 0, true);
         self.shown.write().now_playing = Some(track.id);
-        self.set_status(p.status(), None);
+        // The player's own status still describes the previous track until it processes the load.
+        self.shown.write().player_state = PlayerState::Playing;
+        self.progress = (0, track.duration_ms);
         self.now_playing_player = Some(p);
+        self.now_playing_rendition = Some((r.source.clone(), r.uri.clone(), track.id));
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
         }
@@ -1710,7 +1734,6 @@ impl Session {
     /// the old index-into-one-Vec shape did.
     fn play_now(&mut self, id: TrackId) {
         self.queue.remove_track(id);
-        self.queue.set_current(Some(id));
         self.play_track(id, true);
     }
 
@@ -1739,7 +1762,6 @@ impl Session {
             }
         }
         if let Some(id) = self.queue.pop_front() {
-            self.queue.set_current(Some(id));
             self.play_track(id, true);
             return;
         }
@@ -1869,18 +1891,36 @@ impl Session {
     /// `state` overrides a player whose own status lags the event that reported it.
     fn set_status(&mut self, status: PlayerStatus, state: Option<PlayerState>) {
         self.shown.write().player_state = state.unwrap_or(status.state);
-        self.progress = (status.position_ms, self.known_duration(status.duration_ms));
+        self.update_progress(status.position_ms, status.duration_ms);
     }
 
     /// The player's own duration, else the current track's (a decoder that couldn't tell reports 0).
-    fn known_duration(&self, player_ms: u32) -> u32 {
+    /// A player length for a track the catalog has none for is written back once (`progress.1`
+    /// stays 0 until then).
+    fn update_progress(&mut self, position_ms: u32, player_ms: u32) {
         if player_ms > 0 {
-            return player_ms;
+            if self.progress.1 == 0
+                && let Some(id) = self.queue.get_current()
+            {
+                self.learn_duration(id, player_ms);
+            }
+            self.progress = (position_ms, player_ms);
+            return;
         }
-        self.queue
+        let known = self
+            .queue
             .get_current()
             .and_then(|id| self.store.get_track(id).ok().flatten())
-            .map_or(0, |t| t.duration_ms)
+            .map_or(0, |t| t.duration_ms);
+        self.progress = (position_ms, known);
+    }
+
+    fn learn_duration(&self, id: TrackId, duration_ms: u32) {
+        let _ = self.catalog.patch(id, |t| {
+            if t.duration_ms == 0 {
+                t.duration_ms = duration_ms;
+            }
+        });
     }
 
     fn load_tracks(&self, ids: &[TrackId]) -> Vec<Track> {

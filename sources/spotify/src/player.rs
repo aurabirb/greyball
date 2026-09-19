@@ -410,8 +410,12 @@ struct Loaded {
 }
 
 impl Loaded {
+    fn is_track(&self, track_id: &SpotifyUri) -> bool {
+        track_id.to_uri().is_ok_and(|uri| uri == self.id.1)
+    }
+
     fn confirm(&mut self, track_id: &SpotifyUri) {
-        if self.pending_item.is_some() && track_id.to_uri().is_ok_and(|uri| uri == self.id.1) {
+        if self.pending_item.is_some() && self.is_track(track_id) {
             self.item = self.pending_item.take();
         }
     }
@@ -444,7 +448,7 @@ fn do_load(
                 context: "spotify".to_string(),
                 message: format!("cannot play {}", req.uri),
             });
-            bus.send(CoreEvent::Player(PlayerEvent::Finished {
+            bus.send(CoreEvent::Player(PlayerEvent::LoadFailed {
                 source: crate::source_id(),
                 uri: req.uri,
             }));
@@ -651,11 +655,30 @@ async fn run(
                         log::warn!("spotify: track unavailable over a dead session, retrying once reconnected");
                         held = held.or(cur.take().map(|c| c.req));
                     }
-                    Some(LsEvent::EndOfTrack { .. }) | Some(LsEvent::Unavailable { .. }) => {
+                    // Only the loaded track's own end counts: one that ended just as a `Load`
+                    // replaced it must not finish the newcomer.
+                    Some(LsEvent::EndOfTrack { track_id, .. })
+                        if cur.as_ref().is_some_and(|c| c.is_track(&track_id)) =>
+                    {
                         set_state(&snap, PlayerState::Stopped, 0);
-                        if let Some(c) = cur.take() {
-                            let (source, uri) = c.id;
-                            bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri }));
+                        let (source, uri) = cur.take().expect("guarded").id;
+                        bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri }));
+                    }
+                    Some(LsEvent::Unavailable { track_id, .. })
+                        if cur.as_ref().is_some_and(|c| c.is_track(&track_id)) =>
+                    {
+                        set_state(&snap, PlayerState::Stopped, 0);
+                        let (source, uri) = cur.take().expect("guarded").id;
+                        bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));
+                    }
+                    Some(LsEvent::PositionCorrection { position_ms, track_id, .. })
+                    | Some(LsEvent::Seeked { position_ms, track_id, .. }) => {
+                        if let Some(c) = cur.as_mut()
+                            && c.is_track(&track_id)
+                            && c.playback_start.is_some()
+                        {
+                            c.playback_start = Some(Instant::now() - Duration::from_millis(u64::from(position_ms)));
+                            snap.lock().unwrap_or_else(|e| e.into_inner()).position_ms = position_ms;
                         }
                     }
                     Some(_) => {}

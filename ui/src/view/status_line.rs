@@ -84,6 +84,11 @@ impl StatusLine {
         }
     }
 
+    /// Unknown length (nothing loaded yet, or a decoder that can't tell) reads as such, not 0:00.
+    fn total_time(&self) -> String {
+        if self.duration_ms == 0 { "?:??".to_string() } else { ms(self.duration_ms) }
+    }
+
     fn shuffle_tag(&self) -> &'static str {
         if self.shuffle { "[S]" } else { "[s]" }
     }
@@ -92,7 +97,7 @@ impl StatusLine {
         let gap = 2;
         let (prev_w, playpause_w, next_w) =
             (PREV_ICON.width(), player_action_glyph(&self.state).width(), NEXT_ICON.width());
-        let (curtime_w, totaltime_w) = (ms(self.position_ms).width(), ms(self.duration_ms).width());
+        let (curtime_w, totaltime_w) = (ms(self.position_ms).width(), self.total_time().width());
         let (bpm_w, shuffle_w) = (self.bpm_tag.width(), self.shuffle_tag().width());
 
         let prev = (0, prev_w);
@@ -117,7 +122,7 @@ impl StatusLine {
             pad(&scroll_title(&self.now_playing, name_w, marquee_offset), name_w),
             ms(self.position_ms),
             progress_bar(self.position_ms, self.duration_ms, BAR_WIDTH),
-            ms(self.duration_ms),
+            self.total_time(),
             self.bpm_tag,
             self.shuffle_tag(),
         );
