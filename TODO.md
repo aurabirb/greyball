@@ -173,6 +173,12 @@
   track list window (same paths as Search results). It must work in any placement — docked next to
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
+- [ ] Track list columns (`five_col` / the column layout in `ui/src/view/rows.rs`): make the source
+  column (`*sp`, `ht+lo`, …) narrower, and add a waveform column — a tiny per-row envelope of the
+  track's stored waveform (the WaveformPlugin's 400-bucket RMS scan metadata, drawn with the same
+  block glyphs as the tab-bar waveform in `ui/src/view/tab_bar.rs`), blank for tracks not scanned yet.
+  Hide the column when the window is too narrow to leave the title a sensible minimum, the way the
+  other optional columns drop out.
 - [ ] Make sure the local filter (`/`) works in every panel that shows a track list — Now Playing,
   Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
   every placement (tab, docked, floating), filtering that window's own list through the same
