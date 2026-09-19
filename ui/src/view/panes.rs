@@ -1,5 +1,5 @@
 use cursive::{Printer, Rect, Vec2};
-use cursive::event::{Event, EventResult, Key};
+use cursive::event::EventResult;
 use cursive::theme::ColorStyle;
 
 use core::{Axis, PaneLayoutConfig, Side};
@@ -145,12 +145,17 @@ pub(super) fn draw_float_frame(printer: &Printer, frame: Rect, focused: bool) {
 }
 
 impl MedleyView {
-    /// Closes `id` if it is open, handing focus back to where it was when `id` opened.
+    /// Closes `id` if it is open; its focus goes to what it opened over, else the next shown window down the stack, else the tab.
     pub(super) fn close_window(&mut self, id: WindowId) -> bool {
         let Some(i) = self.open.iter().position(|&(open, _)| open == id) else { return false };
         let (_, prior) = self.open.remove(i);
         if self.focus == Focus::Window(id) {
-            self.focus = prior;
+            let shown = self.visible();
+            let below = self.open[..i].iter().rev().map(|&(open, _)| Focus::Window(open));
+            self.focus = std::iter::once(prior)
+                .chain(below)
+                .find(|focus| matches!(focus, Focus::Window(id) if shown.contains(id)))
+                .unwrap_or(Focus::Window(self.main_id()));
         }
         true
     }
@@ -215,18 +220,6 @@ impl MedleyView {
         };
         draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, hint);
         window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
-    }
-
-    /// Keys go to the fullscreen window and no further; the mouse never reaches it.
-    pub(super) fn on_fullscreen_event(&mut self, id: WindowId, event: &Event) -> EventResult {
-        match event {
-            Event::Key(Key::Esc) => {
-                self.close_window(id);
-                self.vis_fps_cb()
-            }
-            Event::Mouse { .. } => EventResult::consumed(),
-            _ => self.send(&[id], event).map_or_else(EventResult::consumed, |(_, outcome)| self.apply(outcome)),
-        }
     }
 }
 

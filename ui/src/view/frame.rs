@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use core::{BuiltinAction, HotkeyTarget};
 
-use super::MedleyView;
+use super::{MedleyView, Placed};
 use super::status_line::{StatusCore, StatusLine, bpm_status_tag};
-use super::window::{WindowFrame, WindowId};
+use super::window::WindowFrame;
 
 /// The shell's own session-derived draw data, rebuilt only when `Session::revision` moves.
 pub(super) struct Chrome {
@@ -22,10 +22,10 @@ pub(super) struct Frame {
 
 impl MedleyView {
     /// The frame's one session lock; every memo under it rebuilds only on its own key's miss.
-    pub(super) fn frame(&self, visible: &[WindowId]) -> Frame {
+    pub(super) fn frame(&self, placed: &[Placed]) -> Frame {
         self.with_session(|s| {
             let ctx = self.ctx(s);
-            let windows = visible.iter().map(|&id| self.windows[id].frame(&ctx)).collect();
+            let windows = placed.iter().map(|placed| self.windows[placed.id].frame(&ctx)).collect();
             let chrome = self.chrome.get_or_build(s.revision(), || {
                 Arc::new(Chrome {
                     status: StatusCore::snapshot(s),

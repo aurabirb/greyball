@@ -79,7 +79,7 @@ impl MedleyView {
                     command::Parsed::Vis => Some(Kind::Vis),
                     _ => None,
                 };
-                if let Some(id) = toggled.and_then(|kind| self.windows.find(kind, false)) {
+                if let Some(id) = toggled.and_then(|kind| self.windows.command_pane(kind)) {
                     self.toggle_window(id);
                     return self.vis_fps_cb();
                 }
@@ -99,7 +99,7 @@ impl MedleyView {
                     }
                     if let Some(mode) = patch.mode {
                         let ids: Vec<_> = match patch.pane {
-                            Some(kind) => self.windows.find(kind, false).into_iter().collect(),
+                            Some(kind) => self.windows.command_pane(kind).into_iter().collect(),
                             None => {
                                 self.pane_cfg.mode = mode;
                                 self.windows.panes().collect()

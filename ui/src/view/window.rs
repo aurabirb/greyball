@@ -168,17 +168,22 @@ pub(super) struct Windows {
     items: Vec<Window>,
     log: Arc<LogBuf>,
     vis: Arc<Vis>,
+    tabs: Vec<(Screen, WindowId)>,
+    /// The one pane window each `:log`/`:settings`/`:vis`/`:queue`/`:history` command names.
+    command_panes: Vec<(Kind, WindowId)>,
 }
 
 impl Windows {
     /// A tab per screen and one window per `:panes` name, placed by `pane_mode`.
     pub(super) fn new(log: Arc<LogBuf>, vis: Arc<Vis>, pane_mode: PaneMode) -> Self {
-        let mut windows = Self { items: Vec::new(), log, vis };
+        let mut windows = Self { items: Vec::new(), log, vis, tabs: Vec::new(), command_panes: Vec::new() };
         for screen in Screen::ALL {
-            windows.add(Kind::List(screen), Placement::Tabbed);
+            let id = windows.add(Kind::List(screen), Placement::Tabbed);
+            windows.tabs.push((screen, id));
         }
         for kind in [Kind::Log, Kind::Settings, Kind::Vis, Kind::List(Screen::Queue), Kind::List(Screen::History)] {
-            windows.add(kind, pane_mode.into());
+            let id = windows.add(kind, pane_mode.into());
+            windows.command_panes.push((kind, id));
         }
         windows
     }
@@ -194,19 +199,18 @@ impl Windows {
         WindowId(self.items.len() - 1)
     }
 
-    /// Every window that is not a tab.
+    /// Every window a pane command names.
     pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + '_ {
-        (0..self.items.len()).map(WindowId).filter(|&id| self[id].placement != Placement::Tabbed)
+        self.command_panes.iter().map(|&(_, id)| id)
     }
 
     pub(super) fn tab(&self, screen: Screen) -> WindowId {
-        self.find(Kind::List(screen), true).expect("`Windows::new` builds a tab per screen")
+        self.tabs.iter().find(|&&(tab, _)| tab == screen).expect("`Windows::new` builds a tab per screen").1
     }
 
-    /// The first `kind` window that is (`tabbed`) or is not a tab.
-    pub(super) fn find(&self, kind: Kind, tabbed: bool) -> Option<WindowId> {
-        let is = |w: &Window| w.kind == kind && (w.placement == Placement::Tabbed) == tabbed;
-        self.items.iter().position(is).map(WindowId)
+    /// The window the pane command for `kind` opens.
+    pub(super) fn command_pane(&self, kind: Kind) -> Option<WindowId> {
+        self.command_panes.iter().find(|&&(pane, _)| pane == kind).map(|&(_, id)| id)
     }
 }
 
