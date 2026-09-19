@@ -62,7 +62,7 @@ pub(super) struct Row {
 pub(super) fn plain_row(main: impl Into<String>) -> Row {
     Row {
         tags: Cell::plain(""),
-        main: Cell::plain(main),
+        main: main_cell(" ", false, &main.into()),
         source: Cell::plain(""),
         duration: Cell::plain(""),
         hotkeys: Cell::plain(""),
@@ -80,6 +80,16 @@ enum Column {
     Duration,
 }
 
+/// The main column: the one-cell liked-marker slot in the tags/title gap, then the title.
+fn main_cell(mark: &str, italic: bool, title: &str) -> Cell {
+    Cell {
+        spans: vec![
+            Span { text: mark.to_string(), color: None, italic },
+            Span { text: title.to_string(), color: None, italic: false },
+        ],
+    }
+}
+
 /// The single per-column cell renderer — a pure function of the track plus the state handed in.
 fn render_cell(
     col: Column,
@@ -92,15 +102,12 @@ fn render_cell(
     match col {
         Column::Tags => {
             let color = visible.iter().find_map(|attr| t.attrs.get(attr).and_then(|v| tag_color(attr, v)));
-            let dot = if liked.is_some() { LIKED_MARK } else { " " };
-            Cell {
-                spans: vec![
-                    Span { text: dot.to_string(), color: None, italic: liked == Some(true) },
-                    Span { text: pad_right_aligned(&t.tags(visible), TAGS_COL_W - 1), color, italic: false },
-                ],
-            }
+            Cell::colored(pad_right_aligned(&t.tags(visible), TAGS_COL_W), color)
         }
-        Column::Main => Cell::plain(t.main()),
+        Column::Main => {
+            let dot = if liked.is_some() { LIKED_MARK } else { " " };
+            main_cell(dot, liked == Some(true), &t.main())
+        }
         Column::Source => Cell::plain(t.source(cached)),
         Column::Duration => Cell::plain(t.duration()),
         Column::Hotkeys => Cell {
@@ -237,13 +244,13 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
 fn column_layout(width: usize) -> [Option<(usize, usize, bool)>; 5] {
     let show_source = width + ROW_MARK_W + 1 >= SOURCE_MIN_LIST_W;
     let source_w = if show_source { SOURCE_COL_W } else { 0 };
-    let gaps = if show_source { 4 } else { 3 };
+    let gaps = if show_source { 3 } else { 2 };
     let fixed = TAGS_COL_W + source_w + DURATION_COL_W + HOTKEYS_COL_W + gaps;
     if width <= fixed {
         return [None; 5];
     }
     let main_w = width - fixed;
-    let main_start = TAGS_COL_W + 1;
+    let main_start = TAGS_COL_W;
     let hotkeys_start = main_start + main_w + 1;
     let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
     let duration_start = if show_source { source_start + SOURCE_COL_W + 1 } else { source_start };
@@ -262,15 +269,16 @@ const SOURCE_MIN_LIST_W: usize = 80;
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
 const ROW_MARK_W: usize = 2;
 
-/// Column a row's main text starts at — what the title row is indented by to line up with it.
+/// Column a row's title text starts at (after the liked-marker slot) — what the title row is indented by.
 fn main_col_start(content_w: usize) -> usize {
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
-    ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start)
+    ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start + LIKED_MARK_W)
 }
 
 /// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`);
-/// the tags column is the liked-mark slot plus three cells of tags.
-const TAGS_COL_W: usize = 4;
+const TAGS_COL_W: usize = 3;
+
+const LIKED_MARK_W: usize = 1;
 
 const LIKED_MARK: &str = "·";
 
