@@ -1,10 +1,8 @@
-use cursive::Vec2;
-use cursive::Rect;
+use cursive::{Rect, Vec2};
 
 use core::Side;
 
 use crate::screen::{Corner, Placement};
-
 
 use super::modal::Modal;
 use super::panes::BOTTOM_BAR_ROWS;

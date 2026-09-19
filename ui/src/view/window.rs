@@ -5,6 +5,8 @@ use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 
+use unicode_width::UnicodeWidthStr;
+
 use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 
 use crate::screen::{Corners, Home, Kind, Placement, Startup, WINDOWS};
@@ -13,8 +15,6 @@ use crate::vis::Vis;
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
-use unicode_width::UnicodeWidthStr;
-
 use super::text::{pad, pad_right_aligned};
 use super::settings::{SettingsEntry, SettingsPane};
 use super::track_list::{ListFrame, TrackList};
@@ -302,7 +302,7 @@ impl Windows {
             Kind::Help => Body::Help(HelpPane::default()),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
-                self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status: StatusRow::default() });
+        self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status: StatusRow::default() });
         self.placements.of.push(placement);
         WindowId(self.items.len() - 1)
     }

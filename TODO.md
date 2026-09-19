@@ -89,7 +89,7 @@
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
   (`ui/src/view/rows.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
   its last cell is never written, and `draw_list_body` paints no row text below `rows.len()`; tab
-  bar, hint line and status line may have the same off-by-one against `printer.size.x` — every row
+  bar and status line may have the same off-by-one against `printer.size.x` — every row
   `draw` owns should be written edge to edge each frame (or the view cleared first); (2) width
   disagreement with the terminal — `pad`/`truncate`/`five_col` measure with `unicode-width`, and a
   glyph macOS Terminal/iTerm renders wider or narrower than that (emoji, variation selectors, CJK,
@@ -259,8 +259,7 @@
   the five pane windows' placement for a default layout; merge it into `ui::screen::Placement` so the
   config takes `tabbed` too and there is one enum and one vocabulary.
 - [ ] A `Screen`-placed window keeps every key but Esc and the placement key, so a fullscreen list has
-  no `/`, `q`, `:` or number keys. Draw the hint row under a fullscreen window and let the shell keys
-  through, or decide that fullscreen stays modal.
+  no `/`, `q`, `:` or number keys. Let the shell keys through, or decide that fullscreen stays modal.
 - [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
   track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
   pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
@@ -330,10 +329,10 @@
   duration; settle the exact characters in a real-terminal screenshot), removing the ambiguous-width
   glyphs the stale-rightmost-column bug above suspects. The playback control glyphs (`PREV_ICON`/
   `player_action_glyph`/`NEXT_ICON`) stay as they are for now. When off, the row isn't reserved at all: `BOTTOM_BAR_ROWS` stops being a
-  constant 2 and becomes 1 (hint/command line only), feeding `split`, `required_size`/
+  constant 1 and becomes 0, feeding `split`, `required_size`/
   `MedleyView::placed`, `list_h()` and the mouse row math, so the list gains the row; nothing else may
-  assume the status row exists (check the warnings button, the row-count readout and the command
-  line, which sit on the hint row above it). Toggling applies immediately, without a restart.
+  assume the status row exists (check the warnings button, which draws through `MedleyView::slots`, and
+  the command line). Toggling applies immediately, without a restart.
 - [ ] Building on the status-row widget above: let it be placed either up top next to the
   tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
   leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the
