@@ -292,6 +292,8 @@ pub enum Dispatch {
     /// The queue's length after a push to its front.
     Wedged(usize),
     ShuffleSet(bool),
+    /// A local playlist gained (`added`) or lost the track.
+    MembershipSet { track: String, playlist: String, added: bool },
     ScanMode(crate::scan::ScanMode),
     /// A result the user asked for and should acknowledge.
     Report(String),
@@ -2093,9 +2095,16 @@ impl Session {
         match target {
             HotkeyTarget::Local(playlist) => {
                 let mut p = self.store.get_playlist(playlist)?.ok_or(Error::NotFound)?;
-                toggle_membership(&mut p.items, track);
+                let name = self.store.get_track(track)?.ok_or(Error::NotFound)?.display_name();
+                let added = !p.items.contains(&track);
+                if added {
+                    p.items.push(track);
+                } else {
+                    // Every occurrence: an import or a hand edit can duplicate a track.
+                    p.items.retain(|&t| t != track);
+                }
                 self.save_playlist(&p)?;
-                Ok(Dispatch::Ok)
+                Ok(Dispatch::MembershipSet { track: name, playlist: p.name, added })
             }
             HotkeyTarget::Remote(source, node) => Ok(self.toggle_remote_playlist_membership(track, source, node)),
             HotkeyTarget::Builtin(_) => Ok(Dispatch::Ok),
@@ -2106,10 +2115,10 @@ impl Session {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Dispatch::Ok;
         };
-        let Some(src) = self.sources.get(&source).cloned() else {
-            return Dispatch::Ok;
-        };
         let name = t.display_name();
+        let Some(src) = self.sources.get(&source).cloned() else {
+            return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: {source} isn't available"));
+        };
         if src.is_synthetic(&node) {
             // A toggle could silently unlike; Liked Songs only changes through Like/Unlike.
             let msg = format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use like/unlike");
@@ -2362,17 +2371,6 @@ fn load_history_file(path: &Path) -> Vec<(TrackId, DateTime<Utc>)> {
 fn refused(what: &str, msg: String) -> Dispatch {
     log::error!("{what}: {msg}");
     Dispatch::Refused(msg)
-}
-
-/// `Command::TogglePlaylistMembership`'s core logic, pulled out so it's
-/// unit-testable without a `Store`: adds `track` if absent, else removes
-/// every occurrence (a track could be duplicated by hand-editing/import).
-fn toggle_membership(items: &mut Vec<TrackId>, track: TrackId) {
-    if items.contains(&track) {
-        items.retain(|&t| t != track);
-    } else {
-        items.push(track);
-    }
 }
 
 fn build_entry(t: &Track, primary: String) -> M3uEntry {

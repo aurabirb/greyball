@@ -135,21 +135,6 @@
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
   hammered; surface the failure in the warnings list rather than silently showing nothing.
-- [ ] Decided behaviour fixes, one pass:
-  - The warnings modal opens only from a click on the `⚠ warnings (N)` button's own span, not from
-    anywhere on the hint row (hit-test with the same span `draw` uses for the button).
-  - The mouse wheel scrolls a fullscreen (`Screen`-placement) Log/Settings pane like a docked one.
-  - A tab's `/` filter persists across tab switches like a docked window's does; only Esc (or a new
-    list via `reset_for_new_list`) clears it. The list title keeps showing the active filter.
-  - Toggling a LOCAL playlist hotkey on a track flashes "Added to …"/"Removed from …" like the
-    remote path does (a `Dispatch` outcome formatted in `ui/src/view/notice.rs`).
-  - Pressing a hotkey bound to a remote playlist whose source isn't registered/logged in returns
-    `Dispatch::Refused("Can't toggle …: <source> isn't available")` instead of doing nothing.
-  - Keys handled by a modal (including the key that closes it) leave the shell's feedback slot
-    alone; only input that reaches the base view clears it — so an async result that lands while
-    Help/the picker/a fullscreen pane is open is still readable after closing it.
-  Settled, no work: Queue/History tab and pane stay two independent window instances (the mode
-  toggle moves the focused instance); `/` targets the focused list; rows stay keyed on `revision`.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the

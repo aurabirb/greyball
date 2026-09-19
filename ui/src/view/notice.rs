@@ -15,6 +15,10 @@ impl Notice {
             Dispatch::Queued(n) => Notice::Flash(format!("Queued: {n} tracks")),
             Dispatch::Wedged(n) => Notice::Flash(format!("Wedged: {n} tracks")),
             Dispatch::ShuffleSet(on) => Notice::Flash(format!("Shuffle: {}", if on { "on" } else { "off" })),
+            Dispatch::MembershipSet { track, playlist, added: true } => Notice::Flash(format!("Added {track:?} to {playlist:?}")),
+            Dispatch::MembershipSet { track, playlist, added: false } => {
+                Notice::Flash(format!("Removed {track:?} from {playlist:?}"))
+            }
             Dispatch::ScanMode(mode) => Notice::Flash(format!(
                 "Scan: {}",
                 match mode {
