@@ -129,9 +129,6 @@ impl MedleyView {
     pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> Self {
         let screen = startup_screen(initial_screen);
         let pane_cfg = session.lock().unwrap().cfg.panes;
-        if screen == PLAYLISTS {
-            session.lock().unwrap().ensure_remote_playlists();
-        }
         let vis = crate::vis::Vis::spawn(session.clone());
         Self {
             session,

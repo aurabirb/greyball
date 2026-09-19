@@ -1323,18 +1323,12 @@ impl Session {
         }
     }
 
-    /// A source's top-level playlist folders (e.g. Spotify's own playlists,
-    /// via `Source::browse(Root)`). Fetched once per session and cached —
-    /// safe to call on every redraw of the Playlists screen without
-    /// re-hitting the source's API each frame.
+    /// A source's top-level playlist folders that have landed so far — a pure read, never fetches.
     pub fn remote_playlists(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
         self.view.remote_playlists(source)
     }
 
-    /// Kicks a background folder fetch for every registered source — called
-    /// when the Playlists screen opens, at startup if it's the startup
-    /// screen, and on plugin (re)wiring, so a source that logs in later
-    /// still gets its playlists loaded without the user leaving the screen.
+    /// Kicks a single-flight background folder fetch for every registered source.
     pub fn ensure_remote_playlists(&self) {
         let ctx = self.remote_ctx();
         for source in self.source_ids() {

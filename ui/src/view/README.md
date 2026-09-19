@@ -61,9 +61,10 @@ A component is a plain struct owning only its own UI state — never the session
     frame-cache hit must not skip it, since the visible list/cursor it feeds `ScanDriver::follow_view`
     can change (focus, a docked pane's cursor) without anything `FrameKey` is keyed on changing.
   - `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
-    `Session::ensure_remote_playlists` from three points, never from the getter: the Playlists screen
-    opening, `CoreEvent::PluginStatusChanged` (a source logging in later still gets loaded), and
-    `MedleyView::new` when Playlists is the startup screen.
+    `Session::ensure_remote_playlists` from two points, never from the getter or the view: once at
+    startup (`app/src/main.rs`, so Help and playlist hotkeys can name remote playlists on any screen)
+    and on `CoreEvent::PluginStatusChanged` (a source logging in later still gets loaded). A landed
+    fetch, clean or failed, is final for the session unless the source reported a partial page.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
   runs on a spawned thread and reports through the `Bus`.

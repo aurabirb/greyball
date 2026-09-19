@@ -246,9 +246,7 @@ impl ViewCache {
         }
     }
 
-    /// A source's top-level playlist folders — a pure read of whatever's
-    /// landed so far; the fetch itself is kicked separately, from screen
-    /// switches/plugin (re)wiring/startup, see `Session::ensure_remote_playlists`.
+    /// A source's landed top-level playlist folders — a pure read; `ensure_remote_playlists` fetches.
     pub fn remote_playlists(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
         self.remote_playlists
             .lock()

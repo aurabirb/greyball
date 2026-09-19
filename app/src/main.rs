@@ -491,6 +491,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
     }
     session.set_hotkeys(load_hotkeys());
+    session.ensure_remote_playlists();
     let session = Arc::new(Mutex::new(session));
     spawn_plugin_health_timer(session.clone(), bus.clone());
 
