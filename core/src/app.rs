@@ -784,9 +784,8 @@ impl Session {
     }
 
     pub fn on_event(&mut self, ev: &CoreEvent) -> Result<bool> {
-        // `Progress` is per-tick playback position, deliberately excluded —
-        // the UI reads it live every frame instead of caching on `revision`.
-        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. })) {
+        // `Progress` is per-tick playback position, read live every frame; a background failure only moves `warnings_revision`.
+        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. }) | CoreEvent::BackgroundFailure { .. }) {
             self.touch();
         }
         match ev {
