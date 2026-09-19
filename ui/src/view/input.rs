@@ -264,8 +264,8 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                let (playlists, revision) = self.with_session(|s| (s.playlists(), s.revision()));
-                self.playlist_picker = Some(PlaylistPicker::new(id, playlists, revision));
+                let (playlists, list_revision) = self.with_session(|s| (s.playlists(), s.list_revision()));
+                self.playlist_picker = Some(PlaylistPicker::new(id, playlists, list_revision));
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {

@@ -19,10 +19,7 @@ pub(super) struct PaneFrame {
     pub(super) total: usize,
 }
 
-/// Every UI-side input that shapes `CachedFrame`, plus the session
-/// `revision` it was built under — equality here is the whole cache-hit
-/// test, so a new input that shapes the frame and isn't added here would
-/// silently serve a stale frame instead of a wrong one.
+/// Every UI-side input shaping `CachedFrame`, plus `revision` — miss one here and it serves a stale frame.
 #[derive(Clone, PartialEq)]
 pub(super) struct FrameKey {
     revision: u64,
@@ -40,9 +37,7 @@ pub(super) struct FrameKey {
     pane_cfg: core::PaneLayoutConfig,
 }
 
-/// Everything `draw`'s no-modal path reads from the session that's cheap to
-/// hold across frames — rebuilt only when `FrameKey` changes, shared out of
-/// the cache behind an `Rc` so a cache hit costs no cloning.
+/// Everything `draw`'s no-modal path reads, rebuilt only on a `FrameKey` miss and shared via `Rc`.
 pub(super) struct CachedFrame {
     pub(super) rows: Vec<Row>,
     pub(super) total: usize,
@@ -57,9 +52,7 @@ pub(super) struct CachedFrame {
     pub(super) hotkey_target_selected: bool,
 }
 
-/// One frame's worth of render data: `CachedFrame` (memoized on `FrameKey`,
-/// shared via `Rc`) plus this frame's live status line (position/duration/
-/// bpm tag — see `StatusCore`'s doc for why those aren't cached).
+/// One frame's render data: the memoized `CachedFrame` plus this frame's live status line.
 pub(super) struct Frame {
     pub(super) cached: Rc<CachedFrame>,
     pub(super) status: StatusLine,
@@ -90,8 +83,7 @@ impl MedleyView {
         }
     }
 
-    /// One session lock for a cache miss, one cheap lock (revision + this
-    /// frame's live data) for a hit.
+    /// One session lock on a miss; a hit only re-reads revision plus live per-tick data.
     pub(super) fn frame(
         &self,
         list_h: usize,

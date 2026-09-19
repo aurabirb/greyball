@@ -14,22 +14,20 @@ use super::text::pad;
 /// Row the help screen's content starts on (row 0 = title).
 const LIST_TOP: usize = 1;
 
-/// The help/shortcuts screen (`?` or `:help`); `lines` is rebuilt whenever
-/// `revision` drifts from `Session::revision` (e.g. a remote playlist name
-/// resolves while Help is open) — see `MedleyView::refresh_help`.
+/// The help/shortcuts screen (`?`/`:help`); rebuilt on a `list_revision` drift — see `refresh_help`.
 pub(super) struct HelpModal {
     scroll: usize,
     lines: Vec<String>,
-    revision: u64,
+    list_revision: u64,
 }
 
 impl HelpModal {
-    pub(super) fn new(lines: Vec<String>, revision: u64) -> Self {
-        Self { scroll: 0, lines, revision }
+    pub(super) fn new(lines: Vec<String>, list_revision: u64) -> Self {
+        Self { scroll: 0, lines, list_revision }
     }
 
-    pub(super) fn revision(&self) -> u64 {
-        self.revision
+    pub(super) fn list_revision(&self) -> u64 {
+        self.list_revision
     }
 
     /// Content rows between the title and the footer.
@@ -107,7 +105,7 @@ fn build_help_lines(
 }
 
 impl MedleyView {
-    /// The help screen's content lines plus the revision they were built under.
+    /// The help screen's content lines plus the `list_revision` they were built under.
     fn help_lines(&self) -> (Vec<String>, u64) {
         self.with_session(|s| {
             let plugin_commands = s.plugin_command_help();
@@ -130,23 +128,21 @@ impl MedleyView {
                 })
                 .collect::<Vec<_>>();
             let lines = build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands);
-            (lines, s.revision())
+            (lines, s.list_revision())
         })
     }
 
-    /// Opens the Help modal, built for the current revision.
+    /// Opens the Help modal, built for the current `list_revision`.
     pub(super) fn open_help(&mut self) {
-        let (lines, revision) = self.help_lines();
-        self.help = Some(HelpModal::new(lines, revision));
+        let (lines, list_revision) = self.help_lines();
+        self.help = Some(HelpModal::new(lines, list_revision));
     }
 
-    /// Rebuilds Help's content if the session moved on since it was (re)built
-    /// — called from `required_size`, never per-draw, so a stale Help stays
-    /// stale for at most one layout pass, never a whole frame's worth of locks.
-    pub(super) fn refresh_help(&mut self, revision: u64) {
-        if self.help.as_ref().is_some_and(|h| stale(h.revision(), revision)) {
-            let (lines, revision) = self.help_lines();
-            self.help = Some(HelpModal::new(lines, revision));
+    /// Rebuilds Help's content once `list_revision` drifts — called from `required_size`, never per-draw.
+    pub(super) fn refresh_help(&mut self, list_revision: u64) {
+        if self.help.as_ref().is_some_and(|h| stale(h.list_revision(), list_revision)) {
+            let (lines, list_revision) = self.help_lines();
+            self.help = Some(HelpModal::new(lines, list_revision));
         }
     }
 

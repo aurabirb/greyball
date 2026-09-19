@@ -12,12 +12,10 @@ use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
 
 use super::tab_bar::screen_name;
 
-/// What `MedleyView::follow_scan` last fed `ScanDriver::follow_view` under, to dedupe re-reports.
-/// Keyed on `revision` (not a list length) so a same-length content swap — e.g. a second search
-/// with a different set of same-count results — still re-reports instead of stalling on stale ids.
+/// What `follow_scan` last fed `ScanDriver::follow_view` under, keyed on `list_revision` to dedupe.
 #[derive(PartialEq, Eq)]
 pub(super) struct FollowKey {
-    revision: u64,
+    list_revision: u64,
     screen: usize,
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: Option<String>,
@@ -27,8 +25,8 @@ pub(super) struct FollowKey {
 impl MedleyView {
     /// Track ids visible on `screen`, in display order.
     pub(super) fn visible_track_ids(&self, s: &Session, screen: usize) -> Vec<TrackId> {
-        if let Some(tracks) = self.filtered_tracks(s, screen) {
-            return tracks.iter().map(|t| t.id).collect();
+        if let Some(ids) = self.filtered_ids(s, screen) {
+            return ids.to_vec();
         }
         match screen {
             NOW_PLAYING => s.playing_context_ids(),
@@ -148,13 +146,14 @@ impl MedleyView {
             _ => HashSet::new(),
         };
         let track_rows = |tracks| tracks_to_rows(s, tracks, &pending);
-        if let Some(matched) = self.filtered_tracks(s, screen) {
+        if let Some(matched) = self.filtered_ids(s, screen) {
             let query = self.active_filter().unwrap_or_default();
             if matched.is_empty() {
                 return vec![plain_row(format!("no matches for {query:?}"))];
             }
-            // Only the visible window is ever cloned out of the matched `Arc`.
-            return track_rows(matched.iter().skip(offset).take(limit).cloned().collect());
+            // Only the visible window is ever resolved, and fresh — never from a stale-attrs cache.
+            let window: Vec<TrackId> = matched.iter().skip(offset).take(limit).copied().collect();
+            return track_rows(s.tracks_for(&window));
         }
         match screen {
             NOW_PLAYING => {
@@ -213,7 +212,7 @@ impl MedleyView {
 
     /// The current screen's full list length.
     pub(super) fn list_len(&self, s: &Session, screen: usize) -> usize {
-        if let Some(len) = self.filtered_tracks(s, screen).map(|t| t.len()) {
+        if let Some(len) = self.filtered_ids(s, screen).map(|t| t.len()) {
             return len;
         }
         match screen {
@@ -297,7 +296,7 @@ impl MedleyView {
     pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: usize) {
         let highlighted = self.lists[screen].cursor;
         let key = FollowKey {
-            revision: s.revision(),
+            list_revision: s.list_revision(),
             screen,
             list_id: self.playlists.list_id(),
             query: self.active_filter().map(str::to_string),

@@ -346,17 +346,17 @@ impl View for MedleyView {
 
         // One shared lock for everything this layout pass needs from the
         // session, instead of `clamp_focus`/each `relayout_list` taking their own.
-        let (warn_count, statuses, main_len, pane_lens, revision) = self.with_session(|s| {
+        let (warn_count, statuses, main_len, pane_lens, list_revision) = self.with_session(|s| {
             let warn_count = s.plugin_warning_count();
             let statuses = want_statuses.then(|| s.plugin_statuses().to_vec());
             let main_len = self.list_len(s, self.screen);
             let pane_lens: Vec<usize> = list_screens.iter().map(|&scr| self.list_len(s, scr)).collect();
-            (warn_count, statuses, main_len, pane_lens, s.revision())
+            (warn_count, statuses, main_len, pane_lens, s.list_revision())
         });
 
         self.clamp_focus_given(warn_count);
-        self.refresh_help(revision);
-        self.refresh_playlist_picker(revision);
+        self.refresh_help(list_revision);
+        self.refresh_playlist_picker(list_revision, constraint);
         if let (Some(modal), Some(statuses)) = (&mut self.warnings, statuses) {
             modal.relayout(screen_size_changed, constraint, &statuses);
         }

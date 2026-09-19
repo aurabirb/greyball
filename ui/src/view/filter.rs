@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, PlaylistId, Session, SourceId};
+use core::{BrowseNode, PlaylistId, Session, SourceId, TrackId};
 
 use crate::row::RowItem;
 
@@ -20,18 +20,15 @@ pub(super) struct LocalFilter {
     cache: Mutex<Option<FilterCache>>,
 }
 
-/// The last `filtered_tracks` result, plus the key it was computed under.
-/// Keyed on `revision` rather than a source length, so a same-length content
-/// swap (e.g. a second search returning as many results as the first) still
-/// recomputes instead of serving stale matches.
+/// The last `filtered_ids` result; ids (not `Track`s) so a `TrackUpdated` attrs patch can't go stale in it.
 struct FilterCache {
-    revision: u64,
+    list_revision: u64,
     screen: usize,
     /// `PlaylistNav::list_id`, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
-    /// `Arc` so callers can hand out the whole matched list without cloning every `Track` in it.
-    result: Arc<[core::Track]>,
+    /// `Arc` so callers can hand out the whole matched list without cloning it.
+    result: Arc<[TrackId]>,
 }
 
 /// The `/`-filter's rank for one row against `query`, low-to-high, `None` if it doesn't match at all.
@@ -83,17 +80,17 @@ impl MedleyView {
         }
     }
 
-    /// `screen`'s tracks narrowed and ranked by the active local filter; `Arc` clone only.
-    pub(super) fn filtered_tracks(&self, s: &Session, screen: usize) -> Option<Arc<[core::Track]>> {
+    /// `screen`'s track ids narrowed/ranked by the local filter; callers resolve rows via `Session::tracks_for`.
+    pub(super) fn filtered_ids(&self, s: &Session, screen: usize) -> Option<Arc<[TrackId]>> {
         let query = self.active_filter()?;
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;
         }
-        let revision = s.revision();
+        let list_revision = s.list_revision();
         let list_id = self.playlists.list_id();
 
         if let Some(cache) = self.filter.cache.lock().unwrap().as_ref()
-            && cache.revision == revision
+            && cache.list_revision == list_revision
             && cache.screen == screen
             && cache.list_id == list_id
             && cache.query == query
@@ -102,15 +99,15 @@ impl MedleyView {
         }
 
         let tracks = self.all_tracks_for_screen(s, screen);
-        let mut ranked: Vec<(core::Track, FilterRank)> = tracks
+        let mut ranked: Vec<(TrackId, FilterRank)> = tracks
             .into_iter()
-            .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t, r)))
+            .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t.id, r)))
             .collect();
         ranked.sort_by(|a, b| a.1.cmp(&b.1));
-        let result: Arc<[core::Track]> = ranked.into_iter().map(|(t, _)| t).collect();
+        let result: Arc<[TrackId]> = ranked.into_iter().map(|(id, _)| id).collect();
 
         *self.filter.cache.lock().unwrap() = Some(FilterCache {
-            revision,
+            list_revision,
             screen,
             list_id,
             query: query.to_string(),

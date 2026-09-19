@@ -11,9 +11,7 @@ use super::transport::{NEXT_ICON, PREV_ICON, player_action_glyph};
 /// The scrubber's width.
 const BAR_WIDTH: usize = 24;
 
-/// The revision-cacheable part of the status line — everything but the
-/// per-tick position/duration and the bpm tag (which can change from a
-/// background scan with no event, so it's read live too — see `StatusLine::assemble`).
+/// The revision-cacheable part of the status line — position/duration/bpm are read live instead.
 pub(super) struct StatusCore {
     now_playing: String,
     now_playing_id: Option<TrackId>,
@@ -40,8 +38,7 @@ impl StatusCore {
     }
 }
 
-/// The player-status line's content for one frame: `StatusCore` (cached on
-/// `Session::revision`) plus this frame's live position/duration/bpm.
+/// One frame's status line: cached `StatusCore` plus live position/duration/bpm.
 pub(super) struct StatusLine {
     /// "artist - title" of the playing track.
     pub(super) now_playing: String,
@@ -157,9 +154,7 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     format!("{}{}", "━".repeat(filled), "╍".repeat(width - filled))
 }
 
-/// Bracketed BPM-scan status tag shown next to the status line's scrubber —
-/// read fresh every frame (not cached on revision): a scan's in-flight
-/// status can change with no bus event to bump it.
+/// Bracketed BPM-scan status tag next to the scrubber — read fresh every frame, never cached.
 pub(super) fn bpm_status_tag(s: &Session, now_playing: Option<TrackId>) -> String {
     let Some(scan) = s.scan.as_ref() else {
         return "[bd]".to_string();

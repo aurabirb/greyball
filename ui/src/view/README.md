@@ -34,13 +34,25 @@ A component is a plain struct owning only its own UI state — never the session
   (`Session::revision` plus every UI input that shapes it — screen, list identity, filter query,
   offsets/heights, open panes, `want_settings`, cursor, editing state) and shared out of the cache
   behind an `Arc`, plus this frame's live per-tick data (playback position/duration, the bpm tag) read
-  fresh every time. `Session::revision` is a monotonic counter bumped by every session mutation that
-  can change what the UI renders (see its doc in `core/src/app.rs`) — a cache hit takes one short lock
-  to read `revision` and the live data; a miss rebuilds `CachedFrame` under that same lock. Per-tick
-  data (playback position, the `Marquee` clock, Vis levels, the Log pane) is deliberately never keyed
-  on `revision` — it's read fresh or kept in its own small cache instead. Anything that changes
-  UI-visible session state and doesn't already go through `dispatch`/`on_event` must bump `revision`
-  itself, or the screen goes stale until the next keypress forces a cache miss.
+  fresh every time. Per-tick data (playback position, the `Marquee` clock, Vis levels, the Log pane)
+  is deliberately never keyed on `revision` — it's read fresh or kept in its own small cache instead.
+  Anything that changes UI-visible session state and doesn't already go through `dispatch`/`on_event`
+  must bump `revision` itself, or the screen goes stale until the next keypress forces a cache miss.
+  - `Session` actually keeps two counters (`core/src/app.rs`). `revision` bumps on every UI-visible
+    mutation, including a `TrackUpdated` attribute-only patch (BPM landing, a cache fill, …) and
+    per-`Player` event — the frame stays keyed on it, so a scanned attribute still shows up on a
+    visible row next frame. `list_revision` bumps only when list membership/order/identity or a
+    displayed name actually changes (search results, queue/history, playlist create/add/remove/
+    membership, remote pages landing, hotkey/playlist-name changes) and is left untouched by a plain
+    attribute patch. `LocalFilter::cache`, `MedleyView::follow_sig` (`follow_scan`'s dedupe key) and
+    the Help/playlist-picker snapshots below key on `list_revision` instead of `revision`, so a
+    library scan's flood of `TrackUpdated`s doesn't force a full re-filter/re-follow/rebuild per
+    track — only the frame (and thus the visible rows) redraws.
+  - A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
+    `TrackUpdated`/`Materialized` event, so every `MediaCache` write site (the player's streamed
+    downloads, a scan plugin's own fetch, Spotify's background materialize-to-cache copy) must send
+    one once the write actually lands — a cache fill with no matching event leaves the marker stale
+    until something unrelated bumps `revision`.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
   runs on a spawned thread and reports through the `Bus`.
@@ -73,15 +85,17 @@ and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling,
 session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
 deliberate exception; `HelpModal`'s lines and `PlaylistPicker`'s playlist list are snapshots too, but
 self-heal — see below). Interior mutability in `draw` is limited to clocks and caches (`Marquee`,
-`LocalFilter::cache` — keyed on `revision`, not a source length, so a same-length content swap still
-recomputes — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
-`MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`).
+`LocalFilter::cache` — keyed on `list_revision`, not a source length, so a same-length content swap
+still recomputes, and holding matched ids rather than `Track`s so a `TrackUpdated` attrs patch can't
+go stale inside it — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
+`MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`, keyed on `revision`).
 
 A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) stamps itself
-with the `revision` it was built at and is rebuilt from `MedleyView::required_size` — never per-draw —
-when `Session::revision` has since moved on (`scroll::stale`, `MedleyView::refresh_help`/
-`refresh_playlist_picker`); `PlaylistPicker::refresh` also re-clamps its cursor onto the same playlist
-id, or clamps it to the new length if that playlist is gone.
+with the `list_revision` it was built at and is rebuilt from `MedleyView::required_size` — never
+per-draw — when `Session::list_revision` has since moved on (`scroll::stale`,
+`MedleyView::refresh_help`/`refresh_playlist_picker`); `PlaylistPicker::refresh` also re-clamps its
+cursor onto the same playlist id (or the new length if that playlist is gone) and re-follows it into
+view.
 
 ## Adding a component
 

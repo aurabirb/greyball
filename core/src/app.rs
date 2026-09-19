@@ -451,18 +451,10 @@ pub struct Session {
     /// flow) just like `Plugin::setup`.
     plugin_command_result: Arc<Mutex<Option<String>>>,
 
-    /// Bumped on every call that may change anything the UI renders from
-    /// this session — the UI keys its derived-data caches on it instead of
-    /// rebuilding every frame. Invariant: every `pub fn(&mut self)` on
-    /// `Session` bumps it (first line), so forgetting one is a grep away
-    /// (`grep -n "pub fn .*&mut self" core/src/app.rs`) rather than a silent
-    /// gap. Off-thread mutations (scan writes, remote-playlist background
-    /// loads, membership toggles) go through `Catalog`/`ViewCache`, which
-    /// already report themselves on the `Bus` — `on_event` bumps once per
-    /// event regardless of which one, so those are covered too. Per-tick
-    /// data (playback position, marquee clock, Vis levels) is deliberately
-    /// NOT covered — the UI reads it fresh every frame instead.
+    /// Bumped by every UI-visible mutation — the frame cache keys on this; see `view/README.md`.
     revision: u64,
+    /// Bumped only by a list membership/order/identity/name change — see `view/README.md`.
+    list_revision: u64,
 }
 
 impl Session {
@@ -556,25 +548,38 @@ impl Session {
             plugin_health: Vec::new(),
             plugin_command_result: Arc::new(Mutex::new(None)),
             revision: 0,
+            list_revision: 0,
         };
         session.refresh_plugin_health();
         session
     }
 
-    /// Monotonic counter the UI keys its derived-data caches on — see the field doc.
+    /// Monotonic counter the UI's frame cache keys on — see the field doc.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Bumps `revision` — called first thing by every `&mut self` pub fn here.
+    /// Monotonic counter the UI's filter/follow/Help/picker caches key on — see the field doc.
+    pub fn list_revision(&self) -> u64 {
+        self.list_revision
+    }
+
+    /// Bumps `revision` — called by every mutation of UI-visible session state.
     fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Bumps `list_revision` (and `revision`, so a caller never has to remember both).
+    fn touch_lists(&mut self) {
+        self.list_revision = self.list_revision.wrapping_add(1);
+        self.touch();
     }
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
         self.touch();
         match cmd {
             Command::Search(text) => {
+                self.touch_lists();
                 self.view.clear_results();
                 self.search.run(SearchQuery::text(text));
                 Ok(Dispatch::Ok)
@@ -587,6 +592,7 @@ impl Session {
                 let Some(&id) = tracks.get(index) else {
                     return Ok(Dispatch::Ok);
                 };
+                self.touch_lists();
                 self.context = Some(PlaybackContext { tracks, index, remote, name, shuffle_bag: Vec::new() });
                 self.save_now_playing_context();
                 // `play_now` never touches the manual queue's contents
@@ -702,6 +708,7 @@ impl Session {
                 }
                 Some(first) => {
                     self.catalog.link(first, id)?;
+                    self.touch_lists();
                     Ok(Dispatch::Ok)
                 }
             },
@@ -717,6 +724,7 @@ impl Session {
                 for s in sources {
                     self.catalog.unlink(id, s)?;
                 }
+                self.touch_lists();
                 Ok(Dispatch::Ok)
             }
             Command::Like(track) => self.set_liked(track, true),
@@ -735,6 +743,7 @@ impl Session {
                 match source.resolve(&uri) {
                     Ok(hit) => {
                         let tid = self.catalog.ingest(hit)?;
+                        self.touch_lists();
                         self.push_result(tid);
                         Ok(Dispatch::Ok)
                     }
@@ -756,18 +765,25 @@ impl Session {
         }
         match ev {
             CoreEvent::SearchHit(tid) => {
+                self.touch_lists();
                 self.push_result(*tid);
                 Ok(true)
             }
             CoreEvent::TrackUpdated(id) => {
+                // Attribute-only: `revision` (bumped above) refreshes the frame; `list_revision` stays put.
                 self.refresh_cached_track(*id);
                 Ok(true)
             }
             CoreEvent::PlaylistsChanged => {
+                self.touch_lists();
                 self.invalidate_hotkey_memberships();
                 Ok(true)
             }
-            CoreEvent::QueueChanged | CoreEvent::SearchDone { .. } => Ok(true),
+            CoreEvent::QueueChanged => {
+                self.touch_lists();
+                Ok(true)
+            }
+            CoreEvent::SearchDone { .. } => Ok(true),
             CoreEvent::PlayRequested(id) => {
                 self.play_track(*id, true);
                 Ok(true)
@@ -911,7 +927,7 @@ impl Session {
     /// removing it — a `setup()` that only fixes, say, the player, mustn't
     /// silently drop an already-working source.
     pub fn apply_wiring(&mut self, id: &SourceId, wiring: crate::plugin::Wiring) {
-        self.touch();
+        self.touch_lists();
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
             self.prune_synthetic_hotkeys();
@@ -1406,7 +1422,7 @@ impl Session {
         key: char,
         target: HotkeyTarget,
     ) -> std::result::Result<Option<HotkeyTarget>, BindError> {
-        self.touch();
+        self.touch_lists();
         if let HotkeyTarget::Remote(source, node) = &target
             && self.is_synthetic_playlist(source, node)
         {
@@ -1419,14 +1435,14 @@ impl Session {
 
     /// Clears `target`'s hotkey, if it has one.
     pub fn unbind_hotkey(&mut self, target: &HotkeyTarget) {
-        self.touch();
+        self.touch_lists();
         self.hotkeys.retain(|_, p| p != target);
         self.invalidate_hotkey_memberships();
     }
 
     /// Replaces the whole hotkey map — `app` calls this once at startup with what `state.toml` persisted.
     pub fn set_hotkeys(&mut self, hotkeys: HashMap<char, HotkeyTarget>) {
-        self.touch();
+        self.touch_lists();
         self.hotkeys = hotkeys;
         self.prune_synthetic_hotkeys();
     }
@@ -1785,6 +1801,11 @@ impl Session {
         ids.iter()
             .filter_map(|id| self.store.get_track(*id).ok().flatten())
             .collect()
+    }
+
+    /// Resolves `ids` fresh — for a UI cache (e.g. the local filter) that holds ids, not `Track`s.
+    pub fn tracks_for(&self, ids: &[TrackId]) -> Vec<Track> {
+        self.load_tracks(ids)
     }
 
     /// Build an [`M3uDoc`] from the resolver, [`write_m3u`] it, and write the
