@@ -317,6 +317,9 @@ impl MedleyView {
                 {
                     return format!("  {hint}");
                 }
+                if let Some(hint) = self.screen_hint() {
+                    return format!("  {hint}");
+                }
                 let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
                 let keys_key = key(chrome.keys_key);
                 if assignable {
@@ -325,7 +328,8 @@ impl MedleyView {
                     let close = if closes { format!("   [{keys_key}] close") } else { String::new() };
                     return format!("  [key] assign   [Backspace] clear   [Enter] open{close}");
                 }
-                format!("  [{}] help   [{keys_key}] playlist keys", key(chrome.help_key))
+                let close = if self.fullscreen().is_some() { "   [Esc] close" } else { "" };
+                format!("  [{}] help   [{keys_key}] playlist keys{close}", key(chrome.help_key))
             }),
         }
     }

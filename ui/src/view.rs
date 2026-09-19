@@ -180,8 +180,9 @@ impl MedleyView {
         }
     }
 
+    /// The window the view is built around: the fullscreen one, else the active tab.
     fn main_id(&self) -> WindowId {
-        self.active
+        self.fullscreen().unwrap_or(self.active)
     }
 
     /// Each tab's name in tab order; a second tab of one kind is numbered.
@@ -211,20 +212,19 @@ impl MedleyView {
         matches!(self.windows.placement(id), Placement::Floating | Placement::Screen)
     }
 
-    /// The newest open fullscreen window, shown alone.
+    /// The newest open fullscreen window, which covers the tab, the docked windows and every fixed row but the hint row.
     fn fullscreen(&self) -> Option<WindowId> {
         self.open_in(Placement::Screen).last()
     }
 
-    /// Every shown window, bottom first: the active tab, the docked windows, the floating ones.
+    /// Every shown window, bottom first: the fullscreen window, else the active tab and the docked windows; then the floating ones.
     fn placed(&self) -> Vec<Placed> {
         let size = self.last_screen_size;
         let plain = |(id, rect)| Placed { id, rect, frame: rect };
-        if let Some(id) = self.fullscreen() {
-            return vec![plain((id, modal_body(Rect::from_size((0, 0), size), false)))];
-        }
-        let docked: Vec<WindowId> = self.open_in(Placement::Docked).collect();
-        let (main_rect, docked) = split(size, &docked, self.pane_cfg);
+        let (main_rect, docked) = match self.fullscreen() {
+            Some(_) => (modal_body(Rect::from_size((0, 0), size), false), Vec::new()),
+            None => split(size, &self.open_in(Placement::Docked).collect::<Vec<_>>(), self.pane_cfg),
+        };
         // A float's cascade slot is its rank by id among the open ones, so raising one moves none.
         let mut slots: Vec<WindowId> = self.open_in(Placement::Floating).collect();
         slots.sort();
@@ -317,7 +317,8 @@ impl MedleyView {
         let floats = shown.iter().position(|&id| self.windows.placement(id) == Placement::Floating).unwrap_or(shown.len());
         shown[floats..].sort();
         let mut order: Vec<Focus> = shown.into_iter().map(Focus::Window).collect();
-        if warn_count > 0 {
+        // A fullscreen window covers the button.
+        if warn_count > 0 && self.fullscreen().is_none() {
             order.push(Focus::Warnings);
         }
         order
@@ -385,15 +386,12 @@ impl View for MedleyView {
             self.draw_modal(modal, printer);
             return;
         }
-        if let Some(id) = self.fullscreen() {
-            self.draw_fullscreen(id, printer);
-            return;
-        }
-
         // One lock for the whole frame: every session-derived value comes out here, then rendering runs without it.
         let placed = self.placed();
         let frame = self.frame(&placed);
-        if self.open_in(Placement::Docked).next().is_some() {
+        // A fullscreen window leaves only the hint row, as its footer.
+        let covered = self.fullscreen().is_some();
+        if !covered && self.open_in(Placement::Docked).next().is_some() {
             draw_separator(self.pane_cfg.side, printer, self.windows[self.main_id()].rect());
         }
         for (placed, window_frame) in placed.iter().zip(&frame.windows) {
@@ -408,33 +406,40 @@ impl View for MedleyView {
 
         let chrome = &frame.chrome;
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
-        TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &frame.status.state }
-            .draw(printer, &frame.status.now_playing, marquee_offset);
+        if !covered {
+            TabBar { tabs: &self.tab_names(), active: self.active_tab(), state: &frame.status.state }
+                .draw(printer, &frame.status.now_playing, marquee_offset);
+        }
 
         // command / hint line (row above the status line).
         let main = match &frame.windows[0] {
             WindowFrame::List(list) => Some(list),
             _ => None,
         };
-        let bottom = printer.size.y.saturating_sub(2);
+        let bottom = printer.size.y.saturating_sub(if covered { 1 } else { 2 });
         let focused = placed.iter().position(|placed| placed.id == self.focused_id()).map(|i| &frame.windows[i]);
         let assignable = matches!(focused, Some(WindowFrame::List(list)) if list.assignable);
         let line = self.hint_line(assignable, chrome);
-        printer.print((0, bottom), &pad(&line, printer.size.x));
-
         // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let button = warnings_span(chrome.warn_count, printer.size.x);
+        let button = warnings_span(chrome.warn_count, printer.size.x).filter(|_| !covered);
         let warn_w = button.map_or(0, |(_, width)| width);
         let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
-        if let Some(list) = main.filter(|list| list.total > 0) {
-            let more = if list.loading { "+" } else { "" };
-            let readout = format!("{}/{}{more} {}", cursor.min(list.total - 1) + 1, list.total, list.unit);
-            let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
-            if x >= line.width() + 2 {
-                printer.print((x, bottom), &readout);
+        let style = if covered { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
+        printer.with_color(style, |printer| {
+            printer.print((0, bottom), &pad(&line, printer.size.x));
+            if let Some(list) = main.filter(|list| list.total > 0) {
+                let more = if list.loading { "+" } else { "" };
+                let readout = format!("{}/{}{more} {}", cursor.min(list.total - 1) + 1, list.total, list.unit);
+                let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
+                if x >= line.width() + 2 {
+                    printer.print((x, bottom), &readout);
+                }
             }
-        }
+        });
 
+        if covered {
+            return;
+        }
         let y = printer.size.y.saturating_sub(1);
         frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
@@ -549,7 +554,7 @@ impl MedleyView {
             };
         }
 
-        if fullscreen.is_none() && self.focus == Focus::Warnings {
+        if self.focus == Focus::Warnings {
             if !defocuses_warnings(event) {
                 self.open_warnings();
                 return EventResult::consumed();
@@ -557,15 +562,15 @@ impl MedleyView {
             self.focus = Focus::Window(self.main_id());
         }
 
-        // A key goes to the focused window, then the shell; a fullscreen window keeps every key.
-        let ids = [fullscreen.unwrap_or(self.focused_id()), self.main_id()];
-        // Esc a floating or fullscreen window has no use for closes it, before the tab beneath sees it.
+        // A key goes to the focused window, then the shell; nothing under a fullscreen window is ever offered one.
+        let ids = [self.focused_id(), self.main_id()];
+        // Esc a floating or fullscreen window has no use for closes it, before the window beneath sees it.
         let closing = *event == Event::Key(Key::Esc) && self.over_view(ids[0]);
-        // Only Enter and Esc go on to the active tab's list, and only past a window with no rows of its own to act on.
+        // Only Enter and Esc go on to the main list, and only past a window with no rows of its own to act on.
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()
             && !matches!(self.windows[ids[0]].kind, Kind::List(_) | Kind::Help);
-        let alone = fullscreen.is_some() || closing || ids[0] == ids[1] || !through;
+        let alone = closing || ids[0] == ids[1] || !through;
         // Tab and Shift-Tab are a window's own only over the view; in it they cycle focus.
         let cycles = matches!(event, Event::Key(Key::Tab) | Event::Shift(Key::Tab)) && !self.over_view(ids[0]);
         let sent = if cycles { None } else { self.send(if alone { &ids[..1] } else { &ids }, event) };
@@ -575,14 +580,14 @@ impl MedleyView {
                 self.close_window(ids[0]);
                 EventResult::consumed()
             }
-            // Of the shell's keys a fullscreen window leaves only the one that moves it on.
-            None if fullscreen.is_some() => {
+            // A fullscreen window that is no list keeps the shell's keys but those that move it on or open a window over it.
+            None if fullscreen == Some(ids[0]) && self.windows[ids[0]].list().is_none() => {
                 let action = match *event {
                     Event::Char(key) => self.with_session(|s| keybindings::map(key, None, &s.hotkeys().into_iter().collect())),
                     _ => Action::None,
                 };
                 match action {
-                    Action::CyclePlacement => self.handle_action(Action::CyclePlacement),
+                    Action::CyclePlacement | Action::TogglePlaylistKeys | Action::OpenHelp => self.handle_action(action),
                     _ => EventResult::consumed(),
                 }
             }

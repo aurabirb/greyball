@@ -7,7 +7,6 @@ use core::{Axis, PaneLayoutConfig, Session, Side};
 use crate::screen::{HELP, Kind, ListKind, PLAYLIST_KEYS, Placement};
 
 use super::{Focus, MedleyView};
-use super::modal::draw_modal_frame;
 use super::input::Editing;
 use super::track_list::TrackList;
 use super::window::WindowId;
@@ -167,8 +166,11 @@ impl MedleyView {
         true
     }
 
-    /// Makes `id` the active tab; focus follows only from the tab it replaces.
+    /// Makes `id` the active tab, closing what covers it; focus follows only from what it replaces.
     fn activate(&mut self, id: WindowId) {
+        while let Some(screen) = self.fullscreen() {
+            self.close_window(screen);
+        }
         if self.focus == Focus::Window(self.active) {
             self.focus = Focus::Window(id);
         }
@@ -207,6 +209,7 @@ impl MedleyView {
     pub(super) fn toggle_playlist_keys(&mut self) {
         let Some(id) = self.windows.named(PLAYLIST_KEYS) else { return };
         if self.active == id {
+            self.activate(id);
             self.focus = Focus::Window(id);
             return;
         }
@@ -274,7 +277,7 @@ impl MedleyView {
 
     /// `Action::CyclePlacement`: the focused window moves on one placement, and the hint row names it.
     pub(super) fn cycle_placement(&mut self) {
-        let id = self.fullscreen().unwrap_or(self.focused_id());
+        let id = self.focused_id();
         let at = Placement::CYCLE.iter().position(|&placement| placement == self.windows.placement(id)).unwrap_or(0);
         let next = Placement::CYCLE[(at + 1) % Placement::CYCLE.len()];
         if self.set_placement(id, next, true) {
@@ -315,17 +318,15 @@ impl MedleyView {
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }
 
-    /// The fullscreen window: footer hint below, the window itself above.
-    pub(super) fn draw_fullscreen(&self, id: WindowId, printer: &Printer) {
-        let window = &self.windows[id];
-        let hint = match window.kind {
-            Kind::Vis => "  [Esc] close",
-            Kind::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
-            _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
-        };
-        let flash = self.feedback.as_ref().or(window.hint(true).as_ref()).map(|text| format!("  {text}"));
-        draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, flash.as_deref().unwrap_or(hint));
-        window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
+    /// What the footer of a focused fullscreen window that keeps the keys says of them.
+    pub(super) fn screen_hint(&self) -> Option<&'static str> {
+        let id = self.fullscreen().filter(|&id| self.focus == Focus::Window(id))?;
+        match self.windows[id].kind {
+            Kind::Vis => Some("[Esc] close"),
+            Kind::Settings => Some("[Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle"),
+            Kind::Log => Some("[Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll"),
+            Kind::List(_) | Kind::Help => None,
+        }
     }
 }
 

@@ -219,9 +219,6 @@
     [long, short], give commands that lack a short form one (unique, mnemonic, 1–3 letters), drop
     all other aliases from parsing, and let the table enforce it (`names: [&str; 2]`). List the
     removed spellings in the commit message body.
-  - The placement key and backtick pass through a fullscreen (`screen`) window, and a fullscreen
-    LIST lets the shell keys through (`/`, `q`, `:`, digits, playlist hotkeys) with the hint row
-    drawn beneath it, instead of being modal.
   Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
   flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
   focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an
