@@ -199,58 +199,29 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Merge Help and the hotkey menu into one floating window opened by `?` (and `:help`/`:keys`)
-  — the help screen doubling as the hotkey editor. It replaces both fullscreen modals: delete
-  `HelpModal`/`help_lines`/`build_help_lines` (`ui/src/view/help.rs`) and `HotkeyMenu`/`menu_rows`
-  (`ui/src/view/hotkeys.rs`) with their `Modal` variants rather than keeping either alongside. Floating = `Placement::Floating` (`ui/src/view/README.md`); reuse it.
-  Content: one table of items, each `{command, description, shortcut}`, grouped into titled
-  sections in this order: `:commands` first (`command::HELP` plus `Session::plugin_command_help`),
-  then movement/navigation, then player controls, then everything else (panes/windows, playlist
-  actions, playlist hotkeys, …). One source of truth, no duplication: today the same facts live in
-  `command::HELP` (name, description), `keybindings::RAW_KEYS` (key, description),
-  `BuiltinAction::label`/`default_key` (`core/src/app.rs`) and the alias table in
-  `command::parse` — fold them into one item table (section, command spelling with aliases and
-  args, description, the `BuiltinAction` or other bindable target if any) that this window, command
-  parsing/alias help and key dispatch all read; an action that is both a `:command` and a key (e.g.
-  `:open`/`o`, `:newplaylist`/`+`) is one row with both columns filled, never two rows.
-  Layout: three column lanes — command, description, shortcut (right-aligned at the box's right
-  edge, showing the live effective key, not the default). If no item in a section has a command,
-  that section draws without the command lane and the description takes its width. Descriptions
-  may be long or multi-line (first line a short summary, further lines detail); they wrap inside
-  the description lane only, never under the command or shortcut lanes:
-  ```
-  [ Commands ]
-
-  :open/:o [file/url]     open item                                              o
-                          longer explanation wrapped to the description lane,
-                          continuing on as many lines as it needs.
-
-  :newplaylist/:n <name>  create a new playlist                                  +
-                          more detail here.
-  ```
-  Precompute the layout once per (content, width), not per frame: lane widths per section from the
-  widest command/shortcut cell, then each item's wrapped description and so its height in rows,
-  with a uniform blank line between items and uniform spacing around section titles; cache the
-  resulting flat line list plus each item's first-line index and rebuild only on resize or a
-  hotkeys/playlists/plugin-commands change. `draw` and scrolling only slice that cache and never
-  take the session lock per frame or per scroll event — this is also the fix for the Help
-  scroll-lockup bug above; delete that bug entry when this ships (keep its "confirm which path
-  issued the skip" part as its own bug if still unexplained).
-  Navigation: the cursor moves item to item — only an item's first line is selectable/highlighted,
-  its continuation lines scroll with it but are never a cursor stop; Up/Down/j/k, PgUp/PgDn,
-  Home/End and the wheel as in the current menus; Tab/Shift-Tab jump to the next/previous section
-  (move the cursor to its first item and scroll its title to the top of the box — just a scroll to
-  position, no tab strip); Esc or `?` closes.
-  Rebinding: Enter on a row starts the existing one-keystroke capture (`capture_event` →
-  `MedleyView::bind_hotkey`), Backspace clears that row's binding back to its default/none
-  (`MedleyView::clear_hotkey`), with bind/steal/refusal feedback on the box's bottom hint line as
-  today. Almost every row should be bindable: rows backed by a `BuiltinAction` already are; give
-  `:commands` that take no argument and the actions now hard-coded as raw keys in `on_event` a
-  bindable target too (extending `BuiltinAction`/`HotkeyTarget`, and shrinking `keybindings::fixed`,
-  the keys no hotkey can take, by each one that becomes bindable). Rows that can't sensibly be bound
-  (commands needing an argument, fixed keys like Esc/Enter/arrows) show their key but refuse Enter
-  with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
-  `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
+- [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
+  (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
+  the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
+  `unlink`, and `open` without its optional argument) — their rows answer Enter with "this command
+  has no key" — and the actions `keybindings::fixed` hard-wires that are not structural: Space
+  play/pause and `x` export. Give each a `core::BuiltinAction` (ids are additions to `state.toml`'s
+  `builtin:<id>`), which means `BuiltinAction::ALL`'s default key becomes `Option<char>` (a command
+  row starts with none; `effective_target_at`, `builtin_at`, `effective_hotkey` and `default_key`
+  follow), `keybindings::map` runs the action, and `command::parse` can return the item's built-in for
+  a no-argument command instead of one arm per word. Remove each from `fixed` as it becomes a built-in
+  so `keybindings::taken` keeps knowing every taken key. Undecided: `>`/`<` and the arrows seek are
+  second keys for next/previous/seek, which one-key-per-target `Hotkeys` cannot hold — drop them, keep
+  them fixed (today; the rows say so in their detail line), or let a target hold several keys. A new
+  default key can collide with a persisted playlist hotkey, so land the `set_hotkeys` validation (Bugs:
+  "A playlist hotkey persisted in `state.toml` can shadow a built-in key") with or before it.
+- [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
+  (`:add-to-playlist/:add/:atp`, under about 26 columns: a float on a 60-column terminal, a side dock)
+  the cluster is cut mid-word. Let the command cell break after a `/`. In a very wide rect the command
+  lane grows to two fifths of the width for `:panes`' long argument list and pushes every description
+  right; consider a tighter cap.
+- [ ] With Help as the active tab nothing but a tab digit, `?` or the mouse leaves it: it consumes Tab
+  for its sections and only a float or `screen` window closes on Esc. Decide whether a tabbed or docked
+  Help should give Tab back to the shell's focus cycle.
 - [ ] `core::config::PaneMode` (`panes.mode` in `config.toml`: `screen`, `embedded`, `float`) only seeds
   the five pane windows' placement for a default layout; merge it into `ui::screen::Placement` so the
   config takes `tabbed` too and there is one enum and one vocabulary.
@@ -347,8 +318,8 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item under Features): (1) the merged Help/hotkey
-  window; (2) the status-row widget, the title scrubber. The
+- [ ] UI architecture work order (each step is an item under Features): (1) the status-row widget,
+  the title scrubber; (2) the remaining bindable Help rows. The
   `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels lock and a `split` axis
   helper get no pass of their own — fold them in when those files are touched.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use

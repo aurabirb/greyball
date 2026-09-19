@@ -25,20 +25,6 @@ fn strip_variation_selectors(s: &str) -> String {
     s.chars().filter(|&c| c != '\u{FE0E}' && c != '\u{FE0F}').collect()
 }
 
-/// `truncate`, but marks a cut with a trailing `…` instead of silently dropping the rest.
-pub(super) fn truncate_ellipsis(s: &str, width: usize) -> String {
-    let s = strip_variation_selectors(s);
-    if s.width() <= width {
-        return s;
-    }
-    if width == 0 {
-        return String::new();
-    }
-    let mut out = truncate(&s, width - 1);
-    out.push('…');
-    out
-}
-
 /// Truncates `s` to at most `width` terminal display columns (not chars).
 pub(super) fn truncate(s: &str, width: usize) -> String {
     let mut out = String::new();

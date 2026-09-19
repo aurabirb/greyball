@@ -5,6 +5,7 @@ pub enum Kind {
     Log,
     Settings,
     Vis,
+    Help,
 }
 
 impl Kind {
@@ -14,6 +15,7 @@ impl Kind {
             Kind::Log => "Log",
             Kind::Settings => "Settings",
             Kind::Vis => "Vis",
+            Kind::Help => "Help",
         }
     }
 }
@@ -104,8 +106,11 @@ const fn startup(name: &'static str, kind: Kind, home: Home) -> Startup {
 /// The window the `TogglePlaylistKeys` key opens over whatever is shown.
 pub const PLAYLIST_KEYS: &str = "playlist-keys";
 
+/// The window the `OpenHelp` key, `:help` and `:keys` open over whatever is shown.
+pub const HELP: &str = "help";
+
 /// Every window startup builds, tabs first in tab order; Queue, History and Playlists each have two instances.
-pub const WINDOWS: [Startup; 11] = [
+pub const WINDOWS: [Startup; 12] = [
     startup("now-playing", Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
@@ -117,6 +122,7 @@ pub const WINDOWS: [Startup; 11] = [
     startup("queue", Kind::List(ListKind::Queue), Home::Pane),
     startup("history", Kind::List(ListKind::History), Home::Pane),
     Startup { keyed_first: true, ..startup(PLAYLIST_KEYS, Kind::List(ListKind::Playlists), Home::Float) },
+    startup(HELP, Kind::Help, Home::Float),
 ];
 
 /// The window `Config::initial_screen` names; anything unrecognized starts on Search.

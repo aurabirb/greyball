@@ -10,14 +10,14 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - A `Window` (`window.rs`) is one instance of a component plus the `Rect` the shell last laid it out
   in — the one rect `draw`, hit-testing and `relayout` share. Its body is a `TrackList`
   (`track_list.rs`, every list kind: Now Playing, Playlists, Search, History, Queue), the `LogPane`,
-  the `SettingsPane` or `Vis`.
+  the `SettingsPane`, `Vis` or the `HelpPane`.
 - `Windows` is an open store: `WindowId` is an opaque index that encodes neither kind nor placement,
   and `Windows::add(startup, placement)` builds an instance of any `Kind` (`../screen.rs`: `List(ListKind)`,
-  `Log`, `Settings`, `Vis`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
+  `Log`, `Settings`, `Vis`, `Help`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
   `ListKind`s). Startup adds one window per entry of `screen::WINDOWS`, which gives each the name
   `:panes`, `:window` and `state.toml` know it by: the five tabs (`now-playing`, `playlists`, `search`,
-  `history-tab`, `queue-tab`), the five panes (`log`, `settings`, `vis`, `queue`, `history`) and
-  `playlist-keys`. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
+  `history-tab`, `queue-tab`), the five panes (`log`, `settings`, `vis`, `queue`, `history`) and the two
+  that start floating and closed, `playlist-keys` and `help`. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
   placed by `Config::panes`, or floating) and carries its instance settings. The Queue
   tab and the Queue pane are two instances of one kind, each with its own cursor, scroll window, filter
   and memos; nothing may assume a window is the only instance of its kind, that it is a list, that it
@@ -43,13 +43,38 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `playlist-keys` is a second Playlists window, the key overview meant to be opened mid-work: it
   starts floating and closed, and differs from the Playlists tab by one instance setting,
   `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order).
-  The `TogglePlaylistKeys` key (backtick) runs `toggle_playlist_keys`: close it when it has focus,
-  else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
+  The `TogglePlaylistKeys` key (backtick) runs `toggle_playlist_keys`: as the active tab it only takes
+  focus; else close it when it has focus, else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
   came from (open in the active list, else in any other window, else `Session::playing_playlist`),
   else on the playlist it was left in, else where it was. The hint row reads the focused window's
   frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open
   hint, plus the closing key when that window is the open `playlist-keys`. Everything else — placement, `:window`,
   `M`, Esc closing a focused float, persistence — is what any window has.
+- `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`),
+  `:help` and its alias `:keys` run `toggle_help` (close it when it has focus, else `show` and focus).
+  Its content is `../items.rs`, the one table where a `:`-command's spellings, arguments and
+  description and a key's description are written: `command::parse` resolves aliases and builds
+  usage errors from it, `items::describe` names a built-in in bind feedback, and a built-in's default
+  key stays in `core::BuiltinAction::ALL`. Structural keys (`keybindings::fixed`, `Nav`, the shell's Tab
+  and arrows) are matched as events in code; their rows only describe them. Sections come in
+  `Section::ALL` order — Commands (plugin commands appended), Movement, Player, Tracks and playlists,
+  Windows — then the playlists that have a key. `build` lays a section out in three lanes (command,
+  description, shortcut right-aligned showing the live effective key), lane widths from the section's
+  widest cells, the command lane capped at two fifths and dropped when no item has a command; command
+  and description wrap inside their own lanes, with one blank line between items. The result, a flat
+  line list plus each row's `first..end` line span and each section's title line, is cached in
+  `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll
+  offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
+  whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
+  re-wraps). A focused Help window consumes Tab and Shift-Tab to jump sections (title to the top), so
+  focus leaves it by `?`, Esc on a float, the mouse or a tab digit. Enter on a row with a bindable
+  target stores that target and its name in `capturing`, so what the next character binds is what the
+  prompt named whatever rebuilt meanwhile; every key is consumed while capturing, a non-character
+  cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
+  Backspace is `Unbind`: a playlist loses its key, a built-in returns to its default, which
+  `clear_hotkey` refuses while another binding holds that default. Other rows answer Enter with a
+  `Flash` saying why they have no key. `Window::hint` puts the window's keys, or the capture prompt, on
+  the hint row (the footer of a `Screen` placement) while it has focus.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`
   one's `float_body` inside its `float_rect` frame — three fifths of the area between the fixed rows,
@@ -75,8 +100,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
     window is drawn unfocused: only docked and floating windows show the `[title]` focus marker.
   - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
-    `ToggleSetting(row)`, `Bind`/`Unbind`): a mouse event outside its rect and any key it has no use for is `Ignored`,
+    `ToggleSetting(row)`, `Bind`/`Unbind`, `Flash(text)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
     so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
+  - `blur()` when the window closes or another takes focus, and `hint() -> Option<String>`, the hint
+    row's text while it has focus; only Help has state to drop or keys of its own to name.
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
@@ -84,18 +111,18 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   function that orders a Playlists window's top-level rows; the cursor, a click, Enter, the row
   builder and a bound key all index it. `select` names the playlist the next `relayout` puts the
   cursor on, which is how the cursor stays on a playlist whose row a bind just re-sorted, lands on
-  a playlist `:newplaylist` made while the window was the active list (`Dispatch::PlaylistCreated`),
+  a playlist `:newplaylist` made in every Playlists window at its top level (`Dispatch::PlaylistCreated`),
   and returns to the playlist Esc backed out of. `reset_for_new_list` is the only way
   `Open` changes and `set_query` the only way the filter does; both reset the selection and bump
   `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
   (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
   double-click plays the row as `Command::PlayContext`, or opens the top-level playlist under the
   cursor; Esc clears the filter, then backs out of an open playlist. On a top-level playlist row of
-  any Playlists window a key that `keybindings::bindable` accepts — a single character that is not
-  `keybindings::fixed` (the one table `map` reads its structural keys from) and not a built-in's
-  effective key — is `Bind(target, key)`, and Backspace is `Unbind(target)`; every other key stays
-  `Ignored`, so it still does what it does everywhere. `MedleyView::bind_hotkey` refuses a fixed or
-  `Nav` key for any target, the `:keys` menu's included. Inside an open playlist a playlist key
+  any Playlists window a character `keybindings::taken` has no objection to — not
+  `keybindings::fixed` (the one table `map` reads its structural keys from), not a `Nav` key and not a
+  built-in's effective key — is `Bind(target, key)`, and Backspace on a row with a key is
+  `Unbind(target)`; every other key stays `Ignored`, so it still does what it does everywhere.
+  `MedleyView::bind_hotkey` asks the same `taken` for any target, a Help row's capture included. Inside an open playlist a playlist key
   toggles the selected track's membership as in any list. A filter stays with its window
   across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 
@@ -116,7 +143,8 @@ build closure against its key.
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
-| `HelpModal::built` | hotkeys, playlists and remote-playlists generations | hotkeys, playlist names (plugin commands are fixed at startup) |
+| `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
+| `HelpPane::fitted` | the `built` key, body height | — (gates re-following the cursor after a re-wrap or resize) |
 | `PlaylistPicker::built` | playlists generation | the playlists |
 
 `TrackList::list_gen` is the generation of the list on screen. Generations are held by the type that
@@ -182,10 +210,10 @@ on `revision` — it is read fresh or kept in its own small cache.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
   is shown — `Flash` on the hint row or a `Popup` dialog — and `MedleyView::notify` the one way to
   show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
-  mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included,
-  and the hotkey menu, whose footer shows the same slot. Any other modal's keys, its closing one
-  included, leave it, so a result that lands behind Help or the picker is readable after Esc. A window or modal never writes
-  it: it returns an outcome and the shell notifies.
+  mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included.
+  A modal's keys, its closing one included, leave it, so a result that lands behind the picker is
+  readable after Esc. A window or modal never writes it: it returns an outcome (a window's own
+  message is `WindowOutcome::Flash`) and the shell notifies.
 - Inbound: `app/src/main.rs` loops `siv.step()` → `bus.drain()` → `Session::on_event` →
   `ui::deliver(events)` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
   `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by
@@ -196,14 +224,14 @@ on `revision` — it is read fresh or kept in its own small cache.
 
 ## Routing in `MedleyView::route`
 
-1. Clear the `feedback` slot (not on mouse hold/release, nor under a modal other than the hotkey menu).
+1. Clear the `feedback` slot (not on mouse hold/release, nor under a modal).
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
-   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `Help`), so there is
+   `Option<Modal>` (`Warnings`, `Picker`), so there is
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
-   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`).
+   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`).
 4. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom-2 → the warnings modal, inside `warnings_span` only (the span `draw` puts the button in);
    bottom → `StatusLine::click`.
 5. Any other mouse event goes to the topmost shown window whose `Placed::frame` contains it. The
@@ -211,12 +239,14 @@ on `revision` — it is read fresh or kept in its own small cache.
    border or title row raises it; a click outside a floating window reaches what is under it and
    closes nothing.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
-   `send` offers the key to the focused window. Enter and Esc it ignores go on to the active tab
-   when that is a list (play from, or back out of, the main list while a Log has focus); no other key
+   `send` offers the key to the focused window. Enter and Esc a window that is no list ignores go on to
+   the active tab when that is a list (play from, or back out of, the main list while a Log has focus);
+   a focused list keeps its own Enter and Esc even with nothing to act on; no other key
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
    user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
    it when ignored, and any key under a `Screen` window goes no further but for the `CyclePlacement`
-   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, and
+   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()` unless a focused Help window
+   took it for its sections, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused
@@ -224,11 +254,10 @@ on `revision` — it is read fresh or kept in its own small cache.
 
 ## Modals
 
-A modal is constructed with its data at the open site (`HelpModal::new(s)`, `PlaylistPicker::new(id,
-s)`): cursive drains every buffered input event through `on_event` before any layout pass, so
+A modal is constructed with its data at the open site (`PlaylistPicker::new(id, s)`): cursive drains every buffered input event through `on_event` before any layout pass, so
 type-ahead must never meet an empty modal. One that snapshots session data also carries a `built`
 stamp and re-reads in place from `relayout_modal` — never `draw` — only when the stamp moves while it
-is open: Help keeps its scroll, the picker keeps its cursor on the same playlist. `draw_modal_frame(
+is open: the picker keeps its cursor on the same playlist. `draw_modal_frame(
 printer, rect, title, footer)` draws the title bar and footer hint and returns the body printer;
 `modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`.
 

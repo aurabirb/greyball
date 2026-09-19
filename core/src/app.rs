@@ -140,29 +140,6 @@ impl BuiltinAction {
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.iter().map(|&(a, _)| a).find(|a| a.id() == id)
     }
-
-    /// Display name for the `:keys`/hotkey-menu row.
-    pub fn label(self) -> &'static str {
-        match self {
-            BuiltinAction::Next => "next track",
-            BuiltinAction::Previous => "previous track",
-            BuiltinAction::SeekForward => "seek forward 5s",
-            BuiltinAction::SeekBack => "seek back 5s",
-            BuiltinAction::AddToPlaylistOrNew => "add to playlist / new playlist",
-            BuiltinAction::Quit => "quit",
-            BuiltinAction::ClearQueue => "clear the queue",
-            BuiltinAction::ToggleScan => "toggle background scan active/cache-only",
-            BuiltinAction::ToggleShuffle => "toggle queue shuffle",
-            BuiltinAction::CyclePaneLayout => "cycle embedded-pane layout",
-            BuiltinAction::CyclePlacement => "move the focused window: tabbed, embedded, screen, float",
-            BuiltinAction::Enqueue => "enqueue selected track",
-            BuiltinAction::Wedge => "wedge selected track to queue front",
-            BuiltinAction::Like => "add selected track to Liked Songs",
-            BuiltinAction::Unlike => "remove selected track from Liked Songs (confirms first)",
-            BuiltinAction::TogglePlaylistKeys => "open or close the playlist keys window",
-            BuiltinAction::OpenHelp => "open help/shortcuts screen",
-        }
-    }
 }
 
 /// What a hotkey (and `Command::TogglePlaylistMembership`) refers to: a

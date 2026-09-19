@@ -9,6 +9,7 @@ use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
 use crate::screen::{Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
 
+use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::settings::{SettingsEntry, SettingsPane};
@@ -53,12 +54,15 @@ pub(super) enum WindowOutcome {
     ToggleSetting(usize),
     Bind(HotkeyTarget, char),
     Unbind(HotkeyTarget),
+    /// Show this on the hint row.
+    Flash(String),
 }
 
 /// A window's session-derived draw data, taken under the frame's one lock.
 pub(super) enum WindowFrame {
     List(Arc<ListFrame>),
     Settings(Arc<Vec<SettingsEntry>>),
+    Help(Arc<Built>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -68,6 +72,7 @@ enum Body {
     Log(LogPane),
     Settings(SettingsPane),
     Vis(Arc<Vis>),
+    Help(HelpPane),
 }
 
 /// A window: one component plus the rect the shell last laid it out in, which draw and hit-test share.
@@ -100,8 +105,25 @@ impl Window {
     pub(super) fn relayout(&mut self, rect: Rect, s: &Session) {
         let resized = rect.height() != self.rect.height();
         self.rect = rect;
-        if let Body::List(list) = &mut self.body {
-            list.relayout(resized, s, rect);
+        match &mut self.body {
+            Body::List(list) => list.relayout(resized, s, rect),
+            Body::Help(help) => help.relayout(rect, s),
+            _ => {}
+        }
+    }
+
+    /// The window lost focus or closed.
+    pub(super) fn blur(&mut self) {
+        if let Body::Help(help) = &mut self.body {
+            help.blur();
+        }
+    }
+
+    /// The hint row's text while this window has focus, if it has keys of its own to name.
+    pub(super) fn hint(&self) -> Option<String> {
+        match &self.body {
+            Body::Help(help) => Some(help.hint()),
+            _ => None,
         }
     }
 
@@ -116,6 +138,7 @@ impl Window {
         match &self.body {
             Body::List(list) => WindowFrame::List(list.frame(ctx, self.rect)),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
+            Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.rect)),
             Body::Log(_) | Body::Vis(_) => WindowFrame::Live,
         }
     }
@@ -128,12 +151,16 @@ impl Window {
             (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(printer, entries, focused),
             (Body::Log(log), _) => log.draw(printer, focused),
             (Body::Vis(vis), _) => vis.draw(printer, focused),
-            (Body::List(_) | Body::Settings(_), _) => {}
+            (Body::Help(help), WindowFrame::Help(built)) => help.draw(printer, focused, built),
+            (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
         }
     }
 
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx) -> WindowOutcome {
         let rect = self.rect;
+        if let Body::Help(help) = &mut self.body {
+            return help.on_event(event, ctx.s, rect);
+        }
         if let Body::List(list) = &mut self.body {
             return list.on_event(event, ctx, rect);
         }
@@ -193,6 +220,7 @@ impl Windows {
             Kind::Log => Body::Log(LogPane::new(self.log.clone())),
             Kind::Settings => Body::Settings(SettingsPane::default()),
             Kind::Vis => Body::Vis(self.vis.clone()),
+            Kind::Help => Body::Help(HelpPane::default()),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
         self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)) });

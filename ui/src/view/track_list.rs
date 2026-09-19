@@ -14,7 +14,6 @@ use crate::keybindings;
 use crate::row::RowItem;
 use crate::screen::ListKind;
 
-use super::input::key_name;
 use super::memo::Memo;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
@@ -536,12 +535,12 @@ impl TrackList {
             return WindowOutcome::Ignored;
         }
         let Some(target) = self.top_row(s).as_ref().map(TopRow::target) else { return WindowOutcome::Ignored };
-        let hotkeys = s.hotkeys().into_iter().collect();
-        let key = key_name(event).and_then(|key| keybindings::bindable(&key, &hotkeys));
-        let outcome = match key {
-            _ if *event == Event::Key(Key::Backspace) => WindowOutcome::Unbind(target.clone()),
-            Some(key) => WindowOutcome::Bind(target.clone(), key),
-            None => return WindowOutcome::Ignored,
+        let outcome = match event {
+            Event::Key(Key::Backspace) if s.playlist_hotkey(&target).is_some() => WindowOutcome::Unbind(target.clone()),
+            Event::Char(key) if keybindings::taken(*key, &s.hotkeys().into_iter().collect()).is_none() => {
+                WindowOutcome::Bind(target.clone(), *key)
+            }
+            _ => return WindowOutcome::Ignored,
         };
         // The rows re-sort under the cursor once the key lands; it stays on this playlist.
         self.select = Some(target);

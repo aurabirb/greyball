@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use core::{Axis, Command, Session, Side, TrackId};
 
+use crate::items;
 use crate::screen::{Placement, WINDOWS};
 
 /// A `:panes` argument; `None` fields stay as they are, `window: None` targets every window that is not a tab.
@@ -42,8 +43,6 @@ pub enum Parsed {
     SetPaneLayout(PanePatch),
     /// `hist` — show the History tab window.
     History,
-    /// `keys` — open the menu that remaps a built-in command's key.
-    Keys,
     /// `link` — pick the current row as one end of a link; run it again on a
     /// second row to merge them. Needs the selected track, resolved in
     /// `resolve`.
@@ -58,64 +57,6 @@ pub enum Parsed {
     PluginCommand { word: String, arg: Option<String> },
 }
 
-/// One line of `:help` output: `"name/alias… <args>" — description`.
-pub const HELP: &[(&str, &str)] = &[
-    ("search / s <query>", "search all sources for tracks"),
-    ("newplaylist / np <name>", "create a new playlist"),
-    (
-        "add-to-playlist / add / atp <playlist>",
-        "add the selected track to a playlist by name",
-    ),
-    (
-        "open [<url-or-path>]",
-        "open a playlist link, import an M3U file, or add local audio files \
-         to the open playlist — no args opens a file browser",
-    ),
-    ("export <playlist> [path]", "export a playlist to M3U"),
-    ("log", "toggle the log pane"),
-    ("settings", "toggle the settings pane"),
-    ("hist", "show the History tab window (history-tab)"),
-    ("vis", "toggle the real-audio bar-eq visualizer pane"),
-    ("queue", "toggle the queue pane"),
-    ("history", "toggle the history pane"),
-    (
-        "window <window>",
-        "open or close any window, or switch to its tab: now-playing, playlists, search, history-tab, \
-         queue-tab (the startup tabs), log, settings, vis, queue, history (the panes)",
-    ),
-    ("togglescan", "toggle the background scan (bpm, ...) between active and cache-only"),
-    ("toggleshuffle", "toggle queue shuffle"),
-    (
-        "panes [<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
-        "move a window (names as for :window) to the tab bar, the dock, fullscreen or a box over the view — \
-         omit <window> to move every window that is not a tab; the last tab stays tabbed",
-    ),
-    (
-        "keys",
-        "open the hotkeys menu (remap a built-in command's key — a playlist takes a key pressed on its row of a Playlists list)",
-    ),
-    (
-        "link",
-        "pick the selected row, then run :link again on a second row to merge them as one track",
-    ),
-    ("unlink", "unlink the selected track from its links"),
-    ("help / h / ?", "show this list"),
-    ("quit / q", "exit medley"),
-];
-
-/// Short-name alias map: short name → canonical command word.
-pub fn dealias(word: &str) -> &str {
-    match word {
-        "np" | "newpl" => "newplaylist",
-        "add" | "atp" => "add-to-playlist",
-        "s" | "find" => "search",
-        "q" | "exit" => "quit",
-        "export" => "exportm3u",
-        "h" | "?" => "help",
-        other => other,
-    }
-}
-
 /// Parse a `:`-line (leading `:` already stripped). Pure — no `Session`.
 pub fn parse(line: &str) -> Result<Parsed, String> {
     let line = line.trim();
@@ -123,26 +64,28 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         Some((w, r)) => (w, r.trim()),
         None => (line, ""),
     };
-    match dealias(word) {
+    if word.is_empty() {
+        return Err("empty command".into());
+    }
+    // A word the table doesn't know may be a plugin's, which only the live session can tell.
+    let Some(item) = items::named(word) else {
+        return Ok(Parsed::PluginCommand { word: word.to_string(), arg: (!rest.is_empty()).then(|| rest.to_string()) });
+    };
+    // `<arg>` is required, `[arg]` optional, and a command without any takes none.
+    let (required, none) = (item.args.starts_with('<'), item.args.is_empty());
+    if (required && rest.is_empty()) || (none && !rest.is_empty()) {
+        return Err(item.usage());
+    }
+    match item.names[0] {
         "quit" => Ok(Parsed::Ready(Command::Quit)),
         "help" => Ok(Parsed::Help),
         "search" => Ok(Parsed::Ready(Command::Search(rest.to_string()))),
-        "newplaylist" if !rest.is_empty() => {
-            Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string())))
-        }
-        "newplaylist" => Err("usage: newplaylist <name>".into()),
-        "add-to-playlist" if !rest.is_empty() => Ok(Parsed::AddToPlaylist(rest.to_string())),
-        "add-to-playlist" => Err("usage: add-to-playlist <name>".into()),
-        "open" => {
-            if rest.is_empty() {
-                Ok(Parsed::OpenBrowse)
-            } else {
-                Ok(Parsed::Open(rest.to_string()))
-            }
-        }
-        "exportm3u" if !rest.is_empty() => {
-            // "<name>" or "<name> <path>": a trailing token that contains '/' or
-            // ends in .m3u/.m3u8 is taken as the path, the rest is the name.
+        "newplaylist" => Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string()))),
+        "add-to-playlist" => Ok(Parsed::AddToPlaylist(rest.to_string())),
+        "open" if rest.is_empty() => Ok(Parsed::OpenBrowse),
+        "open" => Ok(Parsed::Open(rest.to_string())),
+        "export" => {
+            // A trailing token with a '/' or an .m3u/.m3u8 ending is the path, the rest the name.
             if let Some((name, tail)) = rest.rsplit_once(char::is_whitespace) {
                 let tail = tail.trim();
                 if tail.contains('/') || tail.ends_with(".m3u") || tail.ends_with(".m3u8") {
@@ -157,24 +100,15 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
                 path: None,
             })
         }
-        "exportm3u" => Err("usage: export <playlist> [path]".into()),
-        "vis" if !rest.is_empty() => Err("usage: vis".into()),
-        "log" | "settings" | "vis" | "queue" | "history" => window_name(word).map(Parsed::ToggleWindow),
+        name @ ("log" | "settings" | "vis" | "queue" | "history") => window_name(name).map(Parsed::ToggleWindow),
         "window" => window_name(rest).map(Parsed::ToggleWindow),
         "togglescan" => Ok(Parsed::Ready(Command::ToggleScan)),
         "toggleshuffle" => Ok(Parsed::Ready(Command::ToggleShuffle)),
         "hist" => Ok(Parsed::History),
-        "keys" => Ok(Parsed::Keys),
-        "link" if rest.is_empty() => Ok(Parsed::Link),
-        "link" => Err("usage: link".into()),
-        "unlink" if rest.is_empty() => Ok(Parsed::Unlink),
-        "unlink" => Err("usage: unlink".into()),
-        "panes" => parse_pane_patch(rest).map(Parsed::SetPaneLayout),
-        "" => Err("empty command".into()),
-        other => Ok(Parsed::PluginCommand {
-            word: other.to_string(),
-            arg: (!rest.is_empty()).then(|| rest.to_string()),
-        }),
+        "link" => Ok(Parsed::Link),
+        "unlink" => Ok(Parsed::Unlink),
+        "panes" => parse_pane_patch(rest).map(Parsed::SetPaneLayout).map_err(|unknown| format!("{} {unknown}", item.usage())),
+        other => Err(format!("unknown command: {other}")),
     }
 }
 
@@ -233,11 +167,7 @@ fn parse_pane_patch(rest: &str) -> Result<PanePatch, String> {
             word => match (Placement::from_word(word), window_name(word)) {
                 (Some(placement), _) => patch.mode = Some(placement),
                 (None, Ok(name)) if i == 0 => patch.window = Some(name),
-                _ => {
-                    return Err(format!(
-                        "usage: panes [<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical] (unknown {word:?})"
-                    ));
-                }
+                _ => return Err(format!("(unknown {word:?})")),
             },
         }
     }
@@ -259,7 +189,6 @@ pub fn resolve(parsed: Parsed, session: &Session, selected: Option<TrackId>) -> 
         // UI-local, not a `core::Command`.
         Parsed::ToggleWindow(_) => Err("window toggling is handled by the UI".into()),
         Parsed::History => Err("screen switching is handled by the UI".into()),
-        Parsed::Keys => Err("the hotkey menu is handled by the UI".into()),
         Parsed::SetPaneLayout(_) => Err("pane layout is handled by the UI".into()),
         Parsed::ExportM3u { name, path } => {
             let playlist = session

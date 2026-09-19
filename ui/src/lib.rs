@@ -24,6 +24,7 @@ use core::{CoreEvent, Layout, LogBuf, Session};
 
 pub mod command;
 mod filebrowser;
+pub mod items;
 pub mod keybindings;
 pub mod theme;
 mod row;

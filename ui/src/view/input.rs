@@ -14,7 +14,6 @@ use crate::screen::PLAYLIST_KEYS;
 
 use super::{Focus, MedleyView};
 use super::frame::Chrome;
-use super::help::HelpModal;
 use super::modal::Modal;
 use super::notice::Notice;
 use super::panes::PANE_LAYOUT_CYCLE;
@@ -34,15 +33,6 @@ pub(super) enum Editing {
 
 /// The open notice dialog's text view, which further popup notices append to.
 const NOTICE_TEXT: &str = "notice";
-
-pub(super) fn key_name(event: &Event) -> Option<String> {
-    match event {
-        Event::Char(' ') => Some("Space".to_string()),
-        Event::Char(c) => Some(c.to_string()),
-        Event::Key(Key::Enter) => Some("Enter".to_string()),
-        _ => None,
-    }
-}
 
 impl MedleyView {
     /// Run a plugin-registered `:`-command (e.g. `:spotify addlogin`) on a background thread.
@@ -81,9 +71,6 @@ impl MedleyView {
                     let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
                     if toggle { self.toggle_window(id) } else { self.show(id) }
                     return EventResult::consumed();
-                }
-                if command::Parsed::Keys == parsed {
-                    return self.handle_action(Action::OpenHotkeyMenu);
                 }
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
                     // `side`/`stack` are shared dock geometry whatever window is named.
@@ -147,9 +134,10 @@ impl MedleyView {
         match self.with_session_mut(|s| s.dispatch(cmd)) {
             Ok(Dispatch::Quit) => EventResult::with_cb(|c: &mut Cursive| c.quit()),
             Ok(Dispatch::PlaylistCreated(id)) => {
-                let list = self.active_list_id();
-                if let Some(list) = self.windows[list].list_mut() {
-                    list.select_playlist(HotkeyTarget::Local(id));
+                for window in self.windows.ids() {
+                    if let Some(list) = self.windows[window].list_mut() {
+                        list.select_playlist(HotkeyTarget::Local(id));
+                    }
                 }
                 EventResult::consumed()
             }
@@ -226,16 +214,12 @@ impl MedleyView {
                 self.cycle_placement();
                 EventResult::consumed()
             }
-            Action::OpenHotkeyMenu => {
-                self.open_hotkey_menu();
-                EventResult::consumed()
-            }
             Action::TogglePlaylistKeys => {
                 self.toggle_playlist_keys();
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.modal = Some(Modal::Help(self.with_session(HelpModal::new)));
+                self.toggle_help();
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
@@ -328,6 +312,11 @@ impl MedleyView {
             Editing::PluginSetup(_) => format!("> {}", self.buffer),
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
+                if let Focus::Window(id) = self.focus
+                    && let Some(hint) = self.windows[id].hint()
+                {
+                    return format!("  {hint}");
+                }
                 let key = |key: Option<char>| key.map(String::from).unwrap_or_default();
                 let keys_key = key(chrome.keys_key);
                 if assignable {

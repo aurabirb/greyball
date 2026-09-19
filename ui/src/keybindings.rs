@@ -4,7 +4,11 @@
 
 use std::collections::HashMap;
 
+use cursive::event::Event;
+
 use core::{BuiltinAction, Command, HotkeyTarget, TrackId};
+
+use crate::view::Nav;
 
 /// What a keypress means outside an active text field.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,8 +21,6 @@ pub enum Action {
     Tab(usize),
     /// UI-local: open the `:` command line.
     CommandLine,
-    /// UI-local: open the built-ins remap menu (`:keys`).
-    OpenHotkeyMenu,
     /// UI-local: open the playlist keys window over the view, or close it when it has focus.
     TogglePlaylistKeys,
     /// UI-local: rotate the shared embedded-pane dock through
@@ -53,41 +55,40 @@ pub enum Action {
 }
 
 /// The keys with one meaning everywhere, which no hotkey can take.
-fn fixed(key: &str) -> Option<Action> {
-    if let Ok(n @ 1..=9) = key.parse::<usize>() {
-        return Some(Action::Tab(n - 1));
+fn fixed(key: char) -> Option<Action> {
+    if let Some(n @ 1..=9) = key.to_digit(10) {
+        return Some(Action::Tab(n as usize - 1));
     }
     Some(match key {
-        "/" => Action::FocusSearch,
-        ":" => Action::CommandLine,
-        "Space" => Action::Command(Command::PlayPause),
-        ">" => Action::Command(Command::Next),
-        "<" => Action::Command(Command::Previous),
-        "x" => Action::ExportPlaylist,
+        '/' => Action::FocusSearch,
+        ':' => Action::CommandLine,
+        ' ' => Action::Command(Command::PlayPause),
+        '>' => Action::Command(Command::Next),
+        '<' => Action::Command(Command::Previous),
+        'x' => Action::ExportPlaylist,
         _ => return None,
     })
 }
 
-pub fn is_fixed(key: char) -> bool {
-    fixed(&key.to_string()).is_some()
+/// Why a key is spoken for.
+pub enum Taken {
+    Fixed,
+    Builtin(BuiltinAction),
 }
 
-/// The character a playlist can take by `key` being pressed on its row: not fixed, not a built-in's effective key.
-pub fn bindable(key: &str, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<char> {
-    let mut chars = key.chars();
-    let (Some(ch), None) = (chars.next(), chars.next()) else { return None };
-    (fixed(key).is_none() && builtin_at(hotkeys, ch).is_none()).then_some(ch)
+/// The one rule for whether `key` can be bound: not fixed, not a list's navigation key, not a built-in's effective key.
+pub fn taken(key: char, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<Taken> {
+    if fixed(key).is_some() || Nav::of(&Event::Char(key)).is_some() {
+        return Some(Taken::Fixed);
+    }
+    builtin_at(hotkeys, key).map(Taken::Builtin)
 }
 
-/// What `key` means with `selected` under the cursor; built-ins answer to their effective key in `hotkeys`.
-pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
-    if let Some(action) = fixed(key) {
+/// What `ch` means with `selected` under the cursor; built-ins answer to their effective key in `hotkeys`.
+pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
+    if let Some(action) = fixed(ch) {
         return action;
     }
-    let mut chars = key.chars();
-    let (Some(ch), None) = (chars.next(), chars.next()) else {
-        return Action::None;
-    };
     let Some(action) = builtin_at(hotkeys, ch) else {
         return Action::None;
     };
@@ -137,49 +138,8 @@ fn builtin_at(hotkeys: &HashMap<char, HotkeyTarget>, ch: char) -> Option<Builtin
     })
 }
 
-/// Each key and what it does, for the help screen.
-pub const RAW_KEYS: &[(&str, &str)] = &[
-    ("/", "focus search (or fuzzy-filter the current list, outside Search)"),
-    (":", "open the command line (:help)"),
-    ("1-9", "switch to that tab"),
-    ("Tab", "switch focused pane"),
-    ("Space", "play/pause"),
-    ("n / p, > / <", "next/previous track"),
-    (". / ,", "seek forward/back 5s"),
-    ("+", "add selected track to a playlist / new playlist"),
-    ("Enter", "play/activate the selected row"),
-    ("q", "enqueue the selected track"),
-    ("w", "wedge the selected track to the front of the queue"),
-    ("l", "like the selected track (add to Liked Songs)"),
-    ("L", "unlike the selected track (confirms first)"),
-    ("B", "pause/resume the background scan"),
-    ("P", "cycle the embedded-pane layout"),
-    ("M", "move the focused window: tabbed, embedded, screen, float"),
-    ("E", "clear the queue"),
-    ("Q", "quit"),
-    ("`", "open the playlist keys window over the view; again, or Esc, closes it"),
-    ("x", "export the selected or open local playlist as M3U"),
-    ("other keys", "on a row of the Playlists list: bind that key to the playlist (Backspace clears it)"),
-    ("?", "open this help/shortcuts screen"),
-];
-
-/// `key`'s dynamic playlist-hotkey binding, if any: `hotkeys` is the live
-/// set of currently-bound letters, unknowable to `map` above (that's a
-/// static, per-key-always-the-same table; this is runtime per-user state).
-/// Checked in `MedleyView::on_event` before falling through to `map` — a
-/// hit dispatches `TogglePlaylistMembership` directly instead of an
-/// `Action`. `None` whenever `key` isn't a single char, nothing is
-/// selected, that char has no binding, or it's bound to a `Builtin` (those
-/// are handled by `map` falling through to `builtin_at`, not this toggle).
-pub fn hotkey_toggle(
-    key: &str,
-    selected: Option<TrackId>,
-    hotkeys: &HashMap<char, HotkeyTarget>,
-) -> Option<Command> {
-    let mut chars = key.chars();
-    let (Some(ch), None) = (chars.next(), chars.next()) else {
-        return None;
-    };
+/// The membership toggle `ch` means when it is bound to a playlist and a track is selected.
+pub fn hotkey_toggle(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<Command> {
     let track = selected?;
     let playlist = match hotkeys.get(&ch)?.clone() {
         target @ (HotkeyTarget::Local(_) | HotkeyTarget::Remote(_, _)) => target,
@@ -187,4 +147,3 @@ pub fn hotkey_toggle(
     };
     Some(Command::TogglePlaylistMembership { track, playlist })
 }
-

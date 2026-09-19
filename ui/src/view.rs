@@ -17,7 +17,7 @@ use crate::keybindings::Action;
 use crate::screen::{Placement, initial_window};
 
 use frame::Chrome;
-use input::{Editing, key_name};
+use input::Editing;
 use memo::Memo;
 use modal::{Modal, modal_body};
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
@@ -50,6 +50,7 @@ mod warnings;
 mod window;
 
 pub(crate) use notice::Notice;
+pub(crate) use scroll::Nav;
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
 pub use status_line::window_title_track_text;
@@ -270,6 +271,7 @@ impl MedleyView {
                 self.clear_hotkey(target);
                 EventResult::consumed()
             }
+            WindowOutcome::Flash(text) => self.notify(Notice::Flash(text)),
         }
     }
 
@@ -344,18 +346,18 @@ impl MedleyView {
             }
             Event::Key(Key::Right) => self.run(Command::Seek(5000)),
             Event::Key(Key::Left) => self.run(Command::Seek(-5000)),
-            ev => {
-                let Some(key) = key_name(ev) else { return EventResult::Ignored };
+            &Event::Char(key) => {
                 let (sel, hotkeys) = self.with_session(|s| {
                     let sel = self.active_list().and_then(|list| list.selected_track(s));
                     (sel, s.hotkeys().into_iter().collect())
                 });
                 // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
-                match keybindings::hotkey_toggle(&key, sel, &hotkeys) {
+                match keybindings::hotkey_toggle(key, sel, &hotkeys) {
                     Some(cmd) => self.run(cmd),
-                    None => self.handle_action(keybindings::map(&key, sel, &hotkeys)),
+                    None => self.handle_action(keybindings::map(key, sel, &hotkeys)),
                 }
             }
+            _ => EventResult::Ignored,
         }
     }
 
@@ -477,7 +479,7 @@ impl MedleyView {
         // The flash lasts until the next input where it shows: a modal that doesn't show it leaves it, its closing key included.
         let is_mouse_followup =
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
-        if !is_mouse_followup && matches!(self.modal, None | Some(Modal::HotkeyMenu(_))) {
+        if !is_mouse_followup && self.modal.is_none() {
             self.feedback = None;
         }
 
@@ -554,8 +556,10 @@ impl MedleyView {
         // Esc a floating or fullscreen window has no use for closes it, before the tab beneath sees it.
         let closing = *event == Event::Key(Key::Esc)
             && matches!(self.windows.placement(ids[0]), Placement::Floating | Placement::Screen);
-        // Only Enter and Esc go on to the active tab, and only to a list: nothing else acts on a window out of focus.
-        let through = matches!(event, Event::Key(Key::Enter | Key::Esc)) && self.windows[ids[1]].list().is_some();
+        // Only Enter and Esc go on to the active tab's list, and only past a window that is no list itself.
+        let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
+            && self.windows[ids[1]].list().is_some()
+            && self.windows[ids[0]].list().is_none();
         let alone = fullscreen.is_some() || closing || ids[0] == ids[1] || !through;
         match self.send(if alone { &ids[..1] } else { &ids }, event) {
             Some((_, outcome)) => self.apply(outcome),
@@ -565,9 +569,12 @@ impl MedleyView {
             }
             // Of the shell's keys a fullscreen window leaves only the one that moves it on.
             None if fullscreen.is_some() => {
-                let action = key_name(event).map(|key| self.with_session(|s| keybindings::map(&key, None, &s.hotkeys().into_iter().collect())));
+                let action = match *event {
+                    Event::Char(key) => self.with_session(|s| keybindings::map(key, None, &s.hotkeys().into_iter().collect())),
+                    _ => Action::None,
+                };
                 match action {
-                    Some(Action::CyclePlacement) => self.handle_action(Action::CyclePlacement),
+                    Action::CyclePlacement => self.handle_action(Action::CyclePlacement),
                     _ => EventResult::consumed(),
                 }
             }

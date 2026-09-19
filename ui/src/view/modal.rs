@@ -2,11 +2,9 @@ use cursive::{Printer, Rect};
 use cursive::event::{Event, EventResult};
 use cursive::theme::ColorStyle;
 
-use core::{Command, HotkeyTarget, SetupKind};
+use core::{Command, SetupKind};
 
 use super::{Focus, MedleyView};
-use super::help::HelpModal;
-use super::hotkeys::HotkeyMenu;
 use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
 use super::text::pad;
@@ -16,8 +14,6 @@ use super::warnings::{Warnings, WarningsModal};
 pub(super) enum Modal {
     Warnings(WarningsModal),
     Picker(PlaylistPicker),
-    HotkeyMenu(HotkeyMenu),
-    Help(HelpModal),
 }
 
 /// What an event meant to the open modal, for `MedleyView` to act on.
@@ -28,8 +24,6 @@ pub(super) enum ModalOutcome {
     Run(Command),
     /// Run setup for the plugin at this row of `plugin_statuses`.
     Setup(usize),
-    Bind(HotkeyTarget, char),
-    Unbind(HotkeyTarget),
 }
 
 /// `rect` minus its footer row and, when `titled`, its title row — shared by `draw_modal_frame` and hit-tests.
@@ -82,8 +76,6 @@ impl MedleyView {
         match &mut self.modal {
             Some(Modal::Warnings(m)) => m.relayout(resized, rect, &Warnings::read(&s)),
             Some(Modal::Picker(picker)) => picker.relayout(resized, rect, &s),
-            Some(Modal::HotkeyMenu(menu)) => menu.relayout(resized, rect),
-            Some(Modal::Help(help)) => help.relayout(rect, &s),
             None => {}
         }
     }
@@ -106,11 +98,6 @@ impl MedleyView {
                 m.draw(printer, rect, &warnings, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
             }
             Modal::Picker(picker) => picker.draw(printer, rect),
-            Modal::HotkeyMenu(menu) => {
-                let keys = self.with_session(HotkeyMenu::keys);
-                menu.draw(printer, rect, &keys, self.feedback.as_deref());
-            }
-            Modal::Help(help) => help.draw(printer, rect),
         }
     }
 
@@ -121,8 +108,6 @@ impl MedleyView {
             None => return EventResult::Ignored,
             Some(Modal::Warnings(m)) => m.on_event(event, rect, &Warnings::read(&session.lock().unwrap())),
             Some(Modal::Picker(picker)) => picker.on_event(event, rect),
-            Some(Modal::HotkeyMenu(menu)) => menu.on_event(event, rect),
-            Some(Modal::Help(help)) => help.on_event(event, rect),
         };
         match outcome {
             ModalOutcome::Stay => {}
@@ -132,8 +117,6 @@ impl MedleyView {
                 return self.run(cmd);
             }
             ModalOutcome::Setup(row) => self.activate_warning(row),
-            ModalOutcome::Bind(target, key) => self.bind_hotkey(target, key),
-            ModalOutcome::Unbind(target) => self.clear_hotkey(target),
         }
         EventResult::consumed()
     }

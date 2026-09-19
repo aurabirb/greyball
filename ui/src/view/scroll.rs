@@ -105,14 +105,14 @@ impl ListState {
 }
 
 /// A scroll gesture shared by every list, pane and modal; the `bool` is "up".
-pub(super) enum Nav {
+pub(crate) enum Nav {
     Line(bool),
     Page(bool),
     Wheel(bool),
 }
 
 impl Nav {
-    pub(super) fn of(event: &Event) -> Option<Self> {
+    pub(crate) fn of(event: &Event) -> Option<Self> {
         match event {
             Event::Key(Key::Up) | Event::Char('k') => Some(Nav::Line(true)),
             Event::Key(Key::Down) | Event::Char('j') => Some(Nav::Line(false)),

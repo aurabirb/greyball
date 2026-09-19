@@ -4,7 +4,7 @@ use cursive::theme::ColorStyle;
 
 use core::{Axis, PaneLayoutConfig, Session, Side};
 
-use crate::screen::{Kind, ListKind, PLAYLIST_KEYS, Placement};
+use crate::screen::{HELP, Kind, ListKind, PLAYLIST_KEYS, Placement};
 
 use super::{Focus, MedleyView};
 use super::modal::draw_modal_frame;
@@ -155,6 +155,7 @@ impl MedleyView {
     pub(super) fn close_window(&mut self, id: WindowId) -> bool {
         let Some(i) = self.open.iter().position(|&(open, _)| open == id) else { return false };
         let (_, prior) = self.open.remove(i);
+        self.windows[id].blur();
         if self.focus == Focus::Window(id) {
             let shown = self.visible();
             let below = self.open[..i].iter().rev().map(|&(open, _)| Focus::Window(open));
@@ -202,9 +203,13 @@ impl MedleyView {
         }
     }
 
-    /// The `TogglePlaylistKeys` key: closes the playlist keys window when it has focus, else shows it at its top level.
+    /// The `TogglePlaylistKeys` key: a tab is switched to; any other placement closes when focused, else shows at its top level.
     pub(super) fn toggle_playlist_keys(&mut self) {
         let Some(id) = self.windows.named(PLAYLIST_KEYS) else { return };
+        if self.active == id {
+            self.focus = Focus::Window(id);
+            return;
+        }
         if self.focus == Focus::Window(id) && self.close_window(id) {
             return;
         }
@@ -216,6 +221,18 @@ impl MedleyView {
             list.show_top(from);
         }
         self.show(id);
+        self.focus = Focus::Window(id);
+    }
+
+    /// The `OpenHelp` key, `:help` and `:keys`: closes the help window when it has focus, else shows and focuses it.
+    pub(super) fn toggle_help(&mut self) {
+        let Some(id) = self.windows.named(HELP) else { return };
+        if self.focus == Focus::Window(id) && self.close_window(id) {
+            return;
+        }
+        self.windows[id].blur();
+        self.show(id);
+        self.focus = Focus::Window(id);
     }
 
     /// Moves `id`, keeping a shown window shown and a focused one focused; only `cover` lets it take the whole screen.
@@ -272,6 +289,11 @@ impl MedleyView {
 
     /// Focuses `id`; a floating window also comes to the top.
     pub(super) fn focus_window(&mut self, id: WindowId) {
+        if let Focus::Window(old) = self.focus
+            && old != id
+        {
+            self.windows[old].blur();
+        }
         self.focus = Focus::Window(id);
         if self.windows.placement(id) == Placement::Floating
             && let Some(i) = self.open.iter().position(|&(open, _)| open == id)
@@ -301,7 +323,7 @@ impl MedleyView {
             Kind::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
             _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
         };
-        let flash = self.feedback.as_ref().map(|text| format!("  {text}"));
+        let flash = self.feedback.as_ref().or(window.hint().as_ref()).map(|text| format!("  {text}"));
         draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, flash.as_deref().unwrap_or(hint));
         window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
     }
