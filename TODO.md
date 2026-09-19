@@ -131,6 +131,41 @@
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
   hammered.
+- [ ] Decided behaviour fixes, pass 2 (owner decisions; one pass):
+  - After a direct key assign on a Playlists top-level row the cursor stays at the same row INDEX
+    (the next playlist slides under it in the keyed-first `playlist-keys` window, so `a` `b` `c`
+    binds three playlists in a row) instead of following the bound row; the flash names what was
+    bound. `TrackList::select` keeps serving `:newplaylist`, `show_top` and Esc-back-out.
+  - Direct assign stays enabled on the Playlists tab, but there it refuses a key that is already on
+    another playlist ("'z' is on X — reassign it from the playlist keys window"); moving a key
+    between playlists only happens in the `playlist-keys` window and the Help window.
+  - `toggle_playlist_keys` preselect order: the playing playlist first (when something is playing
+    from a playlist), then the playlist open in the active list, then one open in another window.
+  - The placement key and backtick pass through a fullscreen (`screen`) window, and a fullscreen
+    LIST lets the shell keys through (`/`, `q`, `:`, digits, playlist hotkeys) with the hint row
+    drawn beneath it, instead of being modal.
+  - Success reports (`Dispatch::Done`: exported…, imported…, added N…) become hint-row flashes
+    instead of popups.
+  - The warnings modal shows the selected row's full text (wrapped) in its message area; failure
+    rows are currently truncated.
+  - Remove the `initial_screen` config key (the saved `[layout]` decides the active tab; default
+    layout starts on its first tab). No shim for configs that still carry it beyond what the
+    config loader already does with unknown keys — check and report.
+  - A tabbed or docked Help window gives Tab/Shift-Tab back to the shell's focus cycle; it only
+    consumes them for section jumps when floating or fullscreen.
+  Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
+  flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
+  focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an
+  open unfocused `playlist-keys` focuses it first; the assigned key sits in the left gutter; a
+  failed Enter-to-play stays a warnings row; a failed plugin setup shows popup + health row; press
+  anywhere focuses a window; Esc in a filtered sub-playlist clears the filter first; `>`/`<` and
+  arrow seeks stay fixed second keys; all commands live in the one Commands section.
+- [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
+  dialog; drops its hotkey binding; windows showing it back out to the top level) and
+  `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`
+  bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
+  from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
+  `zz-scratch*`) waiting for this.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
