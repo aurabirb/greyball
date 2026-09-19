@@ -80,10 +80,8 @@ fn fixed(key: char) -> Option<Action> {
     Some(match key {
         '/' => Action::FocusSearch,
         ':' => Action::CommandLine,
-        ' ' => Action::Command(Command::PlayPause),
         '>' => Action::Command(Command::Next),
         '<' => Action::Command(Command::Previous),
-        'x' => Action::ExportPlaylist,
         _ => return None,
     })
 }
@@ -150,6 +148,8 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::ShowHistory => Action::ShowWindow("history-tab"),
         BuiltinAction::Link => selected.map_or(Action::None, |id| Action::Command(Command::LinkPick(id))),
         BuiltinAction::Unlink => selected.map_or(Action::None, |id| Action::Command(Command::Unlink(id))),
+        BuiltinAction::PlayPause => Action::Command(Command::PlayPause),
+        BuiltinAction::ExportPlaylist => Action::ExportPlaylist,
     }
 }
 

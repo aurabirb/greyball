@@ -55,7 +55,7 @@ pub fn cache_rendition(cache: &MediaCache, track: &Track) -> Option<Rendition> {
 /// A built-in app command that a single char normally activates
 /// (`ui::keybindings::map`'s default table) but that the same remap
 /// mechanism as a playlist hotkey can move to a different key. Structural
-/// keys (screen switching, `/`, `:`, Enter, Space) aren't remappable and so
+/// keys (tab switching, `/`, `:`, Enter) aren't remappable and so
 /// have no variant here — see `map`'s own doc for why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinAction {
@@ -85,6 +85,8 @@ pub enum BuiltinAction {
     ShowHistory,
     Link,
     Unlink,
+    PlayPause,
+    ExportPlaylist,
 }
 
 impl BuiltinAction {
@@ -118,6 +120,8 @@ impl BuiltinAction {
         (BuiltinAction::ShowHistory, None),
         (BuiltinAction::Link, None),
         (BuiltinAction::Unlink, None),
+        (BuiltinAction::PlayPause, Some(' ')),
+        (BuiltinAction::ExportPlaylist, Some('x')),
     ];
 
     /// This action's hardcoded default key, if it has one.
@@ -155,6 +159,8 @@ impl BuiltinAction {
             BuiltinAction::ShowHistory => "show-history",
             BuiltinAction::Link => "link",
             BuiltinAction::Unlink => "unlink",
+            BuiltinAction::PlayPause => "play-pause",
+            BuiltinAction::ExportPlaylist => "export-playlist",
         }
     }
 

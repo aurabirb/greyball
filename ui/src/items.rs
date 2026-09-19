@@ -148,7 +148,7 @@ pub const ITEMS: &[Item] = &[
     fixed(Section::Movement, ":", "open the command line", ""),
     fixed(Section::Movement, "1-9", "switch to that tab", ""),
     fixed(Section::Movement, "Tab", "focus the next window", ""),
-    fixed(Section::Player, "Space", "play/pause", ""),
+    builtin(Section::Player, BuiltinAction::PlayPause, "play/pause", ""),
     builtin(Section::Player, BuiltinAction::Next, "next track", "> always works too."),
     builtin(Section::Player, BuiltinAction::Previous, "previous track", "< always works too."),
     builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s", "→ always works too."),
@@ -159,7 +159,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
     builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs)", ""),
     builtin(Section::Tracks, BuiltinAction::Unlike, "unlike the selected track", "Confirms first."),
-    fixed(Section::Tracks, "x", "export the selected or open local playlist as M3U", ""),
+    builtin(Section::Tracks, BuiltinAction::ExportPlaylist, "export the selected or open local playlist as M3U", ""),
     fixed(
         Section::Tracks,
         "any key",
