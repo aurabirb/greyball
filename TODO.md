@@ -345,7 +345,12 @@
   tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
   leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the
   Settings UI (wired up there, not config-file-only).
-- [ ] Hide the sources column on narrow terminal sizes.
+- [ ] Hide the sources column in a track list when the list is narrower than 80 columns, or when the
+  space left for the track (title/artist) column without it would be under 50 — whichever is
+  easier to detect in `column_layout` (`ui/src/view/rows.rs`), which already receives the list
+  width. It applies to the list's own width, so a docked or floating list narrower than 80 hides
+  the column even on a wide terminal. Row building, headers and click hit-testing must all use the
+  same decision.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
