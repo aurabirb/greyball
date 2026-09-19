@@ -84,7 +84,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - A window with `Startup::status_row` (Help, `playlist-keys`) reserves its last row: `Window::content` is
   the rect without it, which is what the component lays out, draws and hit-tests in (a click on the row is
   consumed). `Window::draw` fills the row with the last bind result (`Notice::Status`, styled as a warning
-  when refused, cleared by the next key or blur), else the component's idle hints. `Notice::Status` goes
+  when refused, cleared by the next key or blur), else the component's idle hints: a list's `[key] assign   [Backspace] clear` where they apply, then `[M] <next placement>` (the `CyclePlacement` key and `Windows::next_placement`, `close` when it closes) while it has focus. `Notice::Status` goes
   to the focused window's `Window::set_status` when it has such a row, else to the hint row.
 - `placed()` derives every shown window's `Placed` (its rect and the `frame` box it is hit-tested by),
   bottom first: the active tab, the `Docked` ones around it (`panes::split`), then each `Floating`

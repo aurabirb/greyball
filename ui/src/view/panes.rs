@@ -315,13 +315,11 @@ impl MedleyView {
             }
             return;
         }
-        if self.windows.is_companion(id) && self.windows.placement(id) == Placement::Floating {
+        let Some(next) = self.windows.next_placement(id) else {
             self.close_window(id);
             self.feedback = Some(format!("{}: closed", self.windows[id].kind.label()));
             return;
-        }
-        let at = Placement::CYCLE.iter().position(|&placement| placement == self.windows.placement(id)).unwrap_or(0);
-        let next = Placement::CYCLE[(at + 1) % Placement::CYCLE.len()];
+        };
         if self.set_placement(id, next, true) {
             self.feedback = Some(format!("{}: {}", self.windows[id].kind.label(), next.word()));
         }

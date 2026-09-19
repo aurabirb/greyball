@@ -12,6 +12,7 @@ pub(super) struct Chrome {
     pub(super) warn_count: usize,
     pub(super) help_key: Option<char>,
     pub(super) keys_key: Option<char>,
+    pub(super) place_key: Option<char>,
 }
 
 /// One frame's render data: each visible window's frame, the chrome, and this tick's live status line.
@@ -33,6 +34,7 @@ impl MedleyView {
                     warn_count: s.warning_count(),
                     help_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp)),
                     keys_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::SwitchPlaylists)),
+                    place_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::CyclePlacement)),
                 })
             });
             // Live per-tick data, never memoized.

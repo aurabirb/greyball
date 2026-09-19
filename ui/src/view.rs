@@ -405,7 +405,11 @@ impl View for MedleyView {
             if self.windows.placement(placed.id) == Placement::Floating {
                 draw_float_frame(printer, placed.frame);
             }
-            window.draw(printer, marked, window_frame, self.over_view(placed.id), frame.chrome.keys_key);
+            let place = frame.chrome.place_key.filter(|_| self.focus == Focus::Window(placed.id)).map(|key| {
+                let target = self.windows.next_placement(placed.id).map_or("close", Placement::word);
+                format!("[{key}] {target}")
+            });
+            window.draw(printer, marked, window_frame, self.over_view(placed.id), place);
         }
 
         let chrome = &frame.chrome;

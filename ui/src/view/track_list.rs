@@ -483,14 +483,13 @@ impl TrackList {
         })
     }
 
-    /// The status row's text when nothing was reported: what a key does here; `close` is the key that closes the focused window.
-    pub(super) fn idle(&self, frame: &ListFrame, close: Option<char>) -> String {
-        let mut hints = match () {
-            _ if frame.assignable => vec!["[key] assign".to_string(), "[Backspace] clear".into(), "[Enter] open".into()],
-            _ if !matches!(self.open, Open::TopLevel) => vec!["[Enter] play".to_string(), "[Esc] back".into()],
-            _ => vec![],
+    /// The status row's text when nothing was reported: what a key does here; `place` is the placement key's hint.
+    pub(super) fn idle(&self, frame: &ListFrame, place: Option<String>) -> String {
+        let mut hints = match frame.assignable {
+            true => vec!["[key] assign".to_string(), "[Backspace] clear".into()],
+            false => vec![],
         };
-        hints.extend(close.map(|key| format!("[{key}] close")));
+        hints.extend(place);
         hints.join("   ")
     }
 
