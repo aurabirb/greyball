@@ -196,25 +196,33 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Remove the global bottom hint/command row and move the warnings widget to the closest
-  bottom-right slot, now that the status row is a generic window feature (`Startup::status_row`,
-  `Window::content()`). Today the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465)
-  carries the shell hint text, the command/search line, the flash feedback, the cursor/total readout
-  and, right-aligned, the red warnings button (`warnings_span`/`warnings_label`, `Focus::Warnings`,
-  focus order, click hit-test in `on_event`). New placement of the button: in the bottom scrubber
-  status line (`StatusLine`) at its right edge when that line is shown; otherwise in the status row
-  of whichever visible tab window or docked window occupies the bottom-right corner (the same
-  "closest slot to the bottom-right" rule, computed once from the placed rects) — enable it there
-  as a right-aligned widget of that window's status row, so every window gets the same optional
-  right-hand widget slot. Decide and write down where the rest of the row goes before deleting it
-  (one guess to verify: the hint text moves into each window's own status row, the command and
-  search lines become an input row drawn by the window that has focus, flashes go to the focused
-  window's status row via `Notice::Status` and the cursor/total readout to the status row of its
-  list); windows without a status row need one enabled or a fallback. The warnings button must keep
-  its Enter/click behaviour and its place in the Tab focus cycle, and the reserved bottom rows feed
-  `split`, `required_size`, `list_h()` and the mouse row maths (`BOTTOM_BAR_ROWS`), so the list
-  gains the freed row. Judge it in real-terminal screenshots (tab, docked window, floating windows
-  covering the corner, narrow terminal).
+- [ ] Corner slots: replace the global bottom hint/command row with a shared "corner slot" mechanism,
+  in three shippable steps (one commit each; the second and third only after the previous one is
+  pushed). Background: the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465) carries
+  the shell hint text, the command/search line, flash feedback, the cursor/total readout and,
+  right-aligned, the red warnings button (`warnings_span`/`warnings_label`, `Focus::Warnings`, the
+  focus order, the click hit-test in `on_event`); the per-window status row is now a generic window
+  feature (`Startup::status_row`, `Window::content()`).
+  - Availability: every surface that could host a slot says which of its two bottom corners (left,
+    right) it offers — a small per-surface declaration next to `Startup::status_row`, not
+    hard-coded in the shell. Defaults: a window with a status row offers both; the bottom scrubber
+    status line (`StatusLine`) offers the RIGHT slot only; modal windows (picker, warnings modal,
+    confirm dialogs — anything drawn over the whole screen) offer NOTHING, so a widget never
+    appears under or over a modal. A surface with no status row offers nothing.
+  - Step 1: one function computes, from the placed rects and those declarations, the nearest
+    available slot to the bottom-left and to the bottom-right corner (the scrubber line if it is
+    shown and offers that side, else the status row of the window occupying that corner, else
+    nothing). Move the warnings button to the bottom-right slot through it, keeping its Enter/click
+    behaviour and its place in the Tab focus cycle; leave the old row otherwise untouched. Verify
+    with a floating window covering the corner and with a modal open.
+  - Step 2: the `:command` (and search) input line draws in the bottom-left slot through the same
+    function. Width floor: a slot narrower than a usable command line (a docked pane can be ~30
+    columns) is not enough, so below the floor the input line spans the whole bottom line instead.
+  - Step 3: delete the global row: hint text, flashes (`Notice::Status`) and the cursor/total
+    readout move into the focused window's own status row (guess to verify), windows without a
+    status row get one enabled or a fallback, `BOTTOM_BAR_ROWS` drops by one (it feeds `split`,
+    `required_size`, `list_h()` and the mouse row maths) so the list gains the row. Judge each step
+    in real-terminal screenshots (tab, docked window, floats covering the corner, narrow terminal).
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
