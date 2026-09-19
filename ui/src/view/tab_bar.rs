@@ -193,7 +193,9 @@ impl TabBar<'_> {
             if level > 0 {
                 let glyph = GLYPHS[level as usize - 1];
                 if x < played {
-                    printer.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
+                    printer.with_color(ColorStyle::title_primary(), |p| {
+                        p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
+                    });
                 } else {
                     printer.print((start + x, 0), glyph);
                 }
