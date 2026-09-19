@@ -70,7 +70,6 @@
   (e.g. a minimum width below which it disappears, the title truncating to leave the waveform a
   reasonable share) and make it show for the currently playing track, including a track that is
   still being analysed (draw nothing until buckets exist).
-  breaking the corner-slot declarations for other windows.
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
   event is dropped, so a stuck track with no such line in the Log pane means the player never sent
