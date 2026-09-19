@@ -12,6 +12,41 @@
 
 ## TODOs:
 
+### Owner's list — do these first, in this order
+- [ ] (started) Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
+  (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
+  the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
+  `unlink`, and `open` without its optional argument) — their rows answer Enter with "this command
+  has no key" — and the actions `keybindings::fixed` hard-wires that are not structural: Space
+  play/pause and `x` export. Give each a `core::BuiltinAction` (ids are additions to `state.toml`'s
+  `builtin:<id>`), which means `BuiltinAction::ALL`'s default key becomes `Option<char>` (a command
+  row starts with none; `effective_target_at`, `builtin_at`, `effective_hotkey` and `default_key`
+  follow), `keybindings::map` runs the action, and `command::parse` can return the item's built-in for
+  a no-argument command instead of one arm per word. Remove each from `fixed` as it becomes a built-in
+  so `keybindings::taken` keeps knowing every taken key. Commands that TAKE an argument are bindable
+  too: pressing the bound key opens the command line with the command's long name and a trailing
+  space typed in (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the argument, Enter runs it
+  and Esc cancels — the path `+` already uses for `newplaylist ` (`Action::NewPlaylistPrompt`);
+  generalize that one action to "prompt for item N" instead of adding one per command. A command
+  with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
+  run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
+  (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
+  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row.
+  Where the previous agent stopped (it ran out of quota mid-task; everything it did is committed
+  and pushed, tree clean): DONE — load-time `set_hotkeys` validation (`3110cfd`), Help keeps its
+  own Esc / gives Tab back when tabbed or docked (`8465e4a`), `Done` flashes + preselect + warnings
+  full text + `initial_screen` removed (`939b979`), fullscreen windows stand in for the active tab
+  and fullscreen lists let shell keys through (`baf2686`), two spellings per command (`1917d3f`),
+  overwrite confirm + cursor stays after a direct assign (`f356a5d`). NOT DONE — everything in this
+  item (no-argument commands and Space/`x` as built-ins, `default_key: Option<char>`, argument
+  commands that prompt in the command line, `o` for `:open`), plus two leftovers: (a) the last
+  commit's confirm dialog was not exercised from the Help window's capture paths (playlist row and
+  built-in row taking a playlist's key) and its "both sides" wording was about to be improved —
+  test those first; (b) `command::parse` still switches on `item.names[0]` strings
+  (`ui/src/command.rs` ~79): give items a typed id the match switches on exhaustively (a
+  no-argument command's item carries its built-in, which this item needs anyway), and let
+  `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
+  owner decision, do not make it a fixed-size array.
 - [ ] After a restart the Playlists window shows only `[spotify] Liked Songs` — the user's Spotify
   playlists are missing. They appear after a fresh Spotify login in the running app, and are gone
   again after the next restart. Do NOT reproduce (it needs the owner's real login): analyse the code
@@ -99,6 +134,51 @@
   draw and click hit-test share that layout. If the generic float frame later grows a footer slot
   any window can fill (`playlist-keys` has the same need: `[key] assign   [Backspace] clear`), build
   it once there rather than per window.
+- [ ] The five startup tabs (Now Playing, Playlists, Search, History, Queue) are static: the
+  placement key (`M`, `BuiltinAction::CyclePlacement`) on one of them never removes it from the tab
+  bar. Instead it opens a SECOND window of the same kind and cycles that one: first press → the
+  companion opens embedded (docked) and takes focus, further presses → screen → float, and the step
+  that would make it tabbed closes it instead (focus returns to the tab). Pressing `M` again on the
+  tab re-opens the companion where the cycle starts. `M` with the companion focused continues its
+  cycle the same way. The companion is its own instance (own cursor, filter, open playlist, memos),
+  like today's `queue`/`history` pane windows — those ARE the Queue/History tabs' companions;
+  Now Playing, Playlists and Search each get one in `screen::WINDOWS` (for Playlists see the
+  backtick item below — one companion, not two). `:panes <tab-window> <mode>` follows the same
+  rule (a startup tab can't leave the tab bar; the command targets its companion) and the
+  "last tab stays tabbed" refusal becomes unreachable for them. Non-startup windows (Log,
+  Settings, Vis, Help) keep today's behaviour: `M` moves the window itself, including into and out
+  of the tab bar. Layout persistence (`state.toml [layout]`) keeps working; a saved layout that has
+  a startup tab elsewhere → default layout.
+- [ ] A track whose duration is unknown (shown as 0:00, no scrubber) doesn't auto-advance when it
+  ends — playback just stops and the next track never starts. Suspects, by reading: end-of-track
+  detection that depends on `duration_ms` (a position ≥ duration check that can never fire when
+  duration is 0; preload/`PreloadHint` timing keyed on remaining time); `RodioPlayer`
+  (`player/src/rodio_player.rs`) only emitting `PlayerEvent::Finished` from a path that needs a
+  known length, vs. the sink actually draining (`Sink::empty()`/source exhaustion) — the latter
+  must emit `Finished` regardless of duration; the no-`Content-Length` streaming fallback and
+  `Media::Reader` sources, which are exactly the tracks with unknown length; the `generation` guard
+  dropping a `Finished` as stale; `Session::on_player_event` ignoring `Finished` when
+  `progress`/duration is zero. Fix so that "the decoder ran out of samples" always advances
+  (`advance(false)`), and fill in the duration when the decoder learns it late.
+- [ ] Backtick (`BuiltinAction::TogglePlaylistKeys`) means "switch to the other Playlists window":
+  if another Playlists-kind window is shown, focus it (from the Playlists tab → the companion, from
+  the companion → back to the Playlists tab or whichever list had focus before; from any other
+  window → the companion); if none is open, open the floating one (`playlist-keys`) as today —
+  keyed-first order, preselect, top level. It never closes on backtick when it was already open
+  elsewhere (docked/screen): it just takes focus; backtick on the focused floating one closes it
+  (unchanged). With the static-tabs item above, `playlist-keys` IS the Playlists tab's companion:
+  `M` on the Playlists tab cycles `playlist-keys` through embedded/screen/float/closed, backtick
+  jumps between the two. Rename the action/id to what it does.
+- [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
+  as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
+  reach it through `show(id)` + the shell's search text field (`Editing::Search`,
+  `ui/src/view/input.rs`), which was written for "Search is the active tab": where the query input
+  is drawn and which window gets focus after Enter; results arriving while the docked window isn't
+  focused; the `searching` flag in `Ctx`/the list frame key and the loading mark; Enter/`q`/playlist
+  hotkeys acting on `active_list()` rather than the docked Search list; the leading-digit handling
+  in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
+  `/` from another list jumps to the docked one. Make the window the unit: everything Search does
+  as a tab it does in any placement, through the same `TrackList` paths.
 
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
@@ -217,16 +297,6 @@
   bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
-- [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
-  as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
-  reach it through `show(id)` + the shell's search text field (`Editing::Search`,
-  `ui/src/view/input.rs`), which was written for "Search is the active tab": where the query input
-  is drawn and which window gets focus after Enter; results arriving while the docked window isn't
-  focused; the `searching` flag in `Ctx`/the list frame key and the loading mark; Enter/`q`/playlist
-  hotkeys acting on `active_list()` rather than the docked Search list; the leading-digit handling
-  in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
-  `/` from another list jumps to the docked one. Make the window the unit: everything Search does
-  as a tab it does in any placement, through the same `TrackList` paths.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
@@ -295,25 +365,6 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
-  (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
-  the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
-  `unlink`, and `open` without its optional argument) — their rows answer Enter with "this command
-  has no key" — and the actions `keybindings::fixed` hard-wires that are not structural: Space
-  play/pause and `x` export. Give each a `core::BuiltinAction` (ids are additions to `state.toml`'s
-  `builtin:<id>`), which means `BuiltinAction::ALL`'s default key becomes `Option<char>` (a command
-  row starts with none; `effective_target_at`, `builtin_at`, `effective_hotkey` and `default_key`
-  follow), `keybindings::map` runs the action, and `command::parse` can return the item's built-in for
-  a no-argument command instead of one arm per word. Remove each from `fixed` as it becomes a built-in
-  so `keybindings::taken` keeps knowing every taken key. Commands that TAKE an argument are bindable
-  too: pressing the bound key opens the command line with the command's long name and a trailing
-  space typed in (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the argument, Enter runs it
-  and Esc cancels — the path `+` already uses for `newplaylist ` (`Action::NewPlaylistPrompt`);
-  generalize that one action to "prompt for item N" instead of adding one per command. A command
-  with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
-  run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
-  (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
-  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row.
 - [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
   (`:add-to-playlist/:add`, under about 22 columns: a float on a 60-column terminal, a side dock)
   the cluster is cut mid-word. Let the command cell break after a `/`. In a very wide rect the command
