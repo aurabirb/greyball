@@ -128,6 +128,14 @@
   started (a stale stop or a dropped channel racing the new load), or a history entry resolving to
   a rendition whose reader was already consumed/closed. Likely related to the rapid-skip bug
   above — fix them together if the cause is shared.
+- [ ] A failed fetch of a source's top-level playlist list is final for the session:
+  `ViewCache::ensure_remote_playlists` (`core/src/view_cache.rs`) sets `partial = false` whether the
+  fetch landed `Ok` or `Err`, and every later kick returns early on `!entry.partial` — so starting
+  offline (or a transient 5xx) leaves the Playlists screen without that source's playlists until
+  restart. Keep a failed entry retriable (don't clear `partial` on `Err`, or track a failed state)
+  and retry when the Playlists screen is opened and when the source's plugin health returns to
+  `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
+  hammered; surface the failure in the warnings list rather than silently showing nothing.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
