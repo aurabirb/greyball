@@ -92,6 +92,21 @@
   non-built-in binding whose key is a built-in's effective key (its default unless that built-in is
   remapped elsewhere), push a warning naming the dropped binding, and let the next save persist the
   cleaned map.
+- [ ] Skipping tracks very fast (holding/mashing next/prev) makes playback misbehave. Reproduce
+  first and write down the exact symptoms from `medley.log` (wrong track playing vs. shown, audio
+  of two tracks overlapping, stuck `Loading`, a skipped-over track starting late, extra
+  auto-advances, history/scrobble spam, a burst of downloads/streams left running), then fix the
+  cause rather than the symptom. Where to look: `Command::Next`/`Previous` → `advance(manual)` →
+  `play_next_in_context`/`play_track` (`core/src/app.rs`), each of which starts a real load;
+  `RodioPlayer`'s `generation` counter (`player/src/rodio_player.rs`) already drops stale `Loaded`
+  results and stale `Finished` events — check the Spotify player (`sources/spotify/src/player.rs`)
+  has the equivalent, that stale `PlayerEvent`s (`Finished`/`Stopped`/`Playing` from a superseded
+  load) can't reach `on_player_event` and trigger `advance(false)` or overwrite `now_playing`, that
+  `pending_cache_fallback` and history recording only fire for the track that actually ends up
+  playing, and that superseded resolves/HTTP streams/cache downloads are cancelled instead of
+  piling up. Likely shape of the fix: make skips cheap — move the cursor/now-playing immediately
+  but debounce the actual load (~150–250 ms after the last skip) so only the final target is
+  resolved, with every async result tagged by a load generation and ignored when stale.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
