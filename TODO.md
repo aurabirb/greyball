@@ -336,3 +336,12 @@
   inefficient/verbose implementations before pushing work.
 - [ ] Run an agent to reduce code duplication and DRY violations, along with any
   violations of the user policies.
+
+### Only if observed
+- [ ] (Do NOT start unless the owner has seen playback wedge again after the skip debounce and the
+  Spotify session recycle on consecutive load failures; capture `medley.log` at that moment first.)
+  Harden the Spotify playback path against a wedged librespot session and skip floods: cancel the
+  librespot load already in flight when a newer one supersedes it; a timeout that turns a stuck
+  `Loading` state into `LoadFailed` and lets the user retry; a debounce or coalescing inside the
+  rodio and Spotify players themselves (the core skip debounce only covers `Command::Next`/`Previous`);
+  load-generation tags on Spotify `Playing` events so a superseded load's events are dropped.
