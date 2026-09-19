@@ -421,6 +421,34 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
+- [ ] UI architecture work order (each step is an item below or under Features): (1) `Memo` +
+  `Screen` enum; (2) per-window modes stage A, whose first steps are the list component and the
+  modal plumbing items below, plus owner-held generations and per-window memos; (3) dispatch
+  outcomes + single feedback slot + mailboxes as event payloads (the last two sub-bullets of the
+  event-driven item), before the playlist hotkey rework and the merged Help/hotkey window since
+  both consume feedback; (4) stages B and C; (5) those two features, the status-row widget, the
+  title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels
+  lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
+- [ ] One memo type and a `Screen` enum. `ui/src/view` has four hand-rolled
+  `Mutex<Option<(key, value)>>` caches — `MedleyView::frame_cache` (`frame.rs`), `LocalFilter::cache`
+  (`filter.rs`), `follow_sig` (`lists.rs`), the Log pane's `WrapCache` (`log.rs`) — plus `built_at`
+  stamps on `HelpModal`/`PlaylistPicker`. Add one `Memo<K: PartialEq, V>` (`ui/src/view/memo.rs`)
+  with a `get_or_build(key, || value)` and move the caches onto it, so a window instance can own its
+  memos. Replace the `usize` screen constants (`NOW_PLAYING`, `PLAYLISTS`, `SEARCH`, `HIST`, `QUEUE`),
+  `lists: [ListState; N_SCREENS]` indexing and the parallel mappings over them (`TABS`,
+  `startup_screen`, `list_screen_for_pane`, `screen_name`) with a `Screen` enum.
+- [ ] Owner-held generations instead of `Session::list_revision`: `list_revision`/`touch_lists()`
+  (`core/src/app.rs`) make every mutation site judge "list change or attribute change", are too
+  coarse (Help and the filter rebuild on every `QueueChanged`/`SearchHit`) and are correct in places
+  only because a `QueueChanged` happens to follow (history appends). Put a `gen: u64` inside each
+  type that already funnels its own mutations — `Queue` (incl. history), `ViewCache`'s search results
+  and remote lists, the playlist save path, hotkeys, plugin commands — bumped next to the write in a
+  private method, and key each cache on the generation of the data it shows (filter/follow: the
+  list on screen; Help: hotkeys + playlist names + plugin commands; picker: playlists). Then delete
+  `list_revision` and the `touch_lists()` call sites; `revision` stays as the catch-all "redraw
+  something". Shape the frame memo per window — key `(generation of the list shown, list id, query,
+  offset, height)` plus a small status memo on a playback generation — so a second Playlists window
+  or a floating window adds no hand-listed key fields. Part of per-window modes stage A.
 - [ ] Make the UI event-driven instead of re-deriving everything per frame — the program should use
   messages and reactive patterns to communicate between, and render, independent parts of the app (no
   part reaching into another's state or recomputing/polling per frame what an event should drive).
