@@ -302,6 +302,20 @@
   — with tabs and panes unified under the three modes that exist today (tabbed/docked/screen), no
   new behavior; (B) the floating mode; (C) the toggle key, `:panes <window> <mode>`, persistence
   and the Settings display.
+- [ ] Create a playlist from inside the "Add to Playlist" picker: with the picker open (`+` on a
+  track — `Action::AddToPlaylistPrompt` → `PlaylistPicker`, `ui/src/view/playlist_picker.rs`),
+  pressing `+` again opens a name prompt; Enter creates the playlist (`Command::NewPlaylist`, the
+  same path as `:newplaylist`) and returns to the picker with the new playlist in the list and
+  selected, so a second Enter adds the track to it; Esc in the prompt returns to the picker
+  unchanged. `+` with no track selected already opens the `newplaylist ` command line
+  (`Action::NewPlaylistPrompt`, `ui/src/view/input.rs`) — reuse that prompt/`commit_edit` path
+  rather than a second text field, with the picker kept open underneath instead of being closed
+  by entering edit mode (check the modal precedence chain in `on_event`/`draw`: `editing` is
+  handled before the picker). The key is whatever `BuiltinAction::AddToPlaylistOrNew` is
+  effectively bound to, not a hard-coded `+`. The picker refreshes its playlist snapshot on a
+  `Session::revision` change, so the new row appears without reopening; add the key to the
+  picker's footer hint (`[+] new playlist`). An empty picker ("no playlists") gets the same key
+  in place of the `:newplaylist <name>` instruction text.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
