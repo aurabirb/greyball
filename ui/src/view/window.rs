@@ -205,9 +205,9 @@ impl Windows {
         WINDOWS[id.0].name
     }
 
-    /// The windows `:panes <mode>` without a name places: those that do not start as tabs.
-    pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + use<> {
-        WINDOWS.iter().enumerate().filter(|(_, startup)| !startup.tabbed).map(|(i, _)| WindowId(i))
+    /// The windows `:panes <mode>` without a name places: those that are not tabs now.
+    pub(super) fn panes(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.ids().filter(|&id| self.placement(id) != Placement::Tabbed)
     }
 
     pub(super) fn placements(&self) -> &Placements {

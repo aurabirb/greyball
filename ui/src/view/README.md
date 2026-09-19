@@ -27,7 +27,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Windows::place` is its one write and bumps `Placements::generation`. `MedleyView::set_placement` is
   the one caller: it keeps `tabs` and `open` in step, keeps a shown window shown and a focused one
   focused, and refuses to move the last tab (a flash). `:panes [<window>] <placement>` goes through it
-  (without a name: every pane window; to `screen` it only closes an open window), and so does the
+  (without a name: every window that is not a tab right now; to `screen` it only closes an open window), and so does the
   `CyclePlacement` key (`M`), which moves the focused window Tabbed → Docked → Screen → Floating and
   flashes the new placement.
 - The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
@@ -47,7 +47,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
-  windows with at least one tab. A restored layout's active tab wins over `Config::initial_screen`,
+  windows with at least one tab and at most one open `screen` window. A restored layout's active tab wins over `Config::initial_screen`,
   which only picks the tab of a default layout.
 - A floating window's own title row sits in the top border of the box the shell draws around it
   (`draw_float_frame`), so a window never knows it floats. Opening a `Floating` or `Screen` window
@@ -186,9 +186,12 @@ on `revision` — it is read fresh or kept in its own small cache.
    border or title row raises it; a click outside a floating window reaches what is under it and
    closes nothing.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
-   `send` offers the key to the focused window, then the active tab's — except Esc with a floating
-   or `Screen` window focused, which only that window sees and which closes it when ignored, and any
-   key under a `Screen` window, which goes no further but for the `CyclePlacement` key; what both ignore goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
+   `send` offers the key to the focused window. Enter and Esc it ignores go on to the active tab
+   when that is a list (play from, or back out of, the main list while a Log has focus); no other key
+   ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
+   user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
+   it when ignored, and any key under a `Screen` window goes no further but for the `CyclePlacement`
+   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

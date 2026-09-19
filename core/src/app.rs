@@ -613,6 +613,10 @@ impl Session {
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
         self.touch();
+        // Only tracks the player moved on to by itself count towards `MAX_LOAD_FAILURES`.
+        if matches!(cmd, Command::Play(_) | Command::PlayContext { .. } | Command::Next | Command::Previous) {
+            self.load_failures = 0;
+        }
         match cmd {
             Command::Search(text) => {
                 self.view.begin_search(&text);
@@ -1078,6 +1082,7 @@ impl Session {
                                 } else {
                                     self.load_failures = 0;
                                     self.queue.stop();
+                                    self.shown.write().now_playing = None;
                                     self.warn("playback", &format!("stopped: {MAX_LOAD_FAILURES} tracks in a row failed to load"));
                                 }
                             }

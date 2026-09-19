@@ -132,7 +132,7 @@ impl MedleyView {
         view
     }
 
-    /// Applies a saved layout, or none of it unless it places exactly the startup windows and keeps a tab.
+    /// Applies a saved layout, or none of it unless it is one `saved_layout` could have written.
     fn restore(&mut self, layout: &Layout) -> Option<()> {
         let ids = |names: &[String]| names.iter().map(|name| self.windows.named(name)).collect::<Option<Vec<_>>>();
         let (tabs, open) = (ids(&layout.tabs)?, ids(&layout.open)?);
@@ -148,7 +148,9 @@ impl MedleyView {
         let all: Vec<WindowId> = tabs.iter().copied().chain(placed.iter().map(|&(id, _)| id)).collect();
         let repeats = |ids: &[WindowId]| ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id));
         let open_tab = open.iter().any(|id| tabs.contains(id));
-        if repeats(&all) || all.len() != self.windows.ids().count() || repeats(&open) || open_tab {
+        // A second open fullscreen window would sit unseen under the first.
+        let screens = placed.iter().filter(|(id, placement)| *placement == Placement::Screen && open.contains(id)).count();
+        if repeats(&all) || all.len() != self.windows.ids().count() || repeats(&open) || open_tab || screens > 1 {
             return None;
         }
         for &id in &tabs {
@@ -553,12 +555,14 @@ impl MedleyView {
             self.focus = Focus::Window(self.main_id());
         }
 
-        // A key goes to the focused window, then the active tab's, then the shell; a fullscreen window keeps every key.
+        // A key goes to the focused window, then the shell; a fullscreen window keeps every key.
         let ids = [fullscreen.unwrap_or(self.focused_id()), self.main_id()];
         // Esc a floating or fullscreen window has no use for closes it, before the tab beneath sees it.
         let closing = *event == Event::Key(Key::Esc)
             && matches!(self.windows.placement(ids[0]), Placement::Floating | Placement::Screen);
-        let alone = fullscreen.is_some() || closing || ids[0] == ids[1];
+        // Only Enter and Esc go on to the active tab, and only to a list: nothing else acts on a window out of focus.
+        let through = matches!(event, Event::Key(Key::Enter | Key::Esc)) && self.windows[ids[1]].list().is_some();
+        let alone = fullscreen.is_some() || closing || ids[0] == ids[1] || !through;
         match self.send(if alone { &ids[..1] } else { &ids }, event) {
             Some((_, outcome)) => self.apply(outcome),
             None if closing => {

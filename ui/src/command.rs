@@ -8,7 +8,7 @@ use core::{Axis, Command, Session, Side, TrackId};
 
 use crate::screen::{Placement, WINDOWS};
 
-/// A `:panes` argument; `None` fields stay as they are, `window: None` targets every pane window.
+/// A `:panes` argument; `None` fields stay as they are, `window: None` targets every window that is not a tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanePatch {
     pub window: Option<&'static str>,
@@ -90,7 +90,7 @@ pub const HELP: &[(&str, &str)] = &[
     (
         "panes [<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window (names as for :window) to the tab bar, the dock, fullscreen or a box over the view — \
-         omit <window> to move every pane; the last tab stays tabbed",
+         omit <window> to move every window that is not a tab; the last tab stays tabbed",
     ),
     (
         "keys",
