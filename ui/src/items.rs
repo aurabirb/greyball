@@ -37,7 +37,33 @@ pub enum Key {
     Builtin(BuiltinAction),
 }
 
+/// A `:`-command, which `command::parse` matches on exhaustively.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cmd {
+    Search,
+    NewPlaylist,
+    AddToPlaylist,
+    Open,
+    Export,
+    Log,
+    Settings,
+    Vis,
+    Queue,
+    History,
+    Hist,
+    Window,
+    Panes,
+    ToggleScan,
+    ToggleShuffle,
+    Link,
+    Unlink,
+    Help,
+    Quit,
+}
+
 pub struct Item {
+    /// `None` for a key-only item.
+    pub cmd: Option<Cmd>,
     pub section: Section,
     /// A command's two `:`-spellings, long then short; empty for a key-only item.
     pub names: &'static [&'static str],
@@ -60,8 +86,8 @@ impl Item {
     }
 }
 
-const fn command(names: &'static [&'static str], args: &'static str, summary: &'static str, detail: &'static str) -> Item {
-    Item { section: Section::Commands, names, args, summary, detail, key: Key::None }
+const fn command(cmd: Cmd, names: &'static [&'static str], args: &'static str, summary: &'static str, detail: &'static str) -> Item {
+    Item { cmd: Some(cmd), section: Section::Commands, names, args, summary, detail, key: Key::None }
 }
 
 const fn keyed(item: Item, action: BuiltinAction) -> Item {
@@ -69,7 +95,7 @@ const fn keyed(item: Item, action: BuiltinAction) -> Item {
 }
 
 const fn key(section: Section, key: Key, summary: &'static str, detail: &'static str) -> Item {
-    Item { section, names: &[], args: "", summary, detail, key }
+    Item { cmd: None, section, names: &[], args: "", summary, detail, key }
 }
 
 const fn builtin(section: Section, action: BuiltinAction, summary: &'static str, detail: &'static str) -> Item {
@@ -81,46 +107,49 @@ const fn fixed(section: Section, keys: &'static str, summary: &'static str, deta
 }
 
 pub const ITEMS: &[Item] = &[
-    command(&["search", "s"], "<query>", "search all sources for tracks", ""),
+    command(Cmd::Search, &["search", "s"], "<query>", "search all sources for tracks", ""),
     keyed(
-        command(&["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
+        command(Cmd::NewPlaylist, &["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
         BuiltinAction::AddToPlaylistOrNew,
     ),
-    command(&["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
+    command(Cmd::AddToPlaylist, &["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
     command(
+        Cmd::Open,
         &["open", "o"],
         "[<url-or-path>]",
         "open a playlist link, an M3U file or local audio files",
         "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: a file browser.",
     ),
-    command(&["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
-    command(&["log", "l"], "", "toggle the log pane", ""),
-    command(&["settings", "set"], "", "toggle the settings pane", ""),
-    command(&["vis", "v"], "", "toggle the real-audio bar-eq visualizer pane", ""),
-    command(&["queue", "qu"], "", "toggle the queue pane", ""),
-    command(&["history", "hi"], "", "toggle the history pane", ""),
-    command(&["hist", "ht"], "", "show the History tab window (history-tab)", ""),
+    command(Cmd::Export, &["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
+    command(Cmd::Log, &["log", "l"], "", "toggle the log pane", ""),
+    command(Cmd::Settings, &["settings", "set"], "", "toggle the settings pane", ""),
+    command(Cmd::Vis, &["vis", "v"], "", "toggle the real-audio bar-eq visualizer pane", ""),
+    command(Cmd::Queue, &["queue", "qu"], "", "toggle the queue pane", ""),
+    command(Cmd::History, &["history", "hi"], "", "toggle the history pane", ""),
+    command(Cmd::Hist, &["hist", "ht"], "", "show the History tab window (history-tab)", ""),
     command(
+        Cmd::Window,
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
         "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, queue, history (the panes), playlist-keys, help.",
     ),
     command(
+        Cmd::Panes,
         &["panes", "p"],
         "[<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
         "Window names as for :window; without one, every window that is not a tab moves. A startup tab stays tabbed: naming it moves its companion window (tabbed closes it).",
     ),
-    keyed(command(&["togglescan", "ts"], "", "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."), BuiltinAction::ToggleScan),
-    keyed(command(&["toggleshuffle", "sh"], "", "toggle queue shuffle", ""), BuiltinAction::ToggleShuffle),
-    command(&["link", "ln"], "", "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
-    command(&["unlink", "ul"], "", "unlink the selected track from its links", ""),
+    keyed(command(Cmd::ToggleScan, &["togglescan", "ts"], "", "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."), BuiltinAction::ToggleScan),
+    keyed(command(Cmd::ToggleShuffle, &["toggleshuffle", "sh"], "", "toggle queue shuffle", ""), BuiltinAction::ToggleShuffle),
+    command(Cmd::Link, &["link", "ln"], "", "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
+    command(Cmd::Unlink, &["unlink", "ul"], "", "unlink the selected track from its links", ""),
     keyed(
-        command(&["help", "h"], "", "open this window", "Enter on a row gives it a new key, Backspace its default back."),
+        command(Cmd::Help, &["help", "h"], "", "open this window", "Enter on a row gives it a new key, Backspace its default back."),
         BuiltinAction::OpenHelp,
     ),
-    keyed(command(&["quit", "q"], "", "exit medley", ""), BuiltinAction::Quit),
+    keyed(command(Cmd::Quit, &["quit", "q"], "", "exit medley", ""), BuiltinAction::Quit),
     fixed(Section::Movement, "j/k", "move the cursor", ""),
     fixed(Section::Movement, "J/K", "move a page", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),
@@ -153,8 +182,8 @@ pub const ITEMS: &[Item] = &[
 ];
 
 /// The item `word` names, by any of its spellings.
-pub fn named(word: &str) -> Option<&'static Item> {
-    ITEMS.iter().find(|item| item.names.contains(&word))
+pub fn named(word: &str) -> Option<(Cmd, &'static Item)> {
+    ITEMS.iter().find_map(|item| item.cmd.filter(|_| item.names.contains(&word)).map(|cmd| (cmd, item)))
 }
 
 /// What a built-in does, as its row says it.

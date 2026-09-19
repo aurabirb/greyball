@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use core::{Axis, Command, Session, Side, TrackId};
 
-use crate::items;
+use crate::items::{self, Cmd};
 use crate::screen::{Placement, WINDOWS};
 
 /// A `:panes` argument; `None` fields stay as they are, `window: None` targets every window that is not a tab.
@@ -68,7 +68,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         return Err("empty command".into());
     }
     // A word the table doesn't know may be a plugin's, which only the live session can tell.
-    let Some(item) = items::named(word) else {
+    let Some((cmd, item)) = items::named(word) else {
         return Ok(Parsed::PluginCommand { word: word.to_string(), arg: (!rest.is_empty()).then(|| rest.to_string()) });
     };
     // `<arg>` is required, `[arg]` optional, and a command without any takes none.
@@ -76,15 +76,15 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
     if (required && rest.is_empty()) || (none && !rest.is_empty()) {
         return Err(item.usage());
     }
-    match item.names[0] {
-        "quit" => Ok(Parsed::Ready(Command::Quit)),
-        "help" => Ok(Parsed::Help),
-        "search" => Ok(Parsed::Ready(Command::Search(rest.to_string()))),
-        "newplaylist" => Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string()))),
-        "add-to-playlist" => Ok(Parsed::AddToPlaylist(rest.to_string())),
-        "open" if rest.is_empty() => Ok(Parsed::OpenBrowse),
-        "open" => Ok(Parsed::Open(rest.to_string())),
-        "export" => {
+    match cmd {
+        Cmd::Quit => Ok(Parsed::Ready(Command::Quit)),
+        Cmd::Help => Ok(Parsed::Help),
+        Cmd::Search => Ok(Parsed::Ready(Command::Search(rest.to_string()))),
+        Cmd::NewPlaylist => Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string()))),
+        Cmd::AddToPlaylist => Ok(Parsed::AddToPlaylist(rest.to_string())),
+        Cmd::Open if rest.is_empty() => Ok(Parsed::OpenBrowse),
+        Cmd::Open => Ok(Parsed::Open(rest.to_string())),
+        Cmd::Export => {
             // A trailing token with a '/' or an .m3u/.m3u8 ending is the path, the rest the name.
             if let Some((name, tail)) = rest.rsplit_once(char::is_whitespace) {
                 let tail = tail.trim();
@@ -100,15 +100,18 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
                 path: None,
             })
         }
-        name @ ("log" | "settings" | "vis" | "queue" | "history") => window_name(name).map(Parsed::ToggleWindow),
-        "window" => window_name(rest).map(Parsed::ToggleWindow),
-        "togglescan" => Ok(Parsed::Ready(Command::ToggleScan)),
-        "toggleshuffle" => Ok(Parsed::Ready(Command::ToggleShuffle)),
-        "hist" => Ok(Parsed::History),
-        "link" => Ok(Parsed::Link),
-        "unlink" => Ok(Parsed::Unlink),
-        "panes" => parse_pane_patch(rest).map(Parsed::SetPaneLayout).map_err(|unknown| format!("{} {unknown}", item.usage())),
-        other => Err(format!("unknown command: {other}")),
+        Cmd::Log => window_name("log").map(Parsed::ToggleWindow),
+        Cmd::Settings => window_name("settings").map(Parsed::ToggleWindow),
+        Cmd::Vis => window_name("vis").map(Parsed::ToggleWindow),
+        Cmd::Queue => window_name("queue").map(Parsed::ToggleWindow),
+        Cmd::History => window_name("history").map(Parsed::ToggleWindow),
+        Cmd::Window => window_name(rest).map(Parsed::ToggleWindow),
+        Cmd::ToggleScan => Ok(Parsed::Ready(Command::ToggleScan)),
+        Cmd::ToggleShuffle => Ok(Parsed::Ready(Command::ToggleShuffle)),
+        Cmd::Hist => Ok(Parsed::History),
+        Cmd::Link => Ok(Parsed::Link),
+        Cmd::Unlink => Ok(Parsed::Unlink),
+        Cmd::Panes => parse_pane_patch(rest).map(Parsed::SetPaneLayout).map_err(|unknown| format!("{} {unknown}", item.usage())),
     }
 }
 

@@ -13,7 +13,7 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-- [ ] (started) Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
+- [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
   `unlink`, and `open` without its optional argument) — their rows answer Enter with "this command
@@ -31,17 +31,7 @@
   with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
   run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
   (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
-  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row.
-  Where the previous agent stopped (it ran out of quota mid-task; everything it did is committed
-  and pushed, tree clean): DONE — load-time `set_hotkeys` validation (`3110cfd`), Help keeps its
-  own Esc / gives Tab back when tabbed or docked (`8465e4a`), `Done` flashes + preselect + warnings
-  full text + `initial_screen` removed (`939b979`), fullscreen windows stand in for the active tab
-  and fullscreen lists let shell keys through (`baf2686`), two spellings per command (`1917d3f`),
-  overwrite confirm + cursor stays after a direct assign (`f356a5d`). NOT DONE — everything in this
-  item (no-argument commands and Space/`x` as built-ins, `default_key: Option<char>`, argument
-  commands that prompt in the command line, `o` for `:open`), plus two leftovers: (a) the last
-  commit's confirm dialog was not exercised from the Help window's capture paths (playlist row and
-  built-in row taking a playlist's key) and its "both sides" wording was about to be improved —
+  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row. `Item.names` stays a slice (owner decision, not a fixed-size array).
   test those first; (b) `command::parse` still switches on `item.names[0]` strings
   (`ui/src/command.rs` ~79): give items a typed id the match switches on exhaustively (a
   no-argument command's item carries its built-in, which this item needs anyway), and let

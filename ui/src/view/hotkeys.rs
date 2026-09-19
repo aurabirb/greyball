@@ -34,11 +34,11 @@ impl MedleyView {
         // A built-in is rebound on purpose; only a playlist's own key going is news.
         let old = old.filter(|&old| old != key && !matches!(target, HotkeyTarget::Builtin(_)));
         let question = match (holder.filter(|holder| *holder != target), old) {
-            (Some(holder), None) => format!("Move '{key}' from {} to {name}?", self.hotkey_row_name_for(&holder)),
+            (Some(holder), None) => format!("Take '{key}' from {:?} and bind it to {name:?}?", self.hotkey_row_name_for(&holder)),
             (Some(holder), Some(old)) => {
-                format!("Move '{key}' from {} to {name}, replacing its key '{old}'?", self.hotkey_row_name_for(&holder))
+                format!("Take '{key}' from {:?} and bind it to {name:?}, replacing its key '{old}'?", self.hotkey_row_name_for(&holder))
             }
-            (None, Some(old)) => format!("Replace {name}'s key '{old}' with '{key}'?"),
+            (None, Some(old)) => format!("Replace the key '{old}' of {name:?} with '{key}'?"),
             (None, None) => return self.commit_bind(target, key),
         };
         // The dialog holds what it named, so nothing that re-sorts or rebinds meanwhile can retarget it.
