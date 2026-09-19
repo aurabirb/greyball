@@ -45,7 +45,8 @@
     playlist` (the same run of assigned keys), `[Esc] close`, `[M] <next>`.
   - Now Playing (the first tab): `[?] help`, `[p/n] prev/next`, the queue keys (`[w/e] queue`, with
     the real bindings — the defaults are Enqueue `q`, Wedge `w`, ClearQueue `E`, so confirm which
-    the owner wants shown), and `[P] cycle layout` only when something is docked.
+    the owner wants shown), the select-playing-track key (`[0] show playing`, the real
+    `RevealPlaying` binding), and `[P] cycle layout` only when something is docked.
   - Queue tab: mention the clear-queue key (`[E] clear queue`, the real `ClearQueue` binding).
   - Sweep the remaining windows (Search, History, Log, Settings; Vis stays blank) into the same
     `[key] action` style showing the few keys that matter in each.
