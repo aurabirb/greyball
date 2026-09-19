@@ -225,7 +225,7 @@ impl HelpPane {
             _ => "[Enter] rebind   [Bksp] default   [Tab] next window",
         };
         let leave = (!placement.closes_on_esc()).then(|| "[?] leave".to_string());
-        let close = placement.closes_on_esc().then(|| "[Esc] close".to_string());
+        let close = Some("[Esc] close".to_string());
         [keys.to_string()].into_iter().chain(close).chain(leave).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
     }
 
