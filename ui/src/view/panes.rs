@@ -323,7 +323,7 @@ impl MedleyView {
             Kind::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
             _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
         };
-        let flash = self.feedback.as_ref().or(window.hint().as_ref()).map(|text| format!("  {text}"));
+        let flash = self.feedback.as_ref().or(window.hint(true).as_ref()).map(|text| format!("  {text}"));
         draw_modal_frame(printer, Rect::from_size((0, 0), printer.size), None, flash.as_deref().unwrap_or(hint));
         window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
     }

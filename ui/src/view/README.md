@@ -66,8 +66,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
-  re-wraps). A focused Help window consumes Tab and Shift-Tab to jump sections (title to the top), so
-  focus leaves it by `?`, Esc on a float, the mouse or a tab digit. Enter on a row with a bindable
+  re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
+  to the top), so focus leaves it by `?`, Esc, the mouse or a tab digit; tabbed or docked, Tab and
+  Shift-Tab cycle focus as anywhere and Esc does nothing (`Window::hint(over)` words the hint to
+  match). Enter on a row with a bindable
   target stores that target and its name in `capturing`, so what the next character binds is what the
   prompt named whatever rebuilt meanwhile; every key is consumed while capturing, a non-character
   cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
@@ -239,14 +241,14 @@ on `revision` — it is read fresh or kept in its own small cache.
    border or title row raises it; a click outside a floating window reaches what is under it and
    closes nothing.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
-   `send` offers the key to the focused window. Enter and Esc a window that is no list ignores go on to
+   `send` offers the key to the focused window — but for Tab and Shift-Tab, which only a floating or
+   `Screen` window is offered. Enter and Esc a Log, Settings or Vis window ignores go on to
    the active tab when that is a list (play from, or back out of, the main list while a Log has focus);
-   a focused list keeps its own Enter and Esc even with nothing to act on; no other key
+   a focused list or Help window keeps its own Enter and Esc even with nothing to act on; no other key
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
    user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
    it when ignored, and any key under a `Screen` window goes no further but for the `CyclePlacement`
-   key; what is left goes to `on_shell_key` (`Tab` cycles `focus_order()` unless a focused Help window
-   took it for its sections, seek, and
+   key; what is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

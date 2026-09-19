@@ -14,7 +14,7 @@ use core::{Command, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
-use crate::screen::{Placement, initial_window};
+use crate::screen::{Kind, Placement, initial_window};
 
 use frame::Chrome;
 use input::Editing;
@@ -206,6 +206,11 @@ impl MedleyView {
         }
     }
 
+    /// Floating or fullscreen: shown over the view rather than in it.
+    fn over_view(&self, id: WindowId) -> bool {
+        matches!(self.windows.placement(id), Placement::Floating | Placement::Screen)
+    }
+
     /// The newest open fullscreen window, shown alone.
     fn fullscreen(&self) -> Option<WindowId> {
         self.open_in(Placement::Screen).last()
@@ -322,10 +327,11 @@ impl MedleyView {
         self.focus_order_given(self.warn_count())
     }
 
-    fn cycle_focus(&mut self) {
+    fn cycle_focus(&mut self, back: bool) {
         let order = self.focus_order();
         let idx = order.iter().position(|f| *f == self.focus).unwrap_or(0);
-        match order[(idx + 1) % order.len()] {
+        let step = if back { order.len() - 1 } else { 1 };
+        match order[(idx + step) % order.len()] {
             Focus::Window(id) => self.focus_window(id),
             Focus::Warnings => self.focus = Focus::Warnings,
         }
@@ -340,8 +346,8 @@ impl MedleyView {
     /// Keys no window took.
     fn on_shell_key(&mut self, event: &Event) -> EventResult {
         match event {
-            Event::Key(Key::Tab) => {
-                self.cycle_focus();
+            Event::Key(Key::Tab) | Event::Shift(Key::Tab) => {
+                self.cycle_focus(matches!(event, Event::Shift(_)));
                 EventResult::consumed()
             }
             Event::Key(Key::Right) => self.run(Command::Seek(5000)),
@@ -554,14 +560,16 @@ impl MedleyView {
         // A key goes to the focused window, then the shell; a fullscreen window keeps every key.
         let ids = [fullscreen.unwrap_or(self.focused_id()), self.main_id()];
         // Esc a floating or fullscreen window has no use for closes it, before the tab beneath sees it.
-        let closing = *event == Event::Key(Key::Esc)
-            && matches!(self.windows.placement(ids[0]), Placement::Floating | Placement::Screen);
-        // Only Enter and Esc go on to the active tab's list, and only past a window that is no list itself.
+        let closing = *event == Event::Key(Key::Esc) && self.over_view(ids[0]);
+        // Only Enter and Esc go on to the active tab's list, and only past a window with no rows of its own to act on.
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()
-            && self.windows[ids[0]].list().is_none();
+            && !matches!(self.windows[ids[0]].kind, Kind::List(_) | Kind::Help);
         let alone = fullscreen.is_some() || closing || ids[0] == ids[1] || !through;
-        match self.send(if alone { &ids[..1] } else { &ids }, event) {
+        // Tab and Shift-Tab are a window's own only over the view; in it they cycle focus.
+        let cycles = matches!(event, Event::Key(Key::Tab) | Event::Shift(Key::Tab)) && !self.over_view(ids[0]);
+        let sent = if cycles { None } else { self.send(if alone { &ids[..1] } else { &ids }, event) };
+        match sent {
             Some((_, outcome)) => self.apply(outcome),
             None if closing => {
                 self.close_window(ids[0]);

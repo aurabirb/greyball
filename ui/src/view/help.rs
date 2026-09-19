@@ -215,11 +215,12 @@ impl HelpPane {
         self.capturing = None;
     }
 
-    /// The hint row's text while this window has focus.
-    pub(super) fn hint(&self) -> String {
+    /// The hint row's text while this window has focus; only `over` the view are Tab and Esc its own.
+    pub(super) fn hint(&self, over: bool) -> String {
         match &self.capturing {
             Some((name, _)) => format!("press a key for {name:?}   [Esc] cancel"),
-            None => "[Enter] new key   [Backspace] default   [Tab/Shift-Tab] section   [?/Esc] leave".to_string(),
+            None if over => "[Enter] new key   [Backspace] default   [Tab/Shift-Tab] section   [?/Esc] leave".to_string(),
+            None => "[Enter] new key   [Backspace] default   [Tab] next window   [?] leave".to_string(),
         }
     }
 

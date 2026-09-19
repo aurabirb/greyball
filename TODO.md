@@ -160,8 +160,6 @@
   - Remove the `initial_screen` config key (the saved `[layout]` decides the active tab; default
     layout starts on its first tab). No shim for configs that still carry it beyond what the
     config loader already does with unknown keys — check and report.
-  - A tabbed or docked Help window gives Tab/Shift-Tab back to the shell's focus cycle; it only
-    consumes them for section jumps when floating or fullscreen.
   Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
   flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
   focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an

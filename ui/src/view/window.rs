@@ -120,9 +120,9 @@ impl Window {
     }
 
     /// The hint row's text while this window has focus, if it has keys of its own to name.
-    pub(super) fn hint(&self) -> Option<String> {
+    pub(super) fn hint(&self, over: bool) -> Option<String> {
         match &self.body {
-            Body::Help(help) => Some(help.hint()),
+            Body::Help(help) => Some(help.hint(over)),
             _ => None,
         }
     }

@@ -313,7 +313,7 @@ impl MedleyView {
             Editing::Filter => format!("/{}", self.buffer),
             Editing::None => self.feedback.as_ref().map(|m| format!("  {m}")).unwrap_or_else(|| {
                 if let Focus::Window(id) = self.focus
-                    && let Some(hint) = self.windows[id].hint()
+                    && let Some(hint) = self.windows[id].hint(self.over_view(id))
                 {
                     return format!("  {hint}");
                 }
