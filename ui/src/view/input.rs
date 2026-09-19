@@ -237,10 +237,13 @@ impl MedleyView {
                 // Leaving the Playlists screen for anything else.
                 if n != PLAYLISTS {
                     self.playlists.leave();
-                } else if !was_playlists && self.playlists.at_top_level() {
-                    // Switching back into Playlists fresh: restore the remembered playlist.
-                    let playlists = self.with_session(|s| s.playlists());
-                    self.playlists.restore(&playlists);
+                } else if !was_playlists {
+                    // Switching into Playlists fresh: restore the remembered playlist and kick remote folder fetches.
+                    if self.playlists.at_top_level() {
+                        let playlists = self.with_session(|s| s.playlists());
+                        self.playlists.restore(&playlists);
+                    }
+                    self.with_session(|s| s.ensure_remote_playlists());
                 }
                 // A different screen's list — any filter over the old one is meaningless now.
                 self.filter.query = None;

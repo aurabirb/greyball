@@ -648,6 +648,9 @@ impl Session {
                 // always falls back to the bounded play history, which is
                 // structurally independent of the queue's own contents.
                 let just_playing = self.now_playing;
+                if self.queue.history_len() > 0 {
+                    self.touch_lists();
+                }
                 if let Some(id) = self.queue.previous_from_history() {
                     // Wedge the track we're walking back over onto the
                     // queue's front, so a later `n` resumes forward through
@@ -809,6 +812,8 @@ impl Session {
                 // auto-refresh) — rewire so that isn't stuck until a manual setup.
                 self.rewire_all_plugins();
                 self.refresh_plugin_health();
+                // A source logging in later still needs its playlists kicked off.
+                self.ensure_remote_playlists();
                 Ok(true)
             }
             CoreEvent::SourceError { .. }
@@ -1323,7 +1328,18 @@ impl Session {
     /// safe to call on every redraw of the Playlists screen without
     /// re-hitting the source's API each frame.
     pub fn remote_playlists(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
-        self.view.remote_playlists(source, self.remote_ctx())
+        self.view.remote_playlists(source)
+    }
+
+    /// Kicks a background folder fetch for every registered source — called
+    /// when the Playlists screen opens, at startup if it's the startup
+    /// screen, and on plugin (re)wiring, so a source that logs in later
+    /// still gets its playlists loaded without the user leaving the screen.
+    pub fn ensure_remote_playlists(&self) {
+        let ctx = self.remote_ctx();
+        for source in self.source_ids() {
+            self.view.ensure_remote_playlists(&source, ctx);
+        }
     }
 
     /// All of a remote playlist's ingested track ids, cheap (reads straight
@@ -1487,8 +1503,9 @@ impl Session {
     /// Clears the async toggle-result message — called when the hotkey menu
     /// (re)opens, mirroring how the UI's own `hotkey_feedback` is cleared.
     pub fn clear_membership_feedback(&mut self) {
-        self.touch();
-        *self.membership_feedback.lock().unwrap() = None;
+        if self.membership_feedback.lock().unwrap().take().is_some() {
+            self.touch();
+        }
     }
 
     /// Whether pressing play on `track` right now would be instant — any of
@@ -1574,6 +1591,7 @@ impl Session {
         self.last_status.volume = self.volume;
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
+            self.touch_lists();
         }
     }
 

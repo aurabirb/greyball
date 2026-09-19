@@ -129,10 +129,6 @@ impl MedleyView {
             };
         let settings = if want_settings { settings_entries(s, self.panes.cfg) } else { Vec::new() };
         let warn_count = s.plugin_warning_count();
-        // Feed the scan walk the visible list so it's prioritized over store order.
-        if let Some(scan) = &s.scan {
-            self.follow_scan(s, scan, self.active_screen());
-        }
         let panes = list_panes
             .iter()
             .map(|&(_pane, _, screen, offset, pane_h)| {

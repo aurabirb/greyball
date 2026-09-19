@@ -30,6 +30,13 @@ impl HelpModal {
         self.list_revision
     }
 
+    /// Replaces the lines in place and re-clamps `scroll`, so a rebuild never jumps to the top.
+    fn refresh(&mut self, lines: Vec<String>, list_revision: u64, size: Vec2) {
+        self.lines = lines;
+        self.list_revision = list_revision;
+        self.scroll = bound_offset(self.scroll, self.lines.len(), Self::view_h(size));
+    }
+
     /// Content rows between the title and the footer.
     fn view_h(size: Vec2) -> usize {
         size.y.saturating_sub(1).saturating_sub(LIST_TOP)
@@ -139,10 +146,13 @@ impl MedleyView {
     }
 
     /// Rebuilds Help's content once `list_revision` drifts — called from `required_size`, never per-draw.
-    pub(super) fn refresh_help(&mut self, list_revision: u64) {
-        if self.help.as_ref().is_some_and(|h| stale(h.list_revision(), list_revision)) {
-            let (lines, list_revision) = self.help_lines();
-            self.help = Some(HelpModal::new(lines, list_revision));
+    pub(super) fn refresh_help(&mut self, list_revision: u64, size: Vec2) {
+        if !self.help.as_ref().is_some_and(|h| stale(h.list_revision(), list_revision)) {
+            return;
+        }
+        let (lines, list_revision) = self.help_lines();
+        if let Some(help) = &mut self.help {
+            help.refresh(lines, list_revision, size);
         }
     }
 

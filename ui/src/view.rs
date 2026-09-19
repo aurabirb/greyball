@@ -129,6 +129,9 @@ impl MedleyView {
     pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> Self {
         let screen = startup_screen(initial_screen);
         let pane_cfg = session.lock().unwrap().cfg.panes;
+        if screen == PLAYLISTS {
+            session.lock().unwrap().ensure_remote_playlists();
+        }
         let vis = crate::vis::Vis::spawn(session.clone());
         Self {
             session,
@@ -351,11 +354,15 @@ impl View for MedleyView {
             let statuses = want_statuses.then(|| s.plugin_statuses().to_vec());
             let main_len = self.list_len(s, self.screen);
             let pane_lens: Vec<usize> = list_screens.iter().map(|&scr| self.list_len(s, scr)).collect();
+            // Feed the scan walk the visible list so it's prioritized over store order.
+            if let Some(scan) = &s.scan {
+                self.follow_scan(s, scan, self.active_screen());
+            }
             (warn_count, statuses, main_len, pane_lens, s.list_revision())
         });
 
         self.clamp_focus_given(warn_count);
-        self.refresh_help(list_revision);
+        self.refresh_help(list_revision, constraint);
         self.refresh_playlist_picker(list_revision, constraint);
         if let (Some(modal), Some(statuses)) = (&mut self.warnings, statuses) {
             modal.relayout(screen_size_changed, constraint, &statuses);

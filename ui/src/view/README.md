@@ -38,6 +38,10 @@ A component is a plain struct owning only its own UI state — never the session
   is deliberately never keyed on `revision` — it's read fresh or kept in its own small cache instead.
   Anything that changes UI-visible session state and doesn't already go through `dispatch`/`on_event`
   must bump `revision` itself, or the screen goes stale until the next keypress forces a cache miss.
+  An input event is not itself such a change: `on_event` only bumps `revision` when it actually clears
+  something (`clear_membership_feedback` checks the slot before touching), so a keypress or mouse move
+  that changes nothing else causes no rebuild — off-thread writes (a plugin/scan/player thread) must
+  still send an event, since nothing else will notice their mutation.
   - `Session` actually keeps two counters (`core/src/app.rs`). `revision` bumps on every UI-visible
     mutation, including a `TrackUpdated` attribute-only patch (BPM landing, a cache fill, …) and
     per-`Player` event — the frame stays keyed on it, so a scanned attribute still shows up on a
@@ -53,6 +57,13 @@ A component is a plain struct owning only its own UI state — never the session
     downloads, a scan plugin's own fetch, Spotify's background materialize-to-cache copy) must send
     one once the write actually lands — a cache fill with no matching event leaves the marker stale
     until something unrelated bumps `revision`.
+  - `follow_scan` runs from `required_size` (every layout pass), not from `build_cached_frame` — a
+    frame-cache hit must not skip it, since the visible list/cursor it feeds `ScanDriver::follow_view`
+    can change (focus, a docked pane's cursor) without anything `FrameKey` is keyed on changing.
+  - `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
+    `Session::ensure_remote_playlists` from three points, never from the getter: the Playlists screen
+    opening, `CoreEvent::PluginStatusChanged` (a source logging in later still gets loaded), and
+    `MedleyView::new` when Playlists is the startup screen.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
   runs on a spawned thread and reports through the `Bus`.
@@ -93,9 +104,10 @@ go stale inside it — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::
 A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) stamps itself
 with the `list_revision` it was built at and is rebuilt from `MedleyView::required_size` — never
 per-draw — when `Session::list_revision` has since moved on (`scroll::stale`,
-`MedleyView::refresh_help`/`refresh_playlist_picker`); `PlaylistPicker::refresh` also re-clamps its
-cursor onto the same playlist id (or the new length if that playlist is gone) and re-follows it into
-view.
+`MedleyView::refresh_help`/`refresh_playlist_picker`); both replace their content in place rather than
+resetting it — `HelpModal::refresh` keeps `scroll` (re-clamped to the new line count) and
+`PlaylistPicker::refresh` re-clamps its cursor onto the same playlist id (or the new length if that
+playlist is gone) and re-follows it into view.
 
 ## Adding a component
 

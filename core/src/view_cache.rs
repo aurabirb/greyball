@@ -246,10 +246,10 @@ impl ViewCache {
         }
     }
 
-    /// A source's top-level playlist folders. Safe on every redraw —
-    /// `ensure_remote_playlists` backgrounds the actual `browse` call.
-    pub fn remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) -> Vec<(String, BrowseNode)> {
-        self.ensure_remote_playlists(source, ctx);
+    /// A source's top-level playlist folders — a pure read of whatever's
+    /// landed so far; the fetch itself is kicked separately, from screen
+    /// switches/plugin (re)wiring/startup, see `Session::ensure_remote_playlists`.
+    pub fn remote_playlists(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
         self.remote_playlists
             .lock()
             .unwrap()
@@ -262,7 +262,7 @@ impl ViewCache {
     /// needed, a folder is just a name + `BrowseNode`, but the landed list
     /// is persisted so a restart shows it immediately (see
     /// `Store::remote_playlist_folders`).
-    fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
+    pub(crate) fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
         {
             let mut cache = self.remote_playlists.lock().unwrap();
             match cache.entry(source.clone()) {
