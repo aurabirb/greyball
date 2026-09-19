@@ -166,6 +166,11 @@ impl Catalog {
         Ok(())
     }
 
+    /// `TrackUpdated` with no attrs write — for a derived-only change (e.g. a cache fill with no result).
+    pub fn announce(&self, id: TrackId) {
+        self.bus.send(CoreEvent::TrackUpdated(id));
+    }
+
     /// Set attrs/tags/etc. from analysis or user edits.
     pub fn patch(&self, t: TrackId, f: impl FnOnce(&mut Track)) -> Result<()> {
         let _guard = self.lock.lock().unwrap();

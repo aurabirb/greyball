@@ -716,6 +716,8 @@ fn scan_one(
                     track.id
                 );
                 inner.status.lock().unwrap().insert((plugin.id(), track.id), ScanStatus::Skipped);
+                // A real fetch may have cached audio even with nothing to report — announce it.
+                catalog.announce(track.id);
             }
             Outcome::Retry => {
                 log::warn!(

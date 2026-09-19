@@ -677,7 +677,7 @@ async fn run(
                         log::debug!("spotify: materialized {uri}");
                         bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
                         if c.req.cache {
-                            spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri, item.clone());
+                            spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri, item.clone(), bus.clone());
                         }
                     }
                 }
@@ -701,13 +701,14 @@ async fn run(
     }
 }
 
-/// Once `is_materialized`, copy the decrypted Ogg into the shared `MediaCache` so a `CacheOnly` scan can read it.
+/// Copies the decrypted Ogg into `MediaCache`, then re-sends `Materialized` once it actually lands.
 fn spawn_materialize_to_cache(
     session: Session,
     media_cache: Arc<MediaCache>,
     source: SourceId,
     uri: String,
     item: Box<AudioItem>,
+    bus: Bus,
 ) {
     tokio::spawn(async move {
         let audio = match crate::scan_audio::open_materialized(&session, &uri, &item).await {
@@ -717,13 +718,15 @@ fn spawn_materialize_to_cache(
                 return;
             }
         };
+        let source_for_put = source.clone();
+        let uri_for_put = uri.clone();
         let copied = tokio::task::spawn_blocking(move || {
-            let bytes = core::audio_decode::read_all(audio).map_err(|e| format!("read failed for {uri}: {e}"))?;
-            media_cache.put(&source, &uri, &bytes).map_err(|e| format!("write failed for {uri}: {e}"))
+            let bytes = core::audio_decode::read_all(audio).map_err(|e| format!("read failed for {uri_for_put}: {e}"))?;
+            media_cache.put(&source_for_put, &uri_for_put, &bytes).map_err(|e| format!("write failed for {uri_for_put}: {e}"))
         })
         .await;
         match copied {
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => bus.send(CoreEvent::Player(PlayerEvent::Materialized { source, uri })),
             Ok(Err(e)) => log::warn!("spotify: materialize-to-cache {e}"),
             Err(e) => log::warn!("spotify: materialize-to-cache task failed: {e}"),
         }
