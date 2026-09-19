@@ -12,7 +12,7 @@ use super::track_list::TrackList;
 use super::window::WindowId;
 
 /// Rows reserved at the very top of the terminal and bottom.
-const TAB_BAR_ROWS: usize = 2;
+const TAB_BAR_ROWS: usize = 1;
 
 pub(super) const BOTTOM_BAR_ROWS: usize = 1;
 

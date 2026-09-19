@@ -61,7 +61,7 @@ pub(super) enum TabBarHit {
     Title(Command),
 }
 
-/// The top two rows: on row 0 a tab per tabbed window, the transport buttons and the now-playing marquee (a scrubber too), with the track's waveform between them.
+/// The top row: a tab per tabbed window, the transport buttons and the now-playing marquee (a scrubber too), with the track's waveform between them.
 pub(super) struct TabBar<'a> {
     /// The tabbed windows' names, in tab order.
     pub(super) tabs: &'a [String],
@@ -190,21 +190,10 @@ impl TabBar<'_> {
             d => levels.len() * self.status.position_ms.min(d) as usize / d as usize,
         };
         for (x, &level) in levels.iter().enumerate() {
-            let style = if x < played { ColorStyle::title_primary() } else { ColorStyle::title_secondary() };
-            printer.with_color(style, |p| {
-                let at = start + x;
-                match level {
-                    0 => {}
-                    8 => {
-                        p.print((at, 0), "█");
-                        p.with_effect(Effect::Reverse, |p| p.print((at, 1), " "));
-                    }
-                    a => {
-                        p.print((at, 0), GLYPHS[a as usize - 1]);
-                        p.with_effect(Effect::Reverse, |p| p.print((at, 1), GLYPHS[7 - a as usize]));
-                    }
-                }
-            });
+            let style = if x < played { ColorStyle::title_primary() } else { ColorStyle::primary() };
+            if level > 0 {
+                printer.with_color(style, |p| p.print((start + x, 0), GLYPHS[level as usize - 1]));
+            }
         }
     }
 
