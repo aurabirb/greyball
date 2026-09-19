@@ -165,6 +165,12 @@
   tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
   leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the
   Settings UI (wired up there, not config-file-only).
+- [ ] A "similar tracks" panel that filters the already-cached library for tracks similar to a
+  chosen one (default: the playing track / the cursor row). For now similarity is just BPM — tracks
+  whose `bpm` attr is within a tolerance of the reference (the BPM scan's values live in the track
+  attrs, `t.attrs["bpm"]`) — but keep the comparison behind one function so other attributes can be
+  added later. Only tracks that are cached count; results sort by distance and open as a normal
+  track list window (same paths as Search results).
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
