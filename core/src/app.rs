@@ -20,6 +20,7 @@ use crate::playlist_m3u::{
 use crate::plugin::{Plugin, PluginHealth};
 use crate::queue::{Queue, RepeatSetting};
 use crate::resolver::{Resolution, Resolver, Target, local_path_from_uri};
+use crate::revised::Revised;
 use crate::search::Search;
 use crate::traits::{
     BrowseNode, Error, MediaProvider, Player, PlayerState, PlayerStatus, Result, Source, Store,
@@ -299,6 +300,16 @@ pub enum Dispatch {
     Quit,
 }
 
+/// Plain session state the UI shows; every write goes through `Revised::write`, which bumps `revision`.
+struct Shown {
+    now_playing: Option<TrackId>,
+    player_state: PlayerState,
+    volume: f32,
+    context: Option<PlaybackContext>,
+    /// Cache of `plugin_statuses`: a probe can do disk or network I/O, so it never runs per frame.
+    plugin_health: Vec<(SourceId, PluginHealth)>,
+}
+
 /// The list `Command::PlayContext` last started playing from (search
 /// results, a playlist, Liked Songs, ...) — consulted as a fallback once the
 /// manual queue (`Session::queue`) has nothing left, so playback keeps
@@ -409,15 +420,13 @@ pub struct Session {
     /// writer of the file.
     history_path: PathBuf,
 
-    // view state, updated by on_event:
-    now_playing: Option<TrackId>,
+    shown: Revised<Shown>,
+    /// Per-tick (position, duration) in ms; outside `shown` so a tick never moves `revision`.
+    progress: (u32, u32),
     /// The `Player` actually driving `now_playing`, set in `start_playback` —
     /// can differ from `Track::best_rendition`'s player after a fallback.
     now_playing_player: Option<Arc<dyn Player>>,
-    last_status: PlayerStatus,
     link_pick: Option<TrackId>,
-    volume: f32,
-    context: Option<PlaybackContext>,
 
     /// Playlist hotkeys (backtick-bound single keys, one target per key and
     /// one key per target) — UI-local, persisted to
@@ -438,15 +447,6 @@ pub struct Session {
     /// failure, ...) shows instead of `probe()`'s generic pre-login text.
     last_setup: HashMap<SourceId, PluginHealth>,
 
-    /// Cache of `plugin_statuses`, recomputed by `refresh_plugin_health`
-    /// instead of probing every plugin on every call — a probe can do disk
-    /// or network I/O (Spotify's cached-token read, Soulseek's slskd ping)
-    /// and this used to run under the session lock on every frame/layout/
-    /// mouse event.
-    plugin_health: Vec<(SourceId, PluginHealth)>,
-
-    /// Bumped by every UI-visible mutation — the catch-all "redraw something"; see `view/README.md`.
-    revision: u64,
     /// Bumped by `set_context_tracks`, the one way the Now Playing list's membership changes.
     context_gen: u64,
 }
@@ -500,10 +500,12 @@ impl Session {
                     shuffle_bag: Vec::new(),
                 }
             });
-        let volume = cfg.volume.clamp(0.0, 1.0);
-        let last_status = PlayerStatus {
-            volume,
-            ..PlayerStatus::default()
+        let shown = Shown {
+            now_playing: None,
+            player_state: PlayerStatus::default().state,
+            volume: cfg.volume.clamp(0.0, 1.0),
+            context,
+            plugin_health: Vec::new(),
         };
         let mut plugin_commands = HashMap::new();
         for p in &plugins {
@@ -528,18 +530,14 @@ impl Session {
             pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
             history_path,
-            now_playing: None,
+            shown: Revised::new(shown),
+            progress: (0, 0),
             now_playing_player: None,
-            last_status,
             link_pick: None,
-            volume,
-            context,
             hotkeys: Hotkeys::default(),
             view: ViewCache::default(),
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
-            plugin_health: Vec::new(),
-            revision: 0,
             context_gen: 0,
         };
         session.refresh_plugin_health();
@@ -548,7 +546,7 @@ impl Session {
 
     /// Monotonic; moves on any UI-visible change. Each list also has its own generation, held by its owner.
     pub fn revision(&self) -> u64 {
-        self.revision
+        self.shown.revision()
     }
 
     pub fn context_gen(&self) -> u64 {
@@ -584,15 +582,15 @@ impl Session {
 
     /// The one way the Now Playing list's membership changes.
     fn set_context_tracks(&mut self, tracks: Vec<TrackId>) {
-        if let Some(ctx) = self.context.as_mut() {
+        if let Some(ctx) = self.shown.write().context.as_mut() {
             ctx.tracks = tracks;
         }
         self.context_gen += 1;
     }
 
-    /// Bumps `revision` — called by every mutation of UI-visible session state.
+    /// For a UI-visible change to state outside `shown`.
     fn touch(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
+        self.shown.touch();
     }
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<Dispatch> {
@@ -611,7 +609,7 @@ impl Session {
                 let Some(&id) = tracks.get(index) else {
                     return Ok(Dispatch::Ok);
                 };
-                self.context = Some(PlaybackContext { tracks: Vec::new(), index, remote, name, shuffle_bag: Vec::new() });
+                self.shown.write().context = Some(PlaybackContext { tracks: Vec::new(), index, remote, name, shuffle_bag: Vec::new() });
                 self.set_context_tracks(tracks);
                 self.save_now_playing_context();
                 // `play_now` never touches the manual queue's contents
@@ -634,8 +632,7 @@ impl Session {
             Command::PlayPause => {
                 if let Some(p) = self.active_player() {
                     p.toggle();
-                    self.last_status = p.status();
-                    self.last_status.volume = self.volume;
+                    self.set_status(p.status());
                 } else {
                     // Nothing loaded yet — start playback from the queue
                     // (current item if one is set, otherwise the first).
@@ -668,7 +665,7 @@ impl Session {
                 // anything "earlier" to go back to by definition — previous
                 // always falls back to the bounded play history, which is
                 // structurally independent of the queue's own contents.
-                let just_playing = self.now_playing;
+                let just_playing = self.shown.now_playing;
                 let Some(id) = self.queue.previous_from_history() else {
                     return Ok(Dispatch::Ok);
                 };
@@ -684,18 +681,16 @@ impl Session {
                     let cur = p.status();
                     let target = (cur.position_ms as i64 + delta).max(0) as u32;
                     p.seek(target);
-                    self.last_status = p.status();
-                    self.last_status.volume = self.volume;
+                    self.set_status(p.status());
                 }
                 Ok(Dispatch::Ok)
             }
             Command::Volume(delta) => {
-                let new = (self.volume + delta as f32 / 100.0).clamp(0.0, 1.0);
-                self.volume = new;
+                let new = (self.shown.volume + delta as f32 / 100.0).clamp(0.0, 1.0);
+                self.shown.write().volume = new;
                 for p in self.players.values() {
                     p.set_volume(new);
                 }
-                self.last_status.volume = new;
                 // MVP: persistence of volume to the state file is done by `app`.
                 Ok(Dispatch::Ok)
             }
@@ -839,14 +834,14 @@ impl Session {
     /// Every registered plugin's id + cached health — see `plugin_health`.
     /// Cheap: just a clone of the cache, no probing.
     pub fn plugin_statuses(&self) -> &[(SourceId, PluginHealth)] {
-        &self.plugin_health
+        &self.shown.plugin_health
     }
 
     /// Number of plugins currently reporting a non-`Ok` health — for the
     /// warnings button/tab, cheaper than filtering `plugin_statuses` at
     /// every call site.
     pub fn plugin_warning_count(&self) -> usize {
-        self.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count()
+        self.shown.plugin_health.iter().filter(|(_, h)| !h.is_ok()).count()
     }
 
     /// `probe()` only ever returns a few generic canned strings, so a real
@@ -868,9 +863,9 @@ impl Session {
     /// `open_warnings`, and by `CoreEvent::PluginStatusChanged`'s handler,
     /// which already knows something changed.
     pub fn refresh_plugin_health(&mut self) {
-        self.touch();
         let probed: Vec<(SourceId, PluginHealth)> = self.plugins.iter().map(|p| (p.id(), p.probe())).collect();
-        self.plugin_health = self.overlay_setup(probed);
+        let health = self.overlay_setup(probed);
+        self.shown.write().plugin_health = health;
     }
 
     /// Applies health values already probed off the session lock — by
@@ -881,11 +876,10 @@ impl Session {
     /// differs, so an unchanged tick causes no rewire/redraw.
     pub fn apply_probed_plugin_health(&mut self, probed: Vec<(SourceId, PluginHealth)>) -> bool {
         let health = self.overlay_setup(probed);
-        if health == self.plugin_health {
+        if health == self.shown.plugin_health {
             return false;
         }
-        self.plugin_health = health;
-        self.touch();
+        self.shown.write().plugin_health = health;
         true
     }
 
@@ -962,7 +956,7 @@ impl Session {
         match pe {
             PlayerEvent::Loading { source, uri } | PlayerEvent::Playing { source, uri } => {
                 if let Some(t) = self.store.track_by_rendition(source, uri)? {
-                    self.now_playing = Some(t.id);
+                    self.shown.write().now_playing = Some(t.id);
                     if matches!(pe, PlayerEvent::Playing { .. })
                         && let Some(scan) = &self.scan
                     {
@@ -971,7 +965,7 @@ impl Session {
                 }
                 self.refresh_status();
                 if matches!(pe, PlayerEvent::Playing { .. }) {
-                    self.last_status.state = PlayerState::Playing;
+                    self.shown.write().player_state = PlayerState::Playing;
                 }
                 Ok(true)
             }
@@ -979,16 +973,15 @@ impl Session {
                 position_ms,
                 duration_ms,
             } => {
-                self.last_status.position_ms = *position_ms;
-                self.last_status.duration_ms = *duration_ms;
+                self.progress = (*position_ms, *duration_ms);
                 Ok(true)
             }
             PlayerEvent::Paused => {
-                self.last_status.state = PlayerState::Paused;
+                self.shown.write().player_state = PlayerState::Paused;
                 Ok(true)
             }
             PlayerEvent::Stopped => {
-                self.last_status.state = PlayerState::Stopped;
+                self.shown.write().player_state = PlayerState::Stopped;
                 Ok(true)
             }
             PlayerEvent::Finished { source, uri } => {
@@ -1009,7 +1002,7 @@ impl Session {
                 Ok(false)
             }
             PlayerEvent::LoadFailed { source, uri } => {
-                self.last_status.state = PlayerState::Stopped;
+                self.shown.write().player_state = PlayerState::Stopped;
                 // Only the track the queue still considers current is worth a
                 // fallback retry — a stale failure for whatever played before
                 // the user already moved on must not hijack playback.
@@ -1165,16 +1158,16 @@ impl Session {
         });
     }
 
-    /// Persist `self.context` (the Now Playing screen's contents) so a fresh
+    /// Persist `self.shown.context` (the Now Playing screen's contents) so a fresh
     /// launch reopens the same view — restored by `Session::new`. Called
-    /// whenever `self.context` changes (a new `Command::PlayContext`, or
+    /// whenever `self.shown.context` changes (a new `Command::PlayContext`, or
     /// `play_next_in_context` advancing its index), same cadence as
     /// `append_history_entry`. `remote` isn't persisted — restoring it would
     /// need a live source reconnect that's out of scope here (this restores
     /// the view, not playback); a restored context just stops
     /// re-checking a still-loading remote list for more tracks until replayed.
     fn save_now_playing_context(&self) {
-        let Some(ctx) = self.context.as_ref() else {
+        let Some(ctx) = self.shown.context.as_ref() else {
             return;
         };
         let _ = self.store.upsert_playlist(&Playlist {
@@ -1283,19 +1276,19 @@ impl Session {
     /// itself, cheap (no store hits) — see `playing_context_window` for the
     /// resolved slice.
     pub fn playing_context_ids(&self) -> Vec<TrackId> {
-        self.context.as_ref().map(|c| c.tracks.clone()).unwrap_or_default()
+        self.shown.context.as_ref().map(|c| c.tracks.clone()).unwrap_or_default()
     }
 
     /// Cheap count of `playing_context_ids`, for the Now Playing screen's title.
     pub fn playing_context_len(&self) -> usize {
-        self.context.as_ref().map(|c| c.tracks.len()).unwrap_or(0)
+        self.shown.context.as_ref().map(|c| c.tracks.len()).unwrap_or(0)
     }
 
     /// The originating context's display name, for the Now Playing screen's
     /// title — `None` before anything's played, or if the call site that
     /// issued `Command::PlayContext` had no natural name for it.
     pub fn playing_context_name(&self) -> Option<String> {
-        self.context.as_ref().and_then(|c| c.name.clone())
+        self.shown.context.as_ref().and_then(|c| c.name.clone())
     }
 
     /// A window of the playing context's tracks (`offset..offset+limit`) —
@@ -1381,7 +1374,7 @@ impl Session {
     }
 
     pub fn now_playing(&self) -> Option<Track> {
-        self.now_playing
+        self.shown.now_playing
             .and_then(|id| self.store.get_track(id).ok().flatten())
     }
 
@@ -1389,7 +1382,7 @@ impl Session {
     /// already in hand (`RowItem::is_current`) instead of re-resolving the
     /// whole now-playing `Track` (a disk read) once per row on every redraw.
     pub fn now_playing_id(&self) -> Option<TrackId> {
-        self.now_playing
+        self.shown.now_playing
     }
 
     /// Whether queue shuffle is currently on (`s`/`:toggleshuffle`) — for
@@ -1499,9 +1492,8 @@ impl Session {
     }
 
     pub fn player_status(&self) -> PlayerStatus {
-        let mut s = self.last_status.clone();
-        s.volume = self.volume;
-        s
+        let (position_ms, duration_ms) = self.progress;
+        PlayerStatus { state: self.shown.player_state, position_ms, duration_ms, volume: self.shown.volume }
     }
 
     /// Real 5-band magnitude of whatever's actually playing — see
@@ -1567,10 +1559,9 @@ impl Session {
             }
         }
         p.load(r, false, 0, true);
-        self.now_playing = Some(track.id);
-        self.last_status = p.status();
+        self.shown.write().now_playing = Some(track.id);
+        self.set_status(p.status());
         self.now_playing_player = Some(p);
-        self.last_status.volume = self.volume;
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
         }
@@ -1671,8 +1662,8 @@ impl Session {
         self.queue.stop();
     }
 
-    /// Play the next track in `self.context`, if there is one, advancing its
-    /// index. Returns `false` (and leaves `self.context` untouched) when
+    /// Play the next track in `self.shown.context`, if there is one, advancing its
+    /// index. Returns `false` (and leaves `self.shown.context` untouched) when
     /// there's no context or it's already at its end. Under shuffle, "next"
     /// is drawn from a no-repeat shuffle bag over `ctx.tracks` instead of
     /// `ctx.index + 1` — see `next_shuffled_context_index`. Shuffle never
@@ -1684,7 +1675,7 @@ impl Session {
             return false;
         };
         let shuffle = self.queue.get_shuffle();
-        let ctx = self.context.as_mut().unwrap();
+        let ctx = self.shown.write().context.as_mut().unwrap();
         if shuffle {
             ctx.shuffle_bag.pop();
         }
@@ -1699,13 +1690,13 @@ impl Session {
     /// it. Under shuffle that's the top of the bag, dealt here when empty so
     /// an early `upcoming_track` and the later advance agree.
     fn next_context_index(&mut self) -> Option<usize> {
-        let ctx = self.context.as_ref()?;
+        let ctx = self.shown.context.as_ref()?;
         if ctx.tracks.is_empty() {
             return None;
         }
         if self.queue.get_shuffle() {
             self.deal_shuffle_bag();
-            return self.context.as_ref()?.shuffle_bag.last().copied();
+            return self.shown.context.as_ref()?.shuffle_bag.last().copied();
         }
         let next_index = ctx.index + 1;
         // The snapshot ended, but if it came from a remote node still
@@ -1716,11 +1707,11 @@ impl Session {
             && let Some((source, node)) = ctx.remote.clone()
         {
             let live = self.remote_playlist_track_ids(&source, &node);
-            if live.len() > self.context.as_ref().unwrap().tracks.len() {
+            if live.len() > self.shown.context.as_ref().unwrap().tracks.len() {
                 self.set_context_tracks(live);
             }
         }
-        let ctx = self.context.as_ref().unwrap();
+        let ctx = self.shown.context.as_ref().unwrap();
         ctx.tracks.get(next_index).map(|_| next_index)
     }
 
@@ -1731,7 +1722,7 @@ impl Session {
     /// than one track, so refilling never immediately replays what just
     /// finished.
     fn deal_shuffle_bag(&mut self) {
-        let ctx = self.context.as_mut().unwrap();
+        let ctx = self.shown.write().context.as_mut().unwrap();
         if ctx.shuffle_bag.is_empty() {
             let mut bag: Vec<usize> = (0..ctx.tracks.len()).collect();
             bag.shuffle(&mut rand::rng());
@@ -1755,7 +1746,7 @@ impl Session {
             return Some(id);
         }
         let index = self.next_context_index()?;
-        Some(self.context.as_ref()?.tracks[index])
+        Some(self.shown.context.as_ref()?.tracks[index])
     }
 
     /// Warm the upcoming track on the active player, if that's who will play it.
@@ -1790,9 +1781,13 @@ impl Session {
 
     fn refresh_status(&mut self) {
         if let Some(p) = self.active_player() {
-            self.last_status = p.status();
+            self.set_status(p.status());
         }
-        self.last_status.volume = self.volume;
+    }
+
+    fn set_status(&mut self, status: PlayerStatus) {
+        self.shown.write().player_state = status.state;
+        self.progress = (status.position_ms, status.duration_ms);
     }
 
     fn load_tracks(&self, ids: &[TrackId]) -> Vec<Track> {

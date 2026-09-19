@@ -88,7 +88,11 @@ on `revision` — it is read fresh or kept in its own small cache.
   `follow_sig`, so a memo hit in `draw` can never skip it.
 - `Session::revision` bumps on every UI-visible mutation, including an attribute-only `TrackUpdated`
   patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
-  frame. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
+  frame. The plain fields the UI shows (`now_playing`, the player state, `volume`, `context`,
+  `plugin_health`) live in a `Revised<Shown>` (`core/src/revised.rs`): read through `Deref`, written
+  only through `write()`, which bumps, so such a write cannot skip it; the per-tick position and
+  duration sit outside it in `Session::progress`. State held elsewhere (hotkeys, config, wiring, scan
+  mode) calls `touch()`. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
   an off-thread writer must send a `CoreEvent`, since nothing else will notice its mutation. An input
   event is not itself such a change and takes no mutable lock of its own, so a keypress that changes
   nothing rebuilds nothing.

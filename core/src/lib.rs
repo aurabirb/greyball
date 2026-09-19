@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod config;
 pub mod event;
 mod hotkeys;
+mod revised;
 pub mod http_fetch;
 pub mod logbuf;
 pub mod matcher;
