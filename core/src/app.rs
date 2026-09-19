@@ -87,6 +87,12 @@ pub enum BuiltinAction {
     Unlink,
     PlayPause,
     ExportPlaylist,
+    PromptSearch,
+    PromptAddToPlaylist,
+    PromptOpen,
+    PromptExport,
+    PromptWindow,
+    PromptPanes,
 }
 
 impl BuiltinAction {
@@ -122,6 +128,12 @@ impl BuiltinAction {
         (BuiltinAction::Unlink, None),
         (BuiltinAction::PlayPause, Some(' ')),
         (BuiltinAction::ExportPlaylist, Some('x')),
+        (BuiltinAction::PromptSearch, None),
+        (BuiltinAction::PromptAddToPlaylist, None),
+        (BuiltinAction::PromptOpen, Some('o')),
+        (BuiltinAction::PromptExport, None),
+        (BuiltinAction::PromptWindow, None),
+        (BuiltinAction::PromptPanes, None),
     ];
 
     /// This action's hardcoded default key, if it has one.
@@ -161,6 +173,12 @@ impl BuiltinAction {
             BuiltinAction::Unlink => "unlink",
             BuiltinAction::PlayPause => "play-pause",
             BuiltinAction::ExportPlaylist => "export-playlist",
+            BuiltinAction::PromptSearch => "prompt-search",
+            BuiltinAction::PromptAddToPlaylist => "prompt-add-to-playlist",
+            BuiltinAction::PromptOpen => "prompt-open",
+            BuiltinAction::PromptExport => "prompt-export",
+            BuiltinAction::PromptWindow => "prompt-window",
+            BuiltinAction::PromptPanes => "prompt-panes",
         }
     }
 

@@ -30,7 +30,6 @@ impl Section {
 /// The key an item answers to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
-    None,
     /// Structural, matched as an event in code; shown as written.
     Fixed(&'static str),
     /// Rebindable; the shortcut shown is its live effective key.
@@ -75,16 +74,12 @@ impl Item {
     }
 }
 
-const fn command(cmd: Cmd, names: &'static [&'static str], args: &'static str, summary: &'static str, detail: &'static str) -> Item {
-    Item { cmd: Some(cmd), section: Section::Commands, names, args, summary, detail, key: Key::None }
+const fn command(cmd: Cmd, action: BuiltinAction, names: &'static [&'static str], args: &'static str, summary: &'static str, detail: &'static str) -> Item {
+    Item { cmd: Some(cmd), section: Section::Commands, names, args, summary, detail, key: Key::Builtin(action) }
 }
 
 const fn action(action: BuiltinAction, names: &'static [&'static str], summary: &'static str, detail: &'static str) -> Item {
     Item { cmd: Some(Cmd::Builtin(action)), section: Section::Commands, names, args: "", summary, detail, key: Key::Builtin(action) }
-}
-
-const fn keyed(item: Item, action: BuiltinAction) -> Item {
-    Item { key: Key::Builtin(action), ..item }
 }
 
 const fn key(section: Section, key: Key, summary: &'static str, detail: &'static str) -> Item {
@@ -100,20 +95,18 @@ const fn fixed(section: Section, keys: &'static str, summary: &'static str, deta
 }
 
 pub const ITEMS: &[Item] = &[
-    command(Cmd::Search, &["search", "s"], "<query>", "search all sources for tracks", ""),
-    keyed(
-        command(Cmd::NewPlaylist, &["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
-        BuiltinAction::AddToPlaylistOrNew,
-    ),
-    command(Cmd::AddToPlaylist, &["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
+    command(Cmd::Search, BuiltinAction::PromptSearch, &["search", "s"], "<query>", "search all sources for tracks", ""),
+    command(Cmd::NewPlaylist, BuiltinAction::AddToPlaylistOrNew, &["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
+    command(Cmd::AddToPlaylist, BuiltinAction::PromptAddToPlaylist, &["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
     command(
         Cmd::Open,
+        BuiltinAction::PromptOpen,
         &["open", "o"],
         "[<url-or-path>]",
         "open a playlist link, an M3U file or local audio files",
         "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: a file browser.",
     ),
-    command(Cmd::Export, &["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
+    command(Cmd::Export, BuiltinAction::PromptExport, &["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
     action(BuiltinAction::ToggleLog, &["log", "l"], "toggle the log pane", ""),
     action(BuiltinAction::ToggleSettings, &["settings", "set"], "toggle the settings pane", ""),
     action(BuiltinAction::ToggleVis, &["vis", "v"], "toggle the real-audio bar-eq visualizer pane", ""),
@@ -122,6 +115,7 @@ pub const ITEMS: &[Item] = &[
     action(BuiltinAction::ShowHistory, &["hist", "ht"], "show the History tab window (history-tab)", ""),
     command(
         Cmd::Window,
+        BuiltinAction::PromptWindow,
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
@@ -129,6 +123,7 @@ pub const ITEMS: &[Item] = &[
     ),
     command(
         Cmd::Panes,
+        BuiltinAction::PromptPanes,
         &["panes", "p"],
         "[<window>] [tabbed|embedded|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",

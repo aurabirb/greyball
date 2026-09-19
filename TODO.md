@@ -13,16 +13,6 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-- [ ] Make the commands that TAKE an argument (`search`, `add-to-playlist`, `export`, ...) bindable in
-  Help; their rows answer Enter with "a command that takes an argument can't have a key". Pressing
-  the bound key opens the command line with the command's long name and a trailing space typed in
-  (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the argument, Enter runs it and Esc cancels —
-  the path `+` already uses for `newplaylist ` (`Action::NewPlaylistPrompt`); generalize that one
-  action to "prompt for item N" instead of adding one per command. `open` (`Cmd::Open`, optional
-  argument) prompts too, the user pressing Enter on the empty argument to run it bare, and gets `o`
-  as its default key; a persisted playlist binding on a new default key is dropped at load by
-  `Session::set_hotkeys`, with a warnings row. Decided: `>`/`<` and the arrows seek stay fixed
-  second keys for next/previous/seek (the rows say so in their detail line). `Item.names` stays a
   slice (owner decision, not a fixed-size array).
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`

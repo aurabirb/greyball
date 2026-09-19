@@ -280,9 +280,9 @@ impl MedleyView {
                 self.modal = Some(Modal::Picker(self.with_session(|s| PlaylistPicker::new(id, s))));
                 EventResult::consumed()
             }
-            Action::NewPlaylistPrompt => {
+            Action::Prompt(name) => {
                 self.editing = Editing::CommandLine;
-                self.buffer = "newplaylist ".to_string();
+                self.buffer = format!("{name} ");
                 EventResult::consumed()
             }
             Action::ConfirmUnlike(id) => self.confirm_unlike(id),

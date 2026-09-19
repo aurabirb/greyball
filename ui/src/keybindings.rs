@@ -8,6 +8,7 @@ use cursive::event::Event;
 
 use core::{BuiltinAction, Command, HotkeyTarget, TrackId};
 
+use crate::items;
 use crate::view::Nav;
 
 /// What a keypress means outside an active text field.
@@ -40,10 +41,8 @@ pub enum Action {
     /// the modal's state, since `map` here has no access to the playlist
     /// list.
     AddToPlaylistPrompt(TrackId),
-    /// UI-local: start the "new playlist" name entry (`+`, no track
-    /// selected — e.g. cursor on a playlist row, or nothing selected).
-    /// Routed through the existing `:newplaylist <name>` command-line path.
-    NewPlaylistPrompt,
+    /// UI-local: open the command line with this command's long name and a space typed in.
+    Prompt(&'static str),
     /// UI-local: open the Yes/No "remove from Liked Songs?" confirm dialog
     /// for the given track (`F`, a track selected) — the view owns the
     /// dialog; a "yes" answer is what actually dispatches `Command::Unlike`.
@@ -67,7 +66,7 @@ impl Action {
     pub fn is_window_action(&self) -> bool {
         matches!(
             self,
-            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_)
+            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_) | Action::Prompt(_)
         )
     }
 }
@@ -117,7 +116,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::SeekBack => Action::Seek(-5000),
         BuiltinAction::AddToPlaylistOrNew => match selected {
             Some(id) => Action::AddToPlaylistPrompt(id),
-            None => Action::NewPlaylistPrompt,
+            None => prompt(action),
         },
         BuiltinAction::Quit => Action::Command(Command::Quit),
         BuiltinAction::ClearQueue => Action::Command(Command::ClearQueue),
@@ -150,6 +149,12 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::Unlink => selected.map_or(Action::None, |id| Action::Command(Command::Unlink(id))),
         BuiltinAction::PlayPause => Action::Command(Command::PlayPause),
         BuiltinAction::ExportPlaylist => Action::ExportPlaylist,
+        BuiltinAction::PromptSearch
+        | BuiltinAction::PromptAddToPlaylist
+        | BuiltinAction::PromptOpen
+        | BuiltinAction::PromptExport
+        | BuiltinAction::PromptWindow
+        | BuiltinAction::PromptPanes => prompt(action),
     }
 }
 
@@ -175,4 +180,10 @@ pub fn hotkey_toggle(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char
         HotkeyTarget::Builtin(_) => return None,
     };
     Some(Command::TogglePlaylistMembership { track, playlist })
+}
+
+/// The command-line prompt for the command `action` is the key of.
+fn prompt(action: BuiltinAction) -> Action {
+    let item = items::ITEMS.iter().find(|item| item.key == items::Key::Builtin(action));
+    item.and_then(|item| item.names.first()).map_or(Action::None, |&name| Action::Prompt(name))
 }
