@@ -23,11 +23,6 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
-- [ ] Remove the "closed" step from the placement key's cycle (`Windows::next_placement`,
-  `ui/src/view/window.rs`; `cycle_placement`, `ui/src/view/panes.rs`): a startup tab's companion
-  cycles docked → screen → float → docked and never ends in closed, because any non-tabbed window
-  closes on Esc. `M` on the tab still opens its companion docked. The `[M] <next>` status hint stops
-  ever saying "close", and the README's companion cycle text follows.
 - [ ] Rework the status-row hints of every window (`TrackList::idle` in `ui/src/view/track_list.rs`,
   `HelpPane::idle`, the other windows' idle text). Every key shown comes from the effective bindings
   through the status context, never a hard-coded letter; a key the user has unbound is omitted

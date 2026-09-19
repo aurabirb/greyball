@@ -340,14 +340,13 @@ impl Windows {
         WINDOWS[id.0].companion_of.is_some()
     }
 
-    /// Where the placement key moves `id` next; `None` closes it (a floating companion).
-    pub(super) fn next_placement(&self, id: WindowId) -> Option<Placement> {
-        let current = self.placement(id);
-        if self.is_companion(id) && current == Placement::Floating {
-            return None;
+    /// Where the placement key moves `id` next; a companion never goes back to the tab bar.
+    pub(super) fn next_placement(&self, id: WindowId) -> Placement {
+        let at = Placement::CYCLE.iter().position(|&placement| placement == self.placement(id)).unwrap_or(0);
+        match Placement::CYCLE[(at + 1) % Placement::CYCLE.len()] {
+            Placement::Tabbed if self.is_companion(id) => Placement::Docked,
+            next => next,
         }
-        let at = Placement::CYCLE.iter().position(|&placement| placement == current).unwrap_or(0);
-        Some(Placement::CYCLE[(at + 1) % Placement::CYCLE.len()])
     }
 
     /// A startup tab: it stays in the tab bar.

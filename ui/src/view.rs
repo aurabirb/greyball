@@ -418,7 +418,7 @@ impl View for MedleyView {
                 draw_float_frame(printer, placed.frame);
             }
             let place = chrome.place_key.filter(|_| self.focus == Focus::Window(placed.id)).map(|key| {
-                let target = self.windows.next_placement(placed.id).map_or("close", Placement::word);
+                let target = self.windows.next_placement(placed.id).word();
                 format!("[{key}] {target}")
             });
             let status = StatusCtx {

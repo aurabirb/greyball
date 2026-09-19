@@ -315,11 +315,7 @@ impl MedleyView {
             }
             return;
         }
-        let Some(next) = self.windows.next_placement(id) else {
-            self.close_window(id);
-            self.set_flash(format!("{}: closed", self.windows[id].kind.label()));
-            return;
-        };
+        let next = self.windows.next_placement(id);
         if self.set_placement(id, next, true) {
             self.set_flash(format!("{}: {}", self.windows[id].kind.label(), next.word()));
         }
