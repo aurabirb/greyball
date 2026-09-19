@@ -137,6 +137,11 @@
   matches AND, for the playing context's own list, the index matches. Lists that aren't the playing
   context (Search, History, another playlist) keep identity matching, but mark only the first
   occurrence. A track played from the manual queue has no context index — fall back to identity.
+  Owner still sees the playing mark on several occurrences, so make the position the single source of
+  truth: every window showing the playing context's list (the tab and its companion alike) marks only
+  the row at the playing position, and the select-playing-track key (`RevealPlaying`, `reveal_playing`
+  in `ui/src/view/input.rs`, which also runs after seek keys) moves the cursor to that position
+  rather than to the occurrence nearest the cursor.
 - [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
   (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
   Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the
