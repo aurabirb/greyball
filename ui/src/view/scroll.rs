@@ -171,7 +171,7 @@ pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, 
     };
     for y in 0..list_h {
         if thumb.contains(&y) {
-            printer.with_color(ColorStyle::highlight(), |p| p.print((gutter_x, y), "┃"));
+            printer.with_color(ColorStyle::primary(), |p| p.print((gutter_x, y), "│"));
         } else {
             printer.print((gutter_x, y), " ");
         }
