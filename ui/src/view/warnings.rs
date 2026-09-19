@@ -20,6 +20,12 @@ pub(super) fn warnings_label(count: usize) -> String {
     format!(" ⚠ warnings ({count}) ")
 }
 
+/// The button's `(start, width)` on the hint row, shared by draw and the click hit-test; `None` without warnings.
+pub(super) fn warnings_span(count: usize, row_w: usize) -> Option<(usize, usize)> {
+    let width = warnings_label(count).chars().count().min(row_w);
+    (count > 0).then_some((row_w - width, width))
+}
+
 /// Whether a keyboard event arriving while `Focus::Warnings` is focused should knock focus off the button.
 pub(super) fn defocuses_warnings(event: &Event) -> bool {
     !matches!(event, Event::Key(Key::Enter))

@@ -52,7 +52,8 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
   (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
   double-click plays the row as `Command::PlayContext`, or opens the top-level playlist under the
-  cursor; Esc backs out of an open playlist.
+  cursor; Esc clears the filter, then backs out of an open playlist. A filter stays with its window
+  across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 
 ## Memos
 
@@ -129,7 +130,9 @@ on `revision` — it is read fresh or kept in its own small cache.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
   is shown — `Flash` on the hint row or a `Popup` dialog — and `MedleyView::notify` the one way to
   show it. The hint row has one slot, `MedleyView::feedback`, cleared by the next input event (not a
-  mouse hold/release); the hotkey menu's footer shows the same slot. A window or modal never writes
+  mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included,
+  and the hotkey menu, whose footer shows the same slot. Any other modal's keys, its closing one
+  included, leave it, so a result that lands behind Help or the picker is readable after Esc. A window or modal never writes
   it: it returns an outcome and the shell notifies.
 - Inbound: `app/src/main.rs` loops `siv.step()` → `bus.drain()` → `Session::on_event` →
   `ui::deliver(events)` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
@@ -141,7 +144,7 @@ on `revision` — it is read fresh or kept in its own small cache.
 
 ## Routing in `MedleyView::route`
 
-1. Clear the `feedback` slot (not on mouse hold/release).
+1. Clear the `feedback` slot (not on mouse hold/release, nor under a modal other than the hotkey menu).
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
@@ -149,7 +152,7 @@ on `revision` — it is read fresh or kept in its own small cache.
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
    returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`).
-4. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom-2 → the warnings modal (anywhere on the row);
+4. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom-2 → the warnings modal, inside `warnings_span` only (the span `draw` puts the button in);
    bottom → `StatusLine::click`.
 5. Any other mouse event goes to the topmost shown window whose `Placed::frame` contains it. The
    window takes focus when it uses the event, and on any press — so a press on a floating window's

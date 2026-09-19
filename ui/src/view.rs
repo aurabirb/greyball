@@ -23,9 +23,9 @@ use modal::{Modal, modal_body};
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
-use text::Marquee;
+use text::{Marquee, in_span};
 use track_list::TrackList;
-use warnings::{defocuses_warnings, warnings_label};
+use warnings::{defocuses_warnings, warnings_label, warnings_span};
 use window::{Ctx, Placement, WindowFrame, WindowId, WindowOutcome, Windows};
 
 mod frame;
@@ -342,11 +342,8 @@ impl View for MedleyView {
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let warn_w = if chrome.warn_count > 0 {
-            warnings_label(chrome.warn_count).chars().count().min(printer.size.x)
-        } else {
-            0
-        };
+        let button = warnings_span(chrome.warn_count, printer.size.x);
+        let warn_w = button.map_or(0, |(_, width)| width);
         let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
         if let Some(list) = main.filter(|list| list.total > 0) {
             let more = if list.loading { "+" } else { "" };
@@ -361,10 +358,8 @@ impl View for MedleyView {
         frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
         // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
-        if chrome.warn_count > 0 {
+        if let Some((bx, _)) = button {
             let label = warnings_label(chrome.warn_count);
-            let label_w = label.chars().count().min(printer.size.x);
-            let bx = printer.size.x - label_w;
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
             let style = if self.focus == Focus::Warnings {
                 ColorStyle::new(bg, fg)
@@ -406,10 +401,10 @@ impl View for MedleyView {
 
 impl MedleyView {
     fn route(&mut self, event: &Event) -> EventResult {
-        // Transient queue/wedge feedback shows for one keypress.
+        // The flash lasts until the next input where it shows: a modal that doesn't show it leaves it, its closing key included.
         let is_mouse_followup =
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
-        if !is_mouse_followup {
+        if !is_mouse_followup && matches!(self.modal, None | Some(Modal::HotkeyMenu(_))) {
             self.feedback = None;
         }
 
@@ -440,7 +435,9 @@ impl MedleyView {
                     _ => EventResult::consumed(),
                 };
             }
-            if local.y == size.y.saturating_sub(2) && self.warn_count() > 0 {
+            if local.y == size.y.saturating_sub(2)
+                && warnings_span(self.warn_count(), size.x).is_some_and(|span| in_span(local.x, span))
+            {
                 self.open_warnings();
                 return EventResult::consumed();
             }

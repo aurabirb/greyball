@@ -440,7 +440,7 @@ impl TrackList {
         self.state.follow(Self::body(rect).height());
     }
 
-    /// Nav keys, Enter, Esc out of an open playlist, wheel and clicks inside `rect`; anything else is `Ignored`.
+    /// Nav keys, Enter, Esc out of a filter then an open playlist, wheel and clicks inside `rect`; anything else is `Ignored`.
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx, rect: Rect) -> WindowOutcome {
         let (s, body) = (ctx.s, Self::body(rect));
         if let Event::Mouse { offset, position, event: mouse } = event {
@@ -467,6 +467,10 @@ impl TrackList {
                 // A third click must not chain into another double.
                 self.last_click = (!double).then_some((now, self.state.cursor));
                 if double { self.activate(s) } else { WindowOutcome::Consumed }
+            }
+            ListEvent::Close if self.query.is_some() => {
+                self.set_query(None);
+                WindowOutcome::Consumed
             }
             ListEvent::Close if !matches!(self.open, Open::TopLevel) => {
                 self.reset_for_new_list(Open::TopLevel);

@@ -205,11 +205,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::Screen(n) => {
-                // A filter doesn't outlive its tab being left.
                 let left = self.main_id();
-                if let Some(list) = self.windows[left].list_mut() {
-                    list.set_query(None);
-                }
                 self.screen = n;
                 if self.focus == Focus::Window(left) {
                     self.focus = Focus::Window(self.main_id());
