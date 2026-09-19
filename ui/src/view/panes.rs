@@ -311,17 +311,17 @@ impl MedleyView {
         if let Some(companion) = self.windows.companion(id) {
             if self.set_placement(id, Placement::Docked, true) {
                 self.focus_window(companion);
-                self.feedback = Some(format!("{}: {}", self.windows[id].kind.label(), Placement::Docked.word()));
+                self.set_flash(format!("{}: {}", self.windows[id].kind.label(), Placement::Docked.word()));
             }
             return;
         }
         let Some(next) = self.windows.next_placement(id) else {
             self.close_window(id);
-            self.feedback = Some(format!("{}: closed", self.windows[id].kind.label()));
+            self.set_flash(format!("{}: closed", self.windows[id].kind.label()));
             return;
         };
         if self.set_placement(id, next, true) {
-            self.feedback = Some(format!("{}: {}", self.windows[id].kind.label(), next.word()));
+            self.set_flash(format!("{}: {}", self.windows[id].kind.label(), next.word()));
         }
     }
 

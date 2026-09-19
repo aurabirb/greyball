@@ -197,7 +197,7 @@ impl MedleyView {
     pub(crate) fn notify(&mut self, notice: Notice) -> EventResult {
         match notice {
             Notice::Flash(text) => {
-                self.feedback = Some(text);
+                self.set_flash(text);
                 EventResult::consumed()
             }
             Notice::Status { text, refused } => {

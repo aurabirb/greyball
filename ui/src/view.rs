@@ -1,6 +1,7 @@
 //! `MedleyView` — the whole TUI in one snapshot-rendered cursive view.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cursive::{Printer, Rect, Vec2, View};
 use cursive::direction::Direction;
@@ -82,8 +83,8 @@ pub struct MedleyView {
     last_screen_size: Vec2,
     editing: Editing,
     buffer: String,
-    /// The focused window's status row's one transient message, cleared by the next input event.
-    feedback: Option<String>,
+    /// The focused window's status row's one transient message, cleared by the next input event or once `FLASH_LIFETIME` has passed.
+    feedback: Option<(String, Instant)>,
     /// Dock side and stacking, shared by every docked window.
     pane_cfg: PaneLayoutConfig,
     /// Open non-tab windows, oldest first — dock order, and z-order — each with the focus it opened over.
@@ -419,7 +420,7 @@ impl View for MedleyView {
                 format!("[{key}] {target}")
             });
             let status = StatusCtx {
-                flash: self.feedback.as_deref().filter(|_| self.status_id() == placed.id),
+                flash: self.flash().filter(|_| self.status_id() == placed.id),
                 place,
                 help_key: chrome.help_key,
                 keys_key: chrome.keys_key,
@@ -477,7 +478,17 @@ impl View for MedleyView {
     }
 }
 
+const FLASH_LIFETIME: Duration = Duration::from_secs(3);
+
 impl MedleyView {
+    fn set_flash(&mut self, text: String) {
+        self.feedback = Some((text, Instant::now()));
+    }
+
+    fn flash(&self) -> Option<&str> {
+        self.feedback.as_ref().filter(|(_, at)| at.elapsed() < FLASH_LIFETIME).map(|(text, _)| text.as_str())
+    }
+
     fn route(&mut self, event: &Event) -> EventResult {
         // The flash lasts until the next input where it shows: a modal that doesn't show it leaves it, its closing key included.
         let is_mouse_followup =

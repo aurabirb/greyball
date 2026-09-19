@@ -234,7 +234,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   deduplicated and bounded, counted by `Session::warning_count` — never a popup or a flash.
 - Messages: `Notice` (`notice.rs`) is the one place that decides where a `Dispatch` or a `CoreEvent`
   is shown — `Flash` on the focused window's status row (what a key or command did, `Dispatch::Done` included) or a
-  `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The flash has one slot, `MedleyView::feedback`, cleared by the next input event (not a
+  `Popup` dialog (a failure, a plugin's report) — and `MedleyView::notify` the one way to show it. The flash has one slot, `MedleyView::feedback`, gone after `FLASH_LIFETIME` (3 s, the baseline redraw hides it) or cleared by the next input event (not a
   mouse hold/release) that arrives where the slot shows: the base view, a `Screen` window included.
   A modal's keys, its closing one included, leave it, so a result that lands behind the picker is
   readable after Esc. A window or modal never writes it: it returns an outcome and the shell notifies.

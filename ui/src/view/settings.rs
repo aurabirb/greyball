@@ -106,7 +106,7 @@ impl MedleyView {
         match entry {
             SettingsEntry::Source { name, enabled } => {
                 self.with_session_mut(|s| s.set_source_enabled(name, !enabled));
-                self.feedback = Some(format!(
+                self.set_flash(format!(
                     "{name}: {} (restart to apply)",
                     if enabled { "disabled" } else { "enabled" }
                 ));
