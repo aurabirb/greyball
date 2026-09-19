@@ -280,7 +280,8 @@ impl TrackList {
     /// Plays the row under the cursor, else opens the top-level playlist under it.
     fn activate(&mut self, s: &Session) -> WindowOutcome {
         let tracks = self.visible_track_ids(s);
-        if let Some(index) = tracks.get(self.state.cursor).and_then(|id| tracks.iter().position(|t| t == id)) {
+        let index = self.state.cursor;
+        if index < tracks.len() {
             let remote = match &self.open {
                 Open::Remote(sid, _, node) => Some((sid.clone(), node.clone())),
                 _ => None,

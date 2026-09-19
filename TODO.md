@@ -13,10 +13,6 @@
 ## TODOs:
 
 ### Bugs
-- [ ] Enter on the second occurrence of a track that is in a list twice (History, a playlist) starts
-  the context at its first occurrence: `TrackList::activate` (`ui/src/view/track_list.rs`) maps the
-  cursor to an id and back to `tracks.iter().position(..)`. Use the cursor as the index whenever the
-  list is unfiltered, and the matched row's own position when filtered.
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
   query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag
