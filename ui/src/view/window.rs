@@ -160,17 +160,17 @@ impl Window {
         }
     }
 
-    /// The status row's text when nothing was reported; `over` is that the window is shown over the view, `place` the placement key's hint.
-    fn idle(&self, frame: &WindowFrame, over: bool, place: Option<String>) -> String {
+    /// The status row's text when nothing was reported; `placement` is the window's, `place` the placement key's hint.
+    fn idle(&self, frame: &WindowFrame, placement: Placement, place: Option<String>) -> String {
         match (&self.body, frame) {
             (Body::List(list), WindowFrame::List(frame)) => list.idle(frame, place),
-            (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, over),
+            (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, placement),
             _ => String::new(),
         }
     }
 
-    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `over` that it is shown over the view, `place` the placement key's hint.
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, over: bool, place: Option<String>) {
+    /// Draws into `printer`'s window over `rect()`; `frame` is this window's own `frame()`, `placement` the window's, `place` the placement key's hint.
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &WindowFrame, placement: Placement, place: Option<String>) {
         let printer = &printer.windowed(self.rect);
         let content = &printer.windowed(Rect::from_size((0, 0), self.content().size()));
         match (&self.body, frame) {
@@ -184,7 +184,7 @@ impl Window {
         if let Some(row) = &self.status
             && let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0)
         {
-            let (text, refused) = row.message.clone().unwrap_or_else(|| (self.idle(frame, over, place), false));
+            let (text, refused) = row.message.clone().unwrap_or_else(|| (self.idle(frame, placement, place), false));
             let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
             printer.with_color(style, |p| p.print((0, y), &pad(&text, p.size.x)));
         }

@@ -218,7 +218,7 @@ impl MedleyView {
 
     /// Floating or fullscreen: shown over the view rather than in it.
     fn over_view(&self, id: WindowId) -> bool {
-        matches!(self.windows.placement(id), Placement::Floating | Placement::Screen)
+        self.windows.placement(id).over_view()
     }
 
     /// The newest open fullscreen window, which covers the tab, the docked windows and every fixed row but the hint row.
@@ -409,7 +409,7 @@ impl View for MedleyView {
                 let target = self.windows.next_placement(placed.id).map_or("close", Placement::word);
                 format!("[{key}] {target}")
             });
-            window.draw(printer, marked, window_frame, self.over_view(placed.id), place);
+            window.draw(printer, marked, window_frame, self.windows.placement(placed.id), place);
         }
 
         let chrome = &frame.chrome;
@@ -570,8 +570,8 @@ impl MedleyView {
 
         // A key goes to the focused window, then the shell; nothing under a fullscreen window is ever offered one.
         let ids = [self.focused_id(), self.main_id()];
-        // Esc a floating or fullscreen window has no use for closes it, before the window beneath sees it.
-        let closing = *event == Event::Key(Key::Esc) && self.over_view(ids[0]);
+        // Esc a window that is not tabbed has no use for closes it, before the window beneath sees it.
+        let closing = *event == Event::Key(Key::Esc) && self.windows.placement(ids[0]).closes_on_esc();
         // Only Enter and Esc go on to the main list, and only past a window with no rows of its own to act on.
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()

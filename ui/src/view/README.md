@@ -53,7 +53,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   else on the playlist it was left in, else where it was. Its status row shows the
   assign/clear/open hint (`ListFrame::assignable`: a Playlists top level with rows), plus the closing key
   while it has focus. Everything else — placement, `:window`,
-  `M`, Esc closing a focused float, persistence — is what any window has.
+  `M`, Esc closing a focused window that is not tabbed, persistence — is what any window has.
 - `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`)
   and `:help` run `toggle_help` (close it when it has focus, else `show` and focus).
   Its content is `../items.rs`, the one table where a `:`-command's two spellings (one long, one
@@ -75,7 +75,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
   re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
   to the top), so focus leaves it by `?`, Esc, a tab digit or the mouse; tabbed or docked, Tab and
-  Shift-Tab cycle focus as anywhere and Esc does nothing (its status row words the keys to match). Enter on a row with a bindable
+  Shift-Tab cycle focus as anywhere, and Esc closes it unless it is tabbed, where it does nothing (its status row words the keys to match). Enter on a row with a bindable
   target stores that target and its name in `capturing`, so what the next character binds is what the
   prompt named whatever rebuilt meanwhile; every key is consumed while capturing, a non-character
   cancels, and `blur` (from `close_window`, `focus_window`, `toggle_help`) or a mouse event drops it.
@@ -98,7 +98,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   hidden tab. A fullscreen list lets every shell key through, acting on its own selection (`/` filters it, `:`, `q`, playlist keys,
   `+`, `?`); a digit, like anything that `activate`s a tab, closes the fullscreen window and shows
   that tab. A floating or fullscreen window that is no list owns the keyboard: a key it ignores is dropped but for those `Action::is_window_action` names
-  (`:`, `M`, backtick, `?`, a tab digit) and Tab/Shift-Tab, which cycle focus. Esc closes it once it has no use for it.
+  (`:`, `M`, backtick, `?`, a tab digit) and Tab/Shift-Tab, which cycle focus. Esc closes it once it has no use for it, as it does any window that is not tabbed (`Placement::closes_on_esc`).
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
@@ -268,12 +268,12 @@ on `revision` — it is read fresh or kept in its own small cache.
    closes nothing.
 6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
    `send` offers the key to the focused window — but for Tab and Shift-Tab, which only a floating or
-   `Screen` window is offered. Enter and Esc a Log, Settings or Vis window ignores go on to
+   `Screen` window is offered. Enter and Esc a tabbed Log, Settings or Vis window ignores go on to
    the main window (`main_id()`) when that is a list (play from, or back out of, the main list while a Log has focus);
    a focused list or Help window keeps its own Enter and Esc even with nothing to act on; no other key
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
-   user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
-   it when ignored, and a key a focused floating or fullscreen window that is no list ignores goes no further unless
+   user isn't in. Esc with a window that is not tabbed focused stays with that window and closes
+   it when ignored (focus returns to where it came from, `close_window`), and a key a focused floating or fullscreen window that is no list ignores goes no further unless
    it is a window action (a tab digit included) or Tab/Shift-Tab; Enter never goes on to the main list past a window shown over the view. What is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel

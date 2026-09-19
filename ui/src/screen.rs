@@ -66,6 +66,16 @@ impl Placement {
         }
     }
 
+    /// Shown over the view rather than in it.
+    pub fn over_view(self) -> bool {
+        matches!(self, Placement::Floating | Placement::Screen)
+    }
+
+    /// Esc closes it once it has nothing left to undo.
+    pub fn closes_on_esc(self) -> bool {
+        self != Placement::Tabbed
+    }
+
     pub fn from_word(word: &str) -> Option<Placement> {
         Placement::CYCLE.into_iter().find(|placement| placement.word() == word)
     }

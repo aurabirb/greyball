@@ -124,7 +124,7 @@ pub const ITEMS: &[Item] = &[
     fixed(Section::Movement, "j/k", "move the cursor", ""),
     fixed(Section::Movement, "J/K", "move a page", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),
-    fixed(Section::Movement, "Esc", "clear the filter, leave the playlist, close the window", ""),
+    fixed(Section::Movement, "Esc", "clear the filter, leave the playlist, close a window that is not a tab", ""),
     fixed(Section::Movement, "/", "search, or fuzzy-filter the current list outside Search", ""),
     fixed(Section::Movement, ":", "open the command line", ""),
     fixed(Section::Movement, "1-9", "switch to that tab", ""),

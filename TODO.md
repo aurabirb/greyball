@@ -77,14 +77,6 @@
   two lanes (description block, key) instead of three, and the command-cell wrapping (`wrap_slashes`,
   the command lane cap) goes away. Do it together with, or right before, the Help row tweaks item
   above since both reshape the same lanes; judge it in a real-terminal screenshot.
-- [ ] Any window that is not tabbed (docked, screen or floating) closes when it has focus and Esc is
-  pressed, and focus returns to where it came from. Today only a float or `screen` window closes on
-  Esc and only once it has no other use for it (a list first clears its filter or leaves the open
-  playlist; Help keeps its own Esc while capturing a key). Keep those inner uses first — Esc closes
-  only when there is nothing left for it to undo — and extend the final "close" step to docked
-  windows. Closing a startup tab's companion follows the companion cycle rule (it is the step that
-  closes it, focus back on the tab). Derive it from the window's placement in one place rather than
-  per window.
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
