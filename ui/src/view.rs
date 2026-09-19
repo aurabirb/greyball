@@ -444,7 +444,8 @@ impl MedleyView {
         }
 
         // A key goes to the focused window, then the active tab's, then the shell.
-        match self.send(&[self.focused_id(), self.main_id()], event) {
+        let ids = [self.focused_id(), self.main_id()];
+        match self.send(if ids[0] == ids[1] { &ids[..1] } else { &ids }, event) {
             Some((_, outcome)) => self.apply(outcome),
             None => self.on_shell_key(event),
         }

@@ -238,12 +238,16 @@ impl TrackList {
         }
     }
 
+    fn top_row(&self, s: &Session) -> Option<TopRow> {
+        top_rows(s).into_iter().nth(self.state.cursor)
+    }
+
     /// The playlist (local or remote) selected or open, if this is a Playlists window.
     pub(super) fn selected_hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
         match (self.kind, &self.open) {
             (Screen::Playlists, Open::Local(id)) => Some(HotkeyTarget::Local(*id)),
             (Screen::Playlists, Open::Remote(sid, _, node)) => Some(HotkeyTarget::Remote(sid.clone(), node.clone())),
-            (Screen::Playlists, Open::TopLevel) => top_rows(s).get(self.state.cursor).map(TopRow::target),
+            (Screen::Playlists, Open::TopLevel) => self.top_row(s).as_ref().map(TopRow::target),
             _ => None,
         }
     }
@@ -291,7 +295,7 @@ impl TrackList {
         if self.kind != Screen::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;
         }
-        match top_rows(s).into_iter().nth(self.state.cursor) {
+        match self.top_row(s) {
             Some(TopRow::Local(id)) => self.reset_for_new_list(Open::Local(id)),
             Some(TopRow::Remote(sid, name, node)) => self.reset_for_new_list(Open::Remote(sid, name, node)),
             None => return WindowOutcome::Ignored,

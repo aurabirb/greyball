@@ -737,7 +737,7 @@ impl Session {
                 Some(first) => {
                     self.catalog.link(first, id)?;
                     self.invalidate_hotkey_memberships();
-                        Ok(Dispatch::Ok)
+                    Ok(Dispatch::Ok)
                 }
             },
             Command::Unlink(id) => {
