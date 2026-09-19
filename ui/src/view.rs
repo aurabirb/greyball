@@ -575,6 +575,7 @@ impl MedleyView {
         // Only Enter and Esc go on to the main list, and only past a window with no rows of its own to act on.
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()
+            && !self.over_view(ids[0])
             && !matches!(self.windows[ids[0]].kind, Kind::List(_) | Kind::Help);
         let alone = closing || ids[0] == ids[1] || !through;
         // Tab and Shift-Tab are a window's own only over the view; in it they cycle focus.
@@ -586,16 +587,14 @@ impl MedleyView {
                 self.close_window(ids[0]);
                 EventResult::consumed()
             }
-            // A fullscreen window that is no list keeps the shell's keys but those that move it on or open a window over it.
-            None if fullscreen == Some(ids[0]) && self.windows[ids[0]].list().is_none() => {
+            // A window shown over the view that is no list owns the keyboard but for the keys about windows themselves.
+            None if self.over_view(ids[0]) && self.windows[ids[0]].list().is_none() => {
                 let action = match *event {
                     Event::Char(key) => self.with_session(|s| keybindings::map(key, None, &s.hotkeys().into_iter().collect())),
+                    Event::Key(Key::Tab) | Event::Shift(Key::Tab) => return self.on_shell_key(event),
                     _ => Action::None,
                 };
-                match action {
-                    Action::CyclePlacement | Action::TogglePlaylistKeys | Action::OpenHelp => self.handle_action(action),
-                    _ => EventResult::consumed(),
-                }
+                if action.is_window_action() { self.handle_action(action) } else { EventResult::consumed() }
             }
             None => self.on_shell_key(event),
         }

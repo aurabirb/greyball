@@ -70,7 +70,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
   re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
-  to the top), so focus leaves it by `?`, Esc, the mouse or a tab digit; tabbed or docked, Tab and
+  to the top), so focus leaves it by `?`, Esc or the mouse; tabbed or docked, Tab and
   Shift-Tab cycle focus as anywhere and Esc does nothing (`Window::hint(over)` words the hint to
   match). Enter on a row with a bindable
   target stores that target and its name in `capturing`, so what the next character binds is what the
@@ -89,10 +89,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `main_id()`: it covers the tab, the docked windows, the tab bar and the status row, leaving the hint
   row as its footer, and the floating windows show over it. Whatever falls back to "the main window"
   (focus, the active list, Enter/Esc fall-through, the cursor readout) therefore never reaches the
-  hidden tab. A fullscreen list lets every shell key through (`/` filters it, `:`, `q`, playlist keys,
+  hidden tab. A fullscreen list lets every shell key through, acting on its own selection (`/` filters it, `:`, `q`, playlist keys,
   `+`, `?`); a digit, like anything that `activate`s a tab, closes the fullscreen window and shows
-  that tab. A fullscreen Log, Settings or Vis keeps the keys (`screen_hint` names them) but for the
-  `CyclePlacement`, `TogglePlaylistKeys` and `OpenHelp` ones. Esc closes it once it has no use for it.
+  that tab. A floating or fullscreen window that is no list owns the keyboard: a key it ignores is dropped but for those `Action::is_window_action` names
+  (`:`, `M`, backtick, `?`) and Tab/Shift-Tab, which cycle focus. Esc closes it once it has no use for it.
 - `MedleyView::saved_layout` is the `core::Layout` that `app` writes to `state.toml`'s `[layout]` at
   shutdown — tab order, active tab, open windows in order, every non-tab window's placement, dock side
   and stack — and `MedleyView::new` restores it, or none of it unless it places exactly the startup
@@ -268,8 +268,8 @@ on `revision` — it is read fresh or kept in its own small cache.
    a focused list or Help window keeps its own Enter and Esc even with nothing to act on; no other key
    ever acts on a window out of focus, so nothing toggles a tabbed Settings row or edits a list the
    user isn't in. Esc with a floating or `Screen` window focused stays with that window and closes
-   it when ignored, and a key a focused fullscreen Log, Settings or Vis ignores goes no further unless
-   it maps to `CyclePlacement`, `TogglePlaylistKeys` or `OpenHelp`; what is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
+   it when ignored, and a key a focused floating or fullscreen window that is no list ignores goes no further unless
+   it is a window action or Tab/Shift-Tab; Enter never goes on to the main list past a window shown over the view. What is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
    `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
 7. After `route` returns, `on_event` runs `layout()` and, for anything but a mouse event (a wheel
    scroll must stay put), `clamp_scroll()` re-follows the cursor in the active tab's and the focused

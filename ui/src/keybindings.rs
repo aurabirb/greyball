@@ -54,6 +54,13 @@ pub enum Action {
     None,
 }
 
+impl Action {
+    /// A key about the windows themselves, which a window shown over the view still lets through.
+    pub fn is_window_action(&self) -> bool {
+        matches!(self, Action::CommandLine | Action::TogglePlaylistKeys | Action::CyclePlacement | Action::OpenHelp)
+    }
+}
+
 /// The keys with one meaning everywhere, which no hotkey can take.
 fn fixed(key: char) -> Option<Action> {
     if let Some(n @ 1..=9) = key.to_digit(10) {
