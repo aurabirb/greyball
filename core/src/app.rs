@@ -312,6 +312,15 @@ pub const HISTORY_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_
 /// other two reserved ids.
 pub const NOW_PLAYING_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_u128(2));
 
+/// Which list a row list is, for `Session::playing_row`.
+pub enum ListRef {
+    /// The Now Playing list: the playing context's own snapshot.
+    Context,
+    /// A playlist window, which is the playing context only when it was started from that playlist.
+    Playlist(HotkeyTarget),
+    Other,
+}
+
 /// What a command did; the front-end decides how each is shown.
 #[derive(Debug, PartialEq)]
 pub enum Dispatch {
@@ -1548,6 +1557,29 @@ impl Session {
     /// whole now-playing `Track` (a disk read) once per row on every redraw.
     pub fn now_playing_id(&self) -> Option<TrackId> {
         self.shown.now_playing
+    }
+
+    /// The row of `ids` (a list as shown) that is the playing one: the occurrence nearest the playing
+    /// position when `own` is the context's list, else the first. No context position (the track came
+    /// from the manual queue) means identity, first occurrence.
+    pub fn playing_row(&self, ids: &[TrackId], own: &ListRef) -> Option<usize> {
+        let id = self.shown.now_playing?;
+        let anchor = self
+            .shown
+            .context
+            .as_ref()
+            .filter(|c| c.tracks.get(c.index) == Some(&id))
+            .filter(|_| match own {
+                ListRef::Context => true,
+                ListRef::Playlist(t) => self.playing_playlist().as_ref() == Some(t),
+                ListRef::Other => false,
+            })
+            .map(|c| c.index);
+        let mut hits = ids.iter().enumerate().filter(|(_, x)| **x == id).map(|(i, _)| i);
+        match anchor {
+            Some(a) => hits.min_by_key(|i| i.abs_diff(a)),
+            None => hits.next(),
+        }
     }
 
     /// Whether queue shuffle is currently on (`s`/`:toggleshuffle`) — for

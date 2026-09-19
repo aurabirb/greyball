@@ -124,13 +124,13 @@ fn render_cell(
 }
 
 /// The one track-row builder every list and docked pane goes through.
-pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &HashSet<TrackId>) -> Vec<Row> {
-    let now_playing = s.now_playing_id();
+pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &HashSet<TrackId>, offset: usize, playing: Option<usize>) -> Vec<Row> {
     let visible = &s.cfg.visible_track_attrs;
     let hotkeys = s.hotkey_memberships();
     tracks
         .into_iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(i, t)| {
             let cached = s.is_track_cached(&t);
             let liked = s.liked_mark(t.id);
             Row {
@@ -139,7 +139,7 @@ pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &Ha
                 hotkeys: render_cell(Column::Hotkeys, &t, cached, liked, visible, &hotkeys),
                 source: render_cell(Column::Source, &t, cached, liked, visible, &hotkeys),
                 duration: render_cell(Column::Duration, &t, cached, liked, visible, &hotkeys),
-                current: t.is_current(now_playing),
+                current: playing == Some(offset + i),
                 pending: pending.contains(&t.id),
             }
         })

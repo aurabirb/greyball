@@ -26,7 +26,7 @@ pub mod types;
 mod view_cache;
 
 pub use app::{
-    BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget,
+    BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, ListRef,
     PLUGIN_HEALTH_CHECK_INTERVAL, Session, cache_rendition,
 };
 pub use catalog::Catalog;

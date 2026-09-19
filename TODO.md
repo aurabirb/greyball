@@ -84,24 +84,8 @@
   step removes rows by identity (all occurrences) or by index, and whether a later refetch can bring
   back occurrences the server did not remove. Write the answers down, then decide whether removal
   should target one occurrence (by position/`snapshot_id`) or all, and make the dimming and the
-  settle consistent with that. Fix together with the duplicate-marker item below if the cause is
-  shared (position-aware row identity).
-- [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
-  it plays — only the one occurrence actually being played (by position in the context, not by track
-  identity) should be marked.
-  Suspected fix: `tracks_to_rows` (`ui/src/view/rows.rs`) sets `Row::current` from
-  `t.is_current(s.now_playing_id())` — pure track identity. Expose the playing position from core (a
-  `Session::playing_context_index()` reading `PlaybackContext::index`, plus which list it refers to —
-  `remote`/playlist id — so it only applies when the list on screen IS the playing context) and have
-  `rows()` pass each row's absolute index (`offset + i`) down; mark `current` only when identity
-  matches AND, for the playing context's own list, the index matches. Lists that aren't the playing
-  context (Search, History, another playlist) keep identity matching, but mark only the first
-  occurrence. A track played from the manual queue has no context index — fall back to identity.
-  Owner still sees the playing mark on several occurrences, so make the position the single source of
-  truth: every window showing the playing context's list (the tab and its companion alike) marks only
-  the row at the playing position, and the select-playing-track key (`RevealPlaying`, `reveal_playing`
-  in `ui/src/view/input.rs`, which also runs after seek keys) moves the cursor to that position
-  rather than to the occurrence nearest the cursor.
+  settle consistent with that.
+  A row is identified by (list, absolute index) — see `Session::playing_row`.
 - [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
   (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
   Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the

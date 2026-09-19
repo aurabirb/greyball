@@ -175,7 +175,7 @@ impl MedleyView {
             let s = session.lock().unwrap();
             match s.now_playing_id() {
                 None => Err(Notice::nothing_playing()),
-                Some(track) => match self.windows[id].list_mut().is_some_and(|list| list.reveal(track, &s)) {
+                Some(_) => match self.windows[id].list_mut().is_some_and(|list| list.reveal(&s)) {
                     true => Ok(()),
                     false => Err(Notice::not_in_list()),
                 },

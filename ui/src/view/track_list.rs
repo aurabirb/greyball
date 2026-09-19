@@ -8,7 +8,7 @@ use cursive::event::{Event, Key, MouseEvent};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, SourceId, TrackId};
+use core::{BrowseNode, Command, HotkeyTarget, ListRef, Playlist, PlaylistId, Session, SourceId, TrackId};
 
 use crate::keybindings;
 use crate::row::RowItem;
@@ -252,14 +252,23 @@ impl TrackList {
         }
     }
 
-    /// Moves the cursor to the occurrence of `track` nearest it; false when the list does not hold it.
-    pub(super) fn reveal(&mut self, track: TrackId, s: &Session) -> bool {
-        let cursor = self.state.cursor;
-        let nearest = self.visible_track_ids(s).iter().enumerate().filter(|(_, id)| **id == track).map(|(i, _)| i).min_by_key(|i| i.abs_diff(cursor));
-        if let Some(i) = nearest {
+    /// The row of this list that is the playing one; the single predicate marks and reveal share.
+    fn playing_index(&self, s: &Session) -> Option<usize> {
+        let own = match (self.kind, self.filtered_ids(s)) {
+            (_, Some(_)) => ListRef::Other,
+            (ListKind::NowPlaying, None) => ListRef::Context,
+            (_, None) => self.open_target().map_or(ListRef::Other, ListRef::Playlist),
+        };
+        s.playing_row(&self.visible_track_ids(s), &own)
+    }
+
+    /// Moves the cursor to the playing row; false when the list does not hold it.
+    pub(super) fn reveal(&mut self, s: &Session) -> bool {
+        let row = self.playing_index(s);
+        if let Some(i) = row {
             self.state.cursor = i;
         }
-        nearest.is_some()
+        row.is_some()
     }
 
     pub(super) fn selected_track(&self, s: &Session) -> Option<TrackId> {
@@ -410,7 +419,8 @@ impl TrackList {
             Open::Remote(sid, _, node) => s.remote_pending_ids(sid, node).into_iter().collect(),
             _ => HashSet::new(),
         };
-        let track_rows = |tracks| tracks_to_rows(s, tracks, &pending);
+        let playing = self.playing_index(s);
+        let track_rows = |tracks| tracks_to_rows(s, tracks, &pending, offset, playing);
         if let Some(matched) = self.filtered_ids(s) {
             if matched.is_empty() {
                 return vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))];

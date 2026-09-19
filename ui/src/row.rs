@@ -1,6 +1,6 @@
 //! `RowItem` — how a list row is rendered.
 
-use core::{Track, TrackId};
+use core::Track;
 
 /// Anything that can be shown as a row in a list screen, split into the
 /// track list's columns: tags, title/artist, source, duration.
@@ -20,11 +20,6 @@ pub trait RowItem: Send + Sync {
     fn source(&self, cached: bool) -> String;
     /// Duration column, e.g. "3:45".
     fn duration(&self) -> String;
-    /// Is this the track the session is currently playing? (highlight cue)
-    /// Takes the id directly (`Session::now_playing_id`, no store round
-    /// trip) rather than re-resolving the whole now-playing `Track` per
-    /// row — a list screen calls this once per row, every redraw.
-    fn is_current(&self, now_playing: Option<TrackId>) -> bool;
 }
 
 impl RowItem for Track {
@@ -56,9 +51,4 @@ impl RowItem for Track {
     fn duration(&self) -> String {
         self.duration_str()
     }
-
-    fn is_current(&self, now_playing: Option<TrackId>) -> bool {
-        now_playing == Some(self.id)
-    }
 }
-
