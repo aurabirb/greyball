@@ -69,9 +69,10 @@ impl MedleyView {
     pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
         // A built-in falling back onto a default that a playlist took meanwhile would be shadowed by it.
         if let HotkeyTarget::Builtin(action) = &target
-            && let Some(holder) = self.with_session(|s| s.hotkey_for(action.default_key())).filter(|holder| holder != &target)
+            && let Some(default) = action.default_key()
+            && let Some(holder) = self.with_session(|s| s.hotkey_for(default)).filter(|holder| holder != &target)
         {
-            let (default, holder) = (action.default_key(), self.hotkey_row_name_for(&holder));
+            let holder = self.hotkey_row_name_for(&holder);
             return self.refuse(format!("Can't restore '{default}': it is bound to {holder}, clear that first"));
         }
         let key = self.with_session(|s| s.playlist_hotkey(&target));

@@ -50,7 +50,7 @@ impl Hotkeys {
 /// The built-in whose default `key` is, unless it is remapped elsewhere.
 fn defaulting_to(hotkeys: &HashMap<char, HotkeyTarget>, key: char) -> Option<BuiltinAction> {
     BuiltinAction::ALL.iter().find_map(|&(action, default)| {
-        (default == key && !hotkeys.values().any(|t| *t == HotkeyTarget::Builtin(action))).then_some(action)
+        (default == Some(key) && !hotkeys.values().any(|t| *t == HotkeyTarget::Builtin(action))).then_some(action)
     })
 }
 

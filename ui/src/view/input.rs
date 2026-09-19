@@ -9,7 +9,7 @@ use cursive::views::{Dialog, OnEventView, ScrollView, TextView};
 use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId, TrackId};
 
 use crate::command;
-use crate::keybindings::Action;
+use crate::keybindings::{self, Action};
 
 use super::MedleyView;
 use super::modal::Modal;
@@ -78,18 +78,15 @@ impl MedleyView {
                     Err(e) => return self.notify(Notice::failed(e)),
                 };
                 let open = self.active_list().and_then(TrackList::open_local);
-                if parsed == command::Parsed::Help {
-                    return self.handle_action(Action::OpenHelp);
+                if let command::Parsed::ToggleWindow(name) = parsed {
+                    return self.handle_action(Action::ToggleWindow(name));
                 }
-                let named = match parsed {
-                    command::Parsed::ToggleWindow(name) => Some((name, true)),
-                    command::Parsed::History => Some(("history-tab", false)),
-                    _ => None,
-                };
-                if let Some((name, toggle)) = named {
-                    let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
-                    if toggle { self.toggle_window(id) } else { self.show(id) }
-                    return EventResult::consumed();
+                if let command::Parsed::Builtin(action) = parsed {
+                    let selected = self.with_session(|s| self.active_list().and_then(|list| list.selected_track(s)));
+                    return match keybindings::builtin_action(action, selected) {
+                        Action::None => self.notify(Notice::failed("no track selected")),
+                        action => self.handle_action(action),
+                    };
                 }
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
                     // `side`/`stack` are shared dock geometry whatever window is named.
@@ -246,6 +243,16 @@ impl MedleyView {
             }
             Action::Seek(ms) => self.seek(ms),
             Action::RevealPlaying => self.reveal_playing(true),
+            Action::ToggleWindow(name) => {
+                let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
+                self.toggle_window(id);
+                EventResult::consumed()
+            }
+            Action::ShowWindow(name) => {
+                let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
+                self.show(id);
+                EventResult::consumed()
+            }
             Action::CommandLine => {
                 self.editing = Editing::CommandLine;
                 self.buffer.clear();

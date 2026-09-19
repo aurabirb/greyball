@@ -77,44 +77,52 @@ pub enum BuiltinAction {
     SwitchPlaylists,
     OpenHelp,
     RevealPlaying,
+    ToggleLog,
+    ToggleSettings,
+    ToggleVis,
+    ToggleQueue,
+    ToggleHistory,
+    ShowHistory,
+    Link,
+    Unlink,
 }
 
 impl BuiltinAction {
     /// Every remappable built-in action with its hardcoded default key —
     /// `map`'s fallback when nothing in the hotkeys table remaps it, and the
     /// full row list `:keys`/the hotkey menu shows alongside playlists.
-    pub const ALL: &'static [(BuiltinAction, char)] = &[
-        (BuiltinAction::Next, 'n'),
-        (BuiltinAction::Previous, 'p'),
-        (BuiltinAction::SeekForward, '.'),
-        (BuiltinAction::SeekBack, ','),
-        (BuiltinAction::AddToPlaylistOrNew, '+'),
-        (BuiltinAction::Quit, 'Q'),
-        (BuiltinAction::ClearQueue, 'E'),
-        (BuiltinAction::ToggleScan, 'B'),
-        (BuiltinAction::ToggleShuffle, 's'),
-        (BuiltinAction::CyclePaneLayout, 'P'),
-        (BuiltinAction::CyclePlacement, 'M'),
-        (BuiltinAction::Enqueue, 'q'),
-        (BuiltinAction::Wedge, 'w'),
-        // Link/unlink are plumbing (merge/split catalog entries), not a
-        // day-to-day hotkey action — they're `:link`/`:unlink` commands
-        // instead (`ui::command`), leaving 'l'/'L' free for "like"/"unlike".
-        (BuiltinAction::Like, 'l'),
-        (BuiltinAction::Unlike, 'L'),
-        (BuiltinAction::SwitchPlaylists, '`'),
-        (BuiltinAction::OpenHelp, '?'),
-        (BuiltinAction::RevealPlaying, '0'),
+    pub const ALL: &'static [(BuiltinAction, Option<char>)] = &[
+        (BuiltinAction::Next, Some('n')),
+        (BuiltinAction::Previous, Some('p')),
+        (BuiltinAction::SeekForward, Some('.')),
+        (BuiltinAction::SeekBack, Some(',')),
+        (BuiltinAction::AddToPlaylistOrNew, Some('+')),
+        (BuiltinAction::Quit, Some('Q')),
+        (BuiltinAction::ClearQueue, Some('E')),
+        (BuiltinAction::ToggleScan, Some('B')),
+        (BuiltinAction::ToggleShuffle, Some('s')),
+        (BuiltinAction::CyclePaneLayout, Some('P')),
+        (BuiltinAction::CyclePlacement, Some('M')),
+        (BuiltinAction::Enqueue, Some('q')),
+        (BuiltinAction::Wedge, Some('w')),
+        (BuiltinAction::Like, Some('l')),
+        (BuiltinAction::Unlike, Some('L')),
+        (BuiltinAction::SwitchPlaylists, Some('`')),
+        (BuiltinAction::OpenHelp, Some('?')),
+        (BuiltinAction::RevealPlaying, Some('0')),
+        (BuiltinAction::ToggleLog, None),
+        (BuiltinAction::ToggleSettings, None),
+        (BuiltinAction::ToggleVis, None),
+        (BuiltinAction::ToggleQueue, None),
+        (BuiltinAction::ToggleHistory, None),
+        (BuiltinAction::ShowHistory, None),
+        (BuiltinAction::Link, None),
+        (BuiltinAction::Unlink, None),
     ];
 
-    /// This action's hardcoded default key — panics only if `ALL` is missing
-    /// an entry for a variant, which a test below guards against.
-    pub fn default_key(self) -> char {
-        Self::ALL
-            .iter()
-            .find(|(a, _)| *a == self)
-            .map(|(_, k)| *k)
-            .expect("BuiltinAction::ALL covers every variant")
+    /// This action's hardcoded default key, if it has one.
+    pub fn default_key(self) -> Option<char> {
+        Self::ALL.iter().find(|(a, _)| *a == self).and_then(|&(_, key)| key)
     }
 
     /// Human-readable label for the `:keys`/hotkey-menu row and `state.toml`'s
@@ -139,6 +147,14 @@ impl BuiltinAction {
             BuiltinAction::SwitchPlaylists => "switch-playlists",
             BuiltinAction::OpenHelp => "open-help",
             BuiltinAction::RevealPlaying => "reveal-playing",
+            BuiltinAction::ToggleLog => "toggle-log",
+            BuiltinAction::ToggleSettings => "toggle-settings",
+            BuiltinAction::ToggleVis => "toggle-vis",
+            BuiltinAction::ToggleQueue => "toggle-queue",
+            BuiltinAction::ToggleHistory => "toggle-history",
+            BuiltinAction::ShowHistory => "show-history",
+            BuiltinAction::Link => "link",
+            BuiltinAction::Unlink => "unlink",
         }
     }
 
@@ -1539,7 +1555,7 @@ impl Session {
     /// reads as free rather than still "belonging" to the old action.
     pub fn effective_hotkey(&self, target: &HotkeyTarget) -> Option<char> {
         self.playlist_hotkey(target).or_else(|| match target {
-            HotkeyTarget::Builtin(action) => Some(action.default_key()),
+            HotkeyTarget::Builtin(action) => action.default_key(),
             _ => None,
         })
     }

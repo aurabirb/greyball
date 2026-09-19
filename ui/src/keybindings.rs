@@ -52,6 +52,10 @@ pub enum Action {
     ExportPlaylist,
     /// UI-local: seek by this many ms, then reveal the playing track.
     Seek(i64),
+    /// UI-local: open or close that window, or switch to its tab.
+    ToggleWindow(&'static str),
+    /// UI-local: bring that window into view.
+    ShowWindow(&'static str),
     /// UI-local: put the cursor on the playing track in the active list.
     RevealPlaying,
     /// Nothing bound.
@@ -61,7 +65,10 @@ pub enum Action {
 impl Action {
     /// A key about the windows themselves, which a window shown over the view still lets through.
     pub fn is_window_action(&self) -> bool {
-        matches!(self, Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp)
+        matches!(
+            self,
+            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_)
+        )
     }
 }
 
@@ -100,9 +107,11 @@ pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTa
     if let Some(action) = fixed(ch) {
         return action;
     }
-    let Some(action) = builtin_at(hotkeys, ch) else {
-        return Action::None;
-    };
+    builtin_at(hotkeys, ch).map_or(Action::None, |action| builtin_action(action, selected))
+}
+
+/// What running `action` means with `selected` under the cursor.
+pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Action {
     match action {
         BuiltinAction::Next => Action::Command(Command::Next),
         BuiltinAction::Previous => Action::Command(Command::Previous),
@@ -133,6 +142,14 @@ pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTa
         BuiltinAction::SwitchPlaylists => Action::SwitchPlaylists,
         BuiltinAction::OpenHelp => Action::OpenHelp,
         BuiltinAction::RevealPlaying => Action::RevealPlaying,
+        BuiltinAction::ToggleLog => Action::ToggleWindow("log"),
+        BuiltinAction::ToggleSettings => Action::ToggleWindow("settings"),
+        BuiltinAction::ToggleVis => Action::ToggleWindow("vis"),
+        BuiltinAction::ToggleQueue => Action::ToggleWindow("queue"),
+        BuiltinAction::ToggleHistory => Action::ToggleWindow("history"),
+        BuiltinAction::ShowHistory => Action::ShowWindow("history-tab"),
+        BuiltinAction::Link => selected.map_or(Action::None, |id| Action::Command(Command::LinkPick(id))),
+        BuiltinAction::Unlink => selected.map_or(Action::None, |id| Action::Command(Command::Unlink(id))),
     }
 }
 
@@ -146,7 +163,7 @@ fn builtin_at(hotkeys: &HashMap<char, HotkeyTarget>, ch: char) -> Option<Builtin
     }
     BuiltinAction::ALL.iter().find_map(|&(action, default)| {
         let remapped_elsewhere = hotkeys.values().any(|t| *t == HotkeyTarget::Builtin(action));
-        (default == ch && !remapped_elsewhere).then_some(action)
+        (default == Some(ch) && !remapped_elsewhere).then_some(action)
     })
 }
 

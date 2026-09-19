@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use core::{Axis, Command, Session, Side, TrackId};
+use core::{Axis, BuiltinAction, Command, Session, Side, TrackId};
 
 use crate::items::{self, Cmd};
 use crate::screen::{Placement, WINDOWS};
@@ -23,6 +23,8 @@ pub struct PanePatch {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Parsed {
     Ready(Command),
+    /// A command that takes no argument runs its built-in, as its key does.
+    Builtin(BuiltinAction),
     /// `add-to-playlist <name>` — track is the current row.
     AddToPlaylist(String),
     /// `export <playlist-name> [path]` — needs a name → id lookup.
@@ -35,20 +37,10 @@ pub enum Parsed {
     Open(String),
     /// `open` with no arguments — open the modal filesystem browser.
     OpenBrowse,
-    /// `help` — show the command list in a modal.
-    Help,
-    /// `window <name>` and `log`/`settings`/`vis`/`queue`/`history` — open or close that window, or switch to its tab.
+    /// `window <name>` — open or close that window, or switch to its tab.
     ToggleWindow(&'static str),
     /// `panes ...` — change where open panes render.
     SetPaneLayout(PanePatch),
-    /// `hist` — show the History tab window.
-    History,
-    /// `link` — pick the current row as one end of a link; run it again on a
-    /// second row to merge them. Needs the selected track, resolved in
-    /// `resolve`.
-    Link,
-    /// `unlink` — unlink the selected track from its links.
-    Unlink,
     /// Any word not recognized as a built-in above — checked against the
     /// live `Session`'s plugin-registered commands in `resolve` (`parse`
     /// itself has no `Session` to consult), since a plugin's own command
@@ -77,8 +69,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         return Err(item.usage());
     }
     match cmd {
-        Cmd::Quit => Ok(Parsed::Ready(Command::Quit)),
-        Cmd::Help => Ok(Parsed::Help),
+        Cmd::Builtin(action) => Ok(Parsed::Builtin(action)),
         Cmd::Search => Ok(Parsed::Ready(Command::Search(rest.to_string()))),
         Cmd::NewPlaylist => Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string()))),
         Cmd::AddToPlaylist => Ok(Parsed::AddToPlaylist(rest.to_string())),
@@ -100,17 +91,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
                 path: None,
             })
         }
-        Cmd::Log => window_name("log").map(Parsed::ToggleWindow),
-        Cmd::Settings => window_name("settings").map(Parsed::ToggleWindow),
-        Cmd::Vis => window_name("vis").map(Parsed::ToggleWindow),
-        Cmd::Queue => window_name("queue").map(Parsed::ToggleWindow),
-        Cmd::History => window_name("history").map(Parsed::ToggleWindow),
         Cmd::Window => window_name(rest).map(Parsed::ToggleWindow),
-        Cmd::ToggleScan => Ok(Parsed::Ready(Command::ToggleScan)),
-        Cmd::ToggleShuffle => Ok(Parsed::Ready(Command::ToggleShuffle)),
-        Cmd::Hist => Ok(Parsed::History),
-        Cmd::Link => Ok(Parsed::Link),
-        Cmd::Unlink => Ok(Parsed::Unlink),
         Cmd::Panes => parse_pane_patch(rest).map(Parsed::SetPaneLayout).map_err(|unknown| format!("{} {unknown}", item.usage())),
     }
 }
@@ -186,12 +167,10 @@ pub fn resolve(parsed: Parsed, session: &Session, selected: Option<TrackId>) -> 
         // `view::MedleyView::open_arg`, which intercepts them before `resolve`.
         Parsed::OpenBrowse => Err("open a playlist first".into()),
         Parsed::Open(_) => Err("open is handled by the UI".into()),
-        // `view::commit_edit` intercepts this before `resolve`.
-        Parsed::Help => Err("help is handled by the UI".into()),
         // Both handled in `view::commit_edit` — pane visibility/layout is
         // UI-local, not a `core::Command`.
         Parsed::ToggleWindow(_) => Err("window toggling is handled by the UI".into()),
-        Parsed::History => Err("screen switching is handled by the UI".into()),
+        Parsed::Builtin(_) => Err("a built-in is handled by the UI".into()),
         Parsed::SetPaneLayout(_) => Err("pane layout is handled by the UI".into()),
         Parsed::ExportM3u { name, path } => {
             let playlist = session
@@ -206,14 +185,6 @@ pub fn resolve(parsed: Parsed, session: &Session, selected: Option<TrackId>) -> 
                 },
                 None => Command::ExportM3u(playlist.id),
             })
-        }
-        Parsed::Link => {
-            let track = selected.ok_or("no track selected")?;
-            Ok(Command::LinkPick(track))
-        }
-        Parsed::Unlink => {
-            let track = selected.ok_or("no track selected")?;
-            Ok(Command::Unlink(track))
         }
         // Validated against the live `Session` here (an unregistered word is
         // a real "unknown command"), but actually run by the UI

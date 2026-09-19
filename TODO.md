@@ -13,25 +13,20 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-- [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
-  (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
-  the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
-  `unlink`, and `open` without its optional argument) — their rows answer Enter with "this command
-  has no key" — and the actions `keybindings::fixed` hard-wires that are not structural: Space
-  play/pause and `x` export. Give each a `core::BuiltinAction` (ids are additions to `state.toml`'s
-  `builtin:<id>`), which means `BuiltinAction::ALL`'s default key becomes `Option<char>` (a command
-  row starts with none; `effective_target_at`, `builtin_at`, `effective_hotkey` and `default_key`
-  follow), `keybindings::map` runs the action, and `command::parse` can return the item's built-in for
-  a no-argument command instead of one arm per word. Remove each from `fixed` as it becomes a built-in
-  so `keybindings::taken` keeps knowing every taken key. Commands that TAKE an argument are bindable
-  too: pressing the bound key opens the command line with the command's long name and a trailing
-  space typed in (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the argument, Enter runs it
-  and Esc cancels — the path `+` already uses for `newplaylist ` (`Action::NewPlaylistPrompt`);
-  generalize that one action to "prompt for item N" instead of adding one per command. A command
-  with an OPTIONAL argument (`open`) prompts too; the user presses Enter on the empty argument to
-  run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
-  (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
-  binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row. `Item.names` stays a slice (owner decision, not a fixed-size array).
+- [ ] Make almost every Help row bindable. Still without a key: the actions `keybindings::fixed`
+  hard-wires that are not structural — Space play/pause and `x` export — which become built-ins with
+  those default keys (ids are additions to `state.toml`'s `builtin:<id>`) and leave `fixed` so
+  `keybindings::taken` keeps knowing every taken key; and the commands that TAKE an argument
+  (`search`, `add-to-playlist`, `export`, ...), whose rows answer Enter with "a command that takes an
+  argument can't have a key". Pressing the bound key opens the command line with the command's long
+  name and a trailing space typed in (`:search ▏`, `:add-to-playlist ▏`), cursor ready for the
+  argument, Enter runs it and Esc cancels — the path `+` already uses for `newplaylist `
+  (`Action::NewPlaylistPrompt`); generalize that one action to "prompt for item N" instead of adding
+  one per command. `open` (`Cmd::Open`, optional argument) prompts too, the user pressing Enter on
+  the empty argument to run it bare, and gets `o` as its default key; a persisted playlist binding
+  on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row. Decided:
+  `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek (the rows say so in
+  their detail line). `Item.names` stays a slice (owner decision, not a fixed-size array).
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
   reach it through `show(id)` + the shell's search text field (`Editing::Search`,
@@ -43,8 +38,7 @@
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
 - [ ] Make the Help command rows bindable where that is not hard (`ui/src/view/help.rs`, rows in
-  `ui/src/items.rs`): the no-argument `:`-commands first, as the "bindable Help rows" item above
-  describes; leave the argument commands and Space/`x` to that item. Key underline: the underline
+  `ui/src/items.rs`). Key underline: the underline
   covers exactly one cell per key placeholder (the single symbol that holds the key), not the whole
   padded key column; every row whose key can be set (a bindable row, including one with no key
   yet) shows its placeholder underlined, and rows that cannot be bound show no underline.

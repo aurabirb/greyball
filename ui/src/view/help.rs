@@ -77,7 +77,6 @@ fn table_cells(section: Section, s: &Session) -> Vec<Cells> {
                     (s.effective_hotkey(&target).map(key_label).unwrap_or_default(), Target::Bindable(target))
                 }
                 items::Key::Fixed(keys) => (keys.to_string(), Target::Refused("a fixed key can't be rebound")),
-                items::Key::None if item.args.is_empty() => (String::new(), Target::Refused("this command has no key")),
                 items::Key::None => (String::new(), Target::Refused("a command that takes an argument can't have a key")),
             };
             Cells { command: item.command(), summary: item.summary.to_string(), detail: item.detail.to_string(), shortcut, target }
