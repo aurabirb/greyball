@@ -259,6 +259,20 @@
   to every Playlists-kind window (the tab and `playlist-keys`). Check it in a real-terminal
   screenshot of the `playlist-keys` float at its default size: the key must stay visible when the
   name is truncated in a narrow rect (the key column keeps its width; the name gives way).
+- [ ] Floating windows get a real top border, in the normal text colour. Today `draw_float_frame`
+  (`ui/src/view/panes.rs`) draws left, right and bottom lines plus corners but no top line — the
+  window's own title row sits on the box's top edge (`float_body` starts at the frame's top row) —
+  and colours the whole border `ColorStyle::title_primary()` (red) when focused. Change: draw the
+  top `─` line like the other three sides and move the window body one row down inside it
+  (`float_body` insets the top by 1 like the sides; `float_rect`'s minimum height grows by one), so
+  the title row sits under the border as the first inner row; border always in
+  `ColorStyle::primary()` (normal text colour), focused or not — focus stays visible through the
+  title's existing `[title]`/highlight styling, not the border. Hit-testing keeps using the same
+  `Placed.frame`/body rects as drawing (a press on the top border focuses/raises, like the other
+  sides). Same two rules for the remaining fullscreen modals' frame (`draw_modal_frame`,
+  `ui/src/view/modal.rs`) if they are ever drawn boxed; share one box-drawing helper between the
+  two rather than keeping two. Judge the result in a real-terminal screenshot with two cascaded
+  floats over a list and over a docked pane.
 - [ ] Make almost every Help row bindable. Rows of `ui/src/items.rs` with `Key::Builtin` already are
   (Enter in the Help window captures a key, Backspace restores the default). Still without a key:
   the `:`-commands that take no argument (`log`, `settings`, `vis`, `queue`, `history`, `hist`, `link`,
