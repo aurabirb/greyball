@@ -11,12 +11,14 @@ use crate::screen::Kind;
 
 use super::memo::Memo;
 use super::scroll::{LIST_JUMP_STEP, Nav, bound_offset, draw_scrollbar};
-use super::text::{pad, pad_right_aligned, wrap};
+use super::text::{pad, wrap, wrap_slashes};
 use super::track_list::hotkey_target_name;
 use super::window::WindowOutcome;
 
 /// Blank columns between two lanes.
 const GAP: usize = 2;
+/// Blank columns kept clear of the right edge, so text never meets the border or scrollbar.
+const RIGHT_PAD: usize = 3;
 
 /// What Enter on a row can rebind, or why it can't.
 enum Target {
@@ -121,10 +123,11 @@ fn build(width: usize, s: &Session) -> Built {
     for (title, cells) in sections.filter(|(_, cells)| !cells.is_empty()) {
         // Lane widths come from the section's widest cells, the command lane capped so the description keeps room.
         let widest = |cell: fn(&Cells) -> &String| cells.iter().map(|c| cell(c).chars().count()).max().unwrap_or(0);
-        let shortcut_w = widest(|c| &c.shortcut).min(width / 4);
-        let command_w = widest(|c| &c.command).min(width * 2 / 5);
+        let avail = width.saturating_sub(RIGHT_PAD).max(1);
+        let shortcut_w = widest(|c| &c.shortcut).min(avail / 4);
+        let command_w = widest(|c| &c.command).min((avail * 2 / 5).min(32));
         let lane = |w: usize| if w == 0 { 0 } else { w + GAP };
-        let text_w = width.saturating_sub(lane(command_w) + lane(shortcut_w)).max(1);
+        let text_w = avail.saturating_sub(lane(command_w) + lane(shortcut_w)).max(1);
         if !built.lines.is_empty() {
             built.lines.push(Line::Blank);
         }
@@ -132,7 +135,7 @@ fn build(width: usize, s: &Session) -> Built {
         built.lines.push(Line::Title(format!("[ {title} ]")));
         for cell in cells {
             built.lines.push(Line::Blank);
-            let command = if command_w == 0 { Vec::new() } else { wrap(&cell.command, command_w) };
+            let command = if command_w == 0 { Vec::new() } else { wrap_slashes(&cell.command, command_w) };
             let mut text = wrap(&cell.summary, text_w);
             if !cell.detail.is_empty() {
                 text.extend(wrap(&cell.detail, text_w));
@@ -146,7 +149,7 @@ fn build(width: usize, s: &Session) -> Built {
                 }
                 line.push_str(&pad(&part(&text), text_w));
                 if i == 0 && shortcut_w > 0 {
-                    line.push_str(&pad_right_aligned(&cell.shortcut, lane(shortcut_w)));
+                    line.push_str(&pad(&format!("{}{}", " ".repeat(GAP), cell.shortcut), lane(shortcut_w)));
                 }
                 built.lines.push(if i == 0 { Line::First(built.rows.len(), line) } else { Line::Rest(line) });
             }

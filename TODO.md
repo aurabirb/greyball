@@ -68,12 +68,6 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
-- [ ] In the Help/shortcuts window the shortcut lane is right-aligned and ends flush against the right
-  edge. Align the shortcuts to the left of their lane and leave some room between the lane's end and
-  the right edge (a few columns of padding on the right, in every placement — tab, docked, screen,
-  float), so the text never sits against the border or scrollbar gutter. The lane widths come from
-  the Help window's layout (`ui/src/view/help.rs`); judge it in a real-terminal screenshot.
-
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
@@ -251,11 +245,6 @@
   changes on track change, new buckets arriving during a download, resize, and the played/unplayed boundary creeping
   along — `BASELINE_FPS` is plenty; don't raise the fps for it, and cache the resampled column
   levels per (track, width) rather than recomputing each frame.
-- [ ] The Help window breaks a command cell only at spaces, so in a lane narrower than an alias cluster
-  (`:add-to-playlist/:add`, under about 22 columns: a float on a 60-column terminal, a side dock)
-  the cluster is cut mid-word. Let the command cell break after a `/`. In a very wide rect the command
-  lane grows to two fifths of the width for `:panes`' long argument list and pushes every description
-  right; consider a tighter cap.
 - [ ] With Help as the active tab nothing but a tab digit, `?` or the mouse leaves it: it consumes Tab
   for its sections and only a float or `screen` window closes on Esc. Decide whether a tabbed or docked
   Help should give Tab back to the shell's focus cycle.
