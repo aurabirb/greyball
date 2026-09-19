@@ -68,6 +68,26 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
+- [ ] Help window row tweaks (`ui/src/view/help.rs`, rows in `ui/src/items.rs`), judged in a real-terminal
+  screenshot:
+  - Align the key field of every row at the same offset from the right that the Tracks and Playlists
+    sections have today, so all sections share one key column.
+  - The "other keys" row becomes "bind key to playlist", with the key shown as "any key".
+  - Pad the description lines (the second line onwards, the part that is not highlighted) with 2 spaces
+    on the left.
+  - Drop PgUp/PgDn and the up/down arrow keys from the key lists — they take room in the row and are
+    obvious; leave one row showing `j` `k` and another `J` `K`.
+  - Underline the key fields so that even blank space in a key cell shows underlined (style the whole
+    padded cell, not just the glyphs).
+  - Make the command rows bindable where that is not hard; this is the "bindable Help rows" item
+    above, so do the easy commands (the no-argument `:`-commands) first and leave the argument
+    commands and Space/`x` to that item.
+- [ ] In the Help window, remove the separate command lane/column: a row's `:command` spelling (long
+  and short) becomes the first line of its description, and the rest of the description follows on the
+  following lines exactly as before. This should simplify `HelpPane`'s layout (`ui/src/view/help.rs`):
+  two lanes (description block, key) instead of three, and the command-cell wrapping (`wrap_slashes`,
+  the command lane cap) goes away. Do it together with, or right before, the Help row tweaks item
+  above since both reshape the same lanes; judge it in a real-terminal screenshot.
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
