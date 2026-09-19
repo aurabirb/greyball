@@ -55,7 +55,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   while it has focus. Everything else — placement, `:window`,
   `M`, Esc closing a focused window that is not tabbed, persistence — is what any window has.
 - `help` (`help.rs`, `HelpPane`) is the help screen and the key editor in one: the `OpenHelp` key (`?`)
-  and `:help` run `toggle_help` (close it when it has focus, else `show` and focus).
+  and `:help` run `toggle_help`: closed, it opens as a tab and takes focus (`MedleyView::help_from` remembers the active tab and focus it came from); `?` on it as a tab removes it from the tab bar and goes back there; in any other placement `?` on it closes it, and when it is open but unfocused focuses it. After that it follows the placement cycle like Log and Settings. Closed, its placement is floating.
   Its content is `../items.rs`, the one table where a `:`-command's two spellings (one long, one
   short, by convention rather than by type), arguments and
   description and a key's description are written: `command::parse` resolves both spellings and builds

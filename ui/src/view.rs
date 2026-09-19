@@ -100,6 +100,7 @@ pub struct MedleyView {
     follow_sig: Memo<(WindowId, u64, (u64, usize))>,
     chrome: Memo<(u64, u64), Arc<Chrome>>,
     waveform: WaveformMemo,
+    help_from: Option<(WindowId, Focus)>,
 }
 
 impl MedleyView {
@@ -136,6 +137,7 @@ impl MedleyView {
             follow_sig: Memo::default(),
             chrome: Memo::default(),
             waveform: Memo::default(),
+            help_from: None,
         };
         if let Some(layout) = layout {
             view.restore(&layout);

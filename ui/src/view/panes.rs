@@ -202,6 +202,9 @@ impl MedleyView {
 
     /// `:window <name>` and its short forms: a tab is switched to, any other window opened or closed.
     pub(super) fn toggle_window(&mut self, id: WindowId) {
+        if self.windows.named(HELP) == Some(id) {
+            return self.toggle_help();
+        }
         if self.windows.placement(id) == Placement::Tabbed {
             self.activate(id);
         } else if !self.close_window(id) {
@@ -246,13 +249,29 @@ impl MedleyView {
         self.focus = Focus::Window(id);
     }
 
-    /// The `OpenHelp` key and `:help`: closes the help window when it has focus, else shows and focuses it.
+    /// The `OpenHelp` key and `:help`: a focused help window closes (a tab returns to where it was opened from), else it opens as a tab, or is focused where it already is.
     pub(super) fn toggle_help(&mut self) {
         let Some(id) = self.windows.named(HELP) else { return };
-        if self.focus == Focus::Window(id) && self.close_window(id) {
+        let tabbed = self.windows.placement(id) == Placement::Tabbed;
+        if self.focus == Focus::Window(id) {
+            if !tabbed {
+                self.close_window(id);
+            } else if let Some(i) = self.tabs.iter().position(|&tab| tab == id) {
+                self.windows[id].blur();
+                self.tabs.remove(i);
+                self.windows.place(id, Placement::Floating);
+                let (tab, focus) = self.help_from.take().unwrap_or((self.active, Focus::Window(self.active)));
+                self.active = if self.tabs.contains(&tab) { tab } else { self.tabs[i.min(self.tabs.len() - 1)] };
+                let back = Some(focus).filter(|focus| matches!(focus, Focus::Window(w) if self.visible().contains(w)));
+                self.focus = back.unwrap_or(Focus::Window(self.active));
+            }
             return;
         }
         self.windows[id].blur();
+        self.help_from = Some((self.active, self.focus));
+        if !tabbed && !self.open.iter().any(|&(open, _)| open == id) {
+            self.set_placement(id, Placement::Tabbed, true);
+        }
         self.show(id);
         self.focus = Focus::Window(id);
     }

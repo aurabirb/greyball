@@ -146,7 +146,7 @@ const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str)
     Startup { companion_of: Some(of), ..startup(name, kind, home) }
 }
 
-/// The window the `OpenHelp` key and `:help` open over whatever is shown.
+/// The window the `OpenHelp` key and `:help` open as a tab; closed, it sits floating.
 pub const HELP: &str = "help";
 
 /// Every window startup builds, tabs first in tab order; each tab has a companion instance.
