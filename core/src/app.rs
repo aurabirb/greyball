@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use chrono::{DateTime, Utc};
 use rand::prelude::*;
 
 use crate::catalog::Catalog;
+use crate::update::{INSTALLED, Outcome};
 use crate::config::Config;
 use crate::hotkeys::Hotkeys;
 use crate::event::{Bus, CoreEvent, PlayerEvent};
@@ -68,6 +70,7 @@ pub enum BuiltinAction {
     ClearQueue,
     ToggleScan,
     ToggleShuffle,
+    Update,
     CyclePaneLayout,
     CyclePlacement,
     Enqueue,
@@ -108,6 +111,7 @@ impl BuiltinAction {
         (BuiltinAction::ClearQueue, Some('E')),
         (BuiltinAction::ToggleScan, Some('B')),
         (BuiltinAction::ToggleShuffle, Some('s')),
+        (BuiltinAction::Update, None),
         (BuiltinAction::CyclePaneLayout, Some('P')),
         (BuiltinAction::CyclePlacement, Some('M')),
         (BuiltinAction::Enqueue, Some('q')),
@@ -152,6 +156,7 @@ impl BuiltinAction {
             BuiltinAction::ClearQueue => "clear-queue",
             BuiltinAction::ToggleScan => "toggle-scan",
             BuiltinAction::ToggleShuffle => "toggle-shuffle",
+            BuiltinAction::Update => "update",
             BuiltinAction::CyclePaneLayout => "cycle-panes",
             BuiltinAction::CyclePlacement => "cycle-placement",
             BuiltinAction::Enqueue => "enqueue",
@@ -281,6 +286,8 @@ pub enum Command {
     /// Toggles queue shuffle (`s`/`:toggleshuffle`) — see `Queue::set_shuffle`
     /// for what turning it on/off actually does to the queue's order.
     ToggleShuffle,
+    /// Downloads the latest release over the installed binary (`:update`), off the caller's thread.
+    Update,
     Quit,
 }
 
@@ -417,6 +424,7 @@ const HOTKEY_MEMO_LOADING_RECHECK: Duration = Duration::from_secs(1);
 /// Soulseek's `CHECK_COOLDOWN`), so the timer never probes more often than a
 /// plugin's own background check could actually produce a new result.
 pub const PLUGIN_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+const UPDATE_CHECKS_PER_DAY: f64 = 3.0;
 
 /// Why `Session::bind_hotkey` refused.
 #[derive(Debug)]
@@ -739,6 +747,18 @@ impl Session {
                     Dispatch::ScanMode(scan.mode())
                 }))
             }
+            Command::Update => {
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let result = crate::update::run().and_then(|outcome| match outcome {
+                        Outcome::Installed(msg) => Ok(msg),
+                        Outcome::Current => Ok(format!("already up to date (v{})", env!("CARGO_PKG_VERSION"))),
+                        Outcome::NotReady => Err("the new release has no binary for this platform yet".to_string()),
+                    });
+                    bus.send(CoreEvent::UpdateResult(result));
+                });
+                Ok(Dispatch::Done("checking for updates...".into()))
+            }
             Command::ToggleShuffle => {
                 let on = !self.queue.get_shuffle();
                 self.queue.set_shuffle(on);
@@ -920,7 +940,7 @@ impl Session {
                 self.warn(context, message);
                 Ok(true)
             }
-            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) => Ok(true),
+            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) => Ok(true),
         }
     }
 
@@ -1693,6 +1713,31 @@ impl Session {
     pub fn set_status_line(&mut self, shown: bool) {
         self.touch();
         Arc::make_mut(&mut self.cfg).status_line = shown;
+    }
+
+    pub fn set_auto_update(&mut self, on: bool) {
+        self.touch();
+        Arc::make_mut(&mut self.cfg).auto_update = on;
+    }
+
+    /// Downloads a newer release in the background; a failure is a warning, being current or not ready is silent.
+    pub fn check_for_update(&self) {
+        if !self.cfg.auto_update || INSTALLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let bus = self.bus.clone();
+        std::thread::spawn(move || match crate::update::run() {
+            Ok(Outcome::Installed(msg)) => bus.send(CoreEvent::UpdateResult(Ok(msg))),
+            Ok(Outcome::Current | Outcome::NotReady) => {}
+            Err(message) => bus.send(CoreEvent::BackgroundFailure { context: "update".into(), message }),
+        });
+    }
+
+    /// One tick of the plugin-health cycle: checks for an update about `UPDATE_CHECKS_PER_DAY` times a day.
+    pub fn maybe_check_for_update(&self) {
+        if rand::rng().random_bool(PLUGIN_HEALTH_CHECK_INTERVAL.as_secs_f64() * UPDATE_CHECKS_PER_DAY / 86_400.0) {
+            self.check_for_update();
+        }
     }
 
     /// Live scan on/off — reaches `ScanMode::Disabled`, which `B` deliberately never does.

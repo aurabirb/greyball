@@ -130,6 +130,7 @@ pub const ITEMS: &[Item] = &[
         "Window names as for :window; without one, every window that is not a tab moves. A startup tab stays tabbed: naming it moves its companion window (tabbed closes it).",
     ),
     action(BuiltinAction::ToggleScan, &["togglescan", "ts"], "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."),
+    action(BuiltinAction::Update, &["update"], "install the latest release into ~/.local/bin/medley", "Checks GitHub; restart to run the new version."),
     action(BuiltinAction::ToggleShuffle, &["toggleshuffle", "sh"], "toggle queue shuffle", ""),
     action(BuiltinAction::Link, &["link", "ln"], "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
     action(BuiltinAction::Unlink, &["unlink", "ul"], "unlink the selected track from its links", ""),

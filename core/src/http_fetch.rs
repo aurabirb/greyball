@@ -17,6 +17,7 @@ fn client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
+            .user_agent("medley")
             .timeout(FETCH_TIMEOUT)
             .build()
             .expect("reqwest client with just a timeout set should never fail to build")

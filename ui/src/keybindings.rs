@@ -118,6 +118,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::ClearQueue => Action::Command(Command::ClearQueue),
         BuiltinAction::ToggleScan => Action::Command(Command::ToggleScan),
         BuiltinAction::ToggleShuffle => Action::Command(Command::ToggleShuffle),
+        BuiltinAction::Update => Action::Command(Command::Update),
         BuiltinAction::CyclePaneLayout => Action::CyclePaneLayout,
         BuiltinAction::CyclePlacement => Action::CyclePlacement,
         BuiltinAction::Enqueue => match selected {

@@ -88,6 +88,12 @@ fn load_status_line() -> Option<bool> {
     v.get("status_line")?.as_bool()
 }
 
+fn load_auto_update() -> Option<bool> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("auto_update")?.as_bool()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -243,6 +249,7 @@ fn save_state(
     volume: f32,
     vis_fps: Option<u32>,
     status_line: Option<bool>,
+    auto_update: Option<bool>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
     source_overrides: &HashMap<&'static str, bool>,
@@ -255,6 +262,9 @@ fn save_state(
     }
     if let Some(shown) = status_line {
         text.push_str(&format!("status_line = {shown}\n"));
+    }
+    if let Some(on) = auto_update {
+        text.push_str(&format!("auto_update = {on}\n"));
     }
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
@@ -393,7 +403,11 @@ fn spawn_plugin_health_timer(session: Arc<Mutex<medley_core::Session>>, bus: Bus
         .spawn(move || {
             loop {
                 std::thread::sleep(medley_core::PLUGIN_HEALTH_CHECK_INTERVAL);
-                let plugins = session.lock().unwrap().plugins.clone();
+                let plugins = {
+                    let s = session.lock().unwrap();
+                    s.maybe_check_for_update();
+                    s.plugins.clone()
+                };
                 let probed: Vec<(SourceId, medley_core::PluginHealth)> =
                     plugins.iter().map(|p| (p.id(), p.probe())).collect();
                 let changed = session.lock().unwrap().apply_probed_plugin_health(probed);
@@ -417,6 +431,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let config_status_line = cfg.status_line;
     if let Some(shown) = load_status_line() {
         cfg.status_line = shown;
+    }
+    let config_auto_update = cfg.auto_update;
+    if let Some(on) = load_auto_update() {
+        cfg.auto_update = on;
     }
     for (name, enabled) in load_source_overrides() {
         cfg.set_source_enabled(&name, enabled);
@@ -567,6 +585,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     }
     session.set_hotkeys(load_hotkeys());
     session.ensure_remote_playlists();
+    session.check_for_update();
     let session = Arc::new(Mutex::new(session));
     spawn_plugin_health_timer(session.clone(), bus.clone());
 
@@ -701,7 +720,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let vis_fps = Some(s.cfg.vis.limit()).filter(|&fps| fps != config_vis_fps);
     let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
-    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, auto_update, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

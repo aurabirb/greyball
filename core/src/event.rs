@@ -47,6 +47,8 @@ pub enum CoreEvent {
     MembershipResult(MembershipOutcome),
     /// What a plugin's `:`-command returned, or why the setup the user ran failed.
     PluginReport(String),
+    /// What `:update` came to: a status line, or why it failed.
+    UpdateResult(Result<String, String>),
 }
 
 #[derive(Clone, Debug)]
