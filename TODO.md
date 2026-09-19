@@ -72,6 +72,12 @@
   advancing within its last second (position stops short of `duration_ms`, sink never drains or
   `Finished` is swallowed by the generation guard) and a track whose duration stays 0 while it
   plays.
+- [ ] Every modal (`ui/src/view/modal.rs` and the pickers/dialogs it frames: playlist picker,
+  warnings modal, confirm dialogs) leaves an empty row between its bottom status/hint line and the
+  bottom border of the modal frame. Remove the gap so the status line sits directly above the
+  border, in one place (`draw_modal_frame`/the modal body rect, not per modal), and check the
+  modals' height maths and hit-testing follow the same rect. Judge it in a real-terminal
+  screenshot of each modal.
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
   query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag
