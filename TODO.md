@@ -13,7 +13,6 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-  slice (owner decision, not a fixed-size array).
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
   reach it through `show(id)` + the shell's search text field (`Editing::Search`,
@@ -24,11 +23,6 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
-- [ ] Make the Help command rows bindable where that is not hard (`ui/src/view/help.rs`, rows in
-  `ui/src/items.rs`). Key underline: the underline
-  covers exactly one cell per key placeholder (the single symbol that holds the key), not the whole
-  padded key column; every row whose key can be set (a bindable row, including one with no key
-  yet) shows its placeholder underlined, and rows that cannot be bound show no underline.
 ### Bugs
 - [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
   `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track

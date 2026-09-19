@@ -41,7 +41,8 @@ enum Line {
     Blank,
     Title(String),
     /// The first line of `rows[_]`, the only kind the cursor stops on.
-    First(usize, String, String),
+    /// Row, description lane, key lane, whether the key can be set.
+    First(usize, String, String, bool),
     Rest(String),
 }
 
@@ -122,7 +123,7 @@ fn build(width: usize, s: &Session) -> Built {
     let sections: Vec<_> = titled.chain(std::iter::once(("Playlist keys", playlist_cells(s)))).filter(|(_, cells)| !cells.is_empty()).collect();
     let avail = width.saturating_sub(RIGHT_PAD).max(1);
     // One key lane for every section, so all keys share a column.
-    let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count()).max().unwrap_or(0).min(avail / 4);
+    let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count().max(usize::from(matches!(c.target, Target::Bindable(_))))).max().unwrap_or(0).min(avail / 4);
     let text_w = avail.saturating_sub(if shortcut_w == 0 { 0 } else { shortcut_w + GAP }).max(1);
     let wrap_w = text_w.saturating_sub(CONT_PAD).max(1);
     for (title, cells) in sections {
@@ -139,11 +140,12 @@ fn build(width: usize, s: &Session) -> Built {
                 text.extend(wrap(&cell.detail, wrap_w));
             }
             let first = built.lines.len();
+            let bindable = matches!(cell.target, Target::Bindable(_));
             for (i, part) in text.iter().enumerate() {
                 let indent = if i == 0 { "" } else { "  " };
                 let line = pad(&format!("{indent}{part}"), text_w + if shortcut_w > 0 { GAP } else { 0 });
                 let key = if shortcut_w > 0 { pad(&cell.shortcut, shortcut_w) } else { String::new() };
-                built.lines.push(if i == 0 { Line::First(built.rows.len(), line, key) } else { Line::Rest(line) });
+                built.lines.push(if i == 0 { Line::First(built.rows.len(), line, key, bindable) } else { Line::Rest(line) });
             }
             built.rows.push(Row { first, end: built.lines.len(), name: cell.summary, target: cell.target });
         }
@@ -249,7 +251,7 @@ impl HelpPane {
                     self.offset = bound_offset(offset, built.lines.len(), view_h);
                 }
                 (MouseEvent::Press(MouseButton::Left), _) if body.contains(pos) => {
-                    if let Some(Line::First(row, _, _)) = built.lines.get(self.offset + pos.y - body.top()) {
+                    if let Some(Line::First(row, ..)) = built.lines.get(self.offset + pos.y - body.top()) {
                         self.cursor = *row;
                     }
                 }
@@ -294,10 +296,15 @@ impl HelpPane {
             match line {
                 Line::Blank => {}
                 Line::Title(text) => view.with_color(ColorStyle::title_primary(), |p| p.print((0, y), text)),
-                Line::First(i, text, key) => {
+                Line::First(i, text, key, bindable) => {
                     let draw = |p: &Printer| {
                         p.print((0, y), &pad(text, body.width()));
-                        p.with_effect(Effect::Underline, |p| p.print((text.chars().count(), y), key));
+                        let x = text.chars().count();
+                        p.print((x, y), key);
+                        if *bindable {
+                            let symbol = key.chars().next().unwrap_or(' ').to_string();
+                            p.with_effect(Effect::Underline, |p| p.print((x, y), &symbol));
+                        }
                     };
                     if *i == self.cursor {
                         view.with_color(ColorStyle::highlight(), draw);
