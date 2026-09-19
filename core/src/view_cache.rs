@@ -104,6 +104,10 @@ type TracksCache = Arc<Mutex<HashMap<RemoteKey, RemotePlaylistTracks>>>;
 type PendingChanges = Arc<Mutex<HashMap<RemoteKey, Vec<PendingChange>>>>;
 
 /// How often a pending toggle re-checks whether its playlist finished loading.
+/// Least gap between attempts to fetch a source's top-level playlists, so a dead endpoint isn't hammered.
+const PLAYLISTS_RETRY_FLOOR: Duration = Duration::from_secs(30);
+/// How often a partly landed top-level list is re-read while its source pages the rest in.
+const PLAYLISTS_POLL: Duration = Duration::from_millis(300);
 const MEMBERSHIP_POLL: Duration = Duration::from_millis(250);
 /// A toggle gives up rather than wait forever on a playlist that never finishes loading.
 const MEMBERSHIP_LOAD_TIMEOUT: Duration = Duration::from_secs(300);
@@ -128,27 +132,17 @@ fn remote_playlist_cache_key(source: &SourceId, node: &BrowseNode) -> String {
 }
 
 /// Cache entry behind `ViewCache::remote_playlists`.
+#[derive(Default)]
 struct RemotePlaylistsEntry {
     folders: Vec<(String, BrowseNode)>,
     /// Bumped by `set_folders`, the one way `folders` changes.
     generation: u64,
     /// A background `Source::browse(Root, want)` for this source is in flight.
     browsing: bool,
-    /// More may still load — see `BrowsePage::partial`. Freezes on any
-    /// landed call, clean or failed; folder lists are small enough that
-    /// there's no scroll-triggered retry like `RemotePlaylistTracks` has.
-    partial: bool,
-}
-
-impl Default for RemotePlaylistsEntry {
-    fn default() -> Self {
-        Self {
-            folders: Vec::new(),
-            generation: 0,
-            browsing: false,
-            partial: true,
-        }
-    }
+    /// The last fetch ended cleanly with at least one real playlist; anything else is retried.
+    settled: bool,
+    /// When the last fetch started, for `PLAYLISTS_RETRY_FLOOR`.
+    last_attempt: Option<Instant>,
 }
 
 impl RemotePlaylistsEntry {
@@ -301,74 +295,96 @@ impl ViewCache {
             .unwrap_or_default()
     }
 
-    /// Single-flight background `browse(Root)` refresh — no ingestion
-    /// needed, a folder is just a name + `BrowseNode`, but the landed list
-    /// is persisted so a restart shows it immediately (see
-    /// `Store::remote_playlist_folders`).
-    pub(crate) fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
-        {
-            let mut cache = self.remote_playlists.lock().unwrap();
-            match cache.entry(source.clone()) {
-                std::collections::hash_map::Entry::Occupied(mut e) => {
-                    let entry = e.get_mut();
-                    if entry.browsing || !entry.partial {
-                        return;
-                    }
-                    entry.browsing = true;
-                }
-                std::collections::hash_map::Entry::Vacant(v) => {
-                    // First touch this session — hydrate from whatever a
-                    // previous session persisted instead of starting empty.
-                    let folders = ctx
-                        .store
-                        .remote_playlist_folders(source.as_str())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(name, id)| (name, BrowseNode::Path(id)))
-                        .collect();
-                    let entry = v.insert(RemotePlaylistsEntry { browsing: true, ..Default::default() });
-                    entry.set_folders(folders);
-                }
-            }
+    /// Lets the next `ensure_remote_playlists` retry an unsettled fetch at once — the source's token or wiring changed.
+    pub(crate) fn invalidate_remote_playlists(&self, source: &SourceId) {
+        if let Some(entry) = self.remote_playlists.lock().unwrap().get_mut(source) {
+            entry.last_attempt = None;
         }
+    }
 
+    /// Single-flight background `browse(Root)` refresh — no ingestion
+    /// needed, a folder is just a name + `BrowseNode`, but a clean list is
+    /// persisted so a restart shows it immediately (see
+    /// `Store::remote_playlist_folders`). A failed or empty fetch stays
+    /// retriable, at most once per `PLAYLISTS_RETRY_FLOOR`, and never
+    /// replaces a longer list already known.
+    pub(crate) fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
         let Some(source_handle) = ctx.sources.get(source).cloned() else {
-            self.remote_playlists.lock().unwrap().entry(source.clone()).or_default().browsing = false;
             return;
         };
+        {
+            let mut cache = self.remote_playlists.lock().unwrap();
+            let entry = cache.entry(source.clone()).or_insert_with(|| {
+                // First touch this session — hydrate from whatever a
+                // previous session persisted instead of starting empty.
+                let folders = ctx
+                    .store
+                    .remote_playlist_folders(source.as_str())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, id)| (name, BrowseNode::Path(id)))
+                    .collect();
+                let mut entry = RemotePlaylistsEntry::default();
+                entry.set_folders(folders);
+                entry
+            });
+            if entry.browsing
+                || entry.settled
+                || entry.last_attempt.is_some_and(|at| at.elapsed() < PLAYLISTS_RETRY_FLOOR)
+            {
+                return;
+            }
+            entry.browsing = true;
+            entry.last_attempt = Some(Instant::now());
+        }
         let source = source.clone();
         let bus = ctx.bus.clone();
         let cache = self.remote_playlists.clone();
         let store = ctx.store.clone();
 
         std::thread::spawn(move || {
-            // Small list, no scroll position to pace against — load it all.
-            let result = source_handle.browse(&BrowseNode::Root, usize::MAX);
-            {
-                let mut cache = cache.lock().unwrap();
-                let entry = cache.entry(source.clone()).or_default();
-                entry.browsing = false;
-                entry.partial = false;
-                if let Ok(page) = &result {
-                    entry.set_folders(page.folders.clone());
-                    entry.partial = page.partial;
+            // A previous failed walk froze itself; resume it.
+            source_handle.retry_browse(&BrowseNode::Root);
+            let failure = loop {
+                // Small list, no scroll position to pace against — load it all.
+                let page = match source_handle.browse(&BrowseNode::Root, usize::MAX) {
+                    Ok(page) => page,
+                    Err(e) => break Some(e.to_string()),
+                };
+                let clean = !page.partial && !page.errored;
+                {
+                    let mut cache = cache.lock().unwrap();
+                    let entry = cache.entry(source.clone()).or_default();
+                    if clean || page.folders.len() > entry.folders.len() {
+                        entry.set_folders(page.folders.clone());
+                    }
+                    if clean {
+                        entry.settled = page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
+                    }
                 }
-            }
-            if let Ok(page) = &result {
-                let folders: Vec<(String, String)> = page
-                    .folders
-                    .iter()
-                    .filter_map(|(name, node)| match node {
-                        BrowseNode::Path(id) => Some((name.clone(), id.clone())),
-                        BrowseNode::Root => None,
-                    })
-                    .collect();
-                if let Err(e) = store.set_remote_playlist_folders(source.as_str(), &folders) {
-                    log::warn!("{source}: failed to persist playlist folders: {e}");
+                bus.send(CoreEvent::PlaylistsChanged);
+                if clean {
+                    let folders: Vec<(String, String)> = page
+                        .folders
+                        .iter()
+                        .filter_map(|(name, node)| match node {
+                            BrowseNode::Path(id) => Some((name.clone(), id.clone())),
+                            BrowseNode::Root => None,
+                        })
+                        .collect();
+                    if let Err(e) = store.set_remote_playlist_folders(source.as_str(), &folders) {
+                        log::warn!("{source}: failed to persist playlist folders: {e}");
+                    }
+                    break None;
                 }
-            }
-            if let Err(e) = result {
-                bus.send(CoreEvent::BackgroundFailure { context: source.to_string(), message: format!("playlists: {e}") });
+                if page.errored {
+                    break Some("fetch failed, will retry".to_string());
+                }
+                std::thread::sleep(PLAYLISTS_POLL);
+            };
+            cache.lock().unwrap().entry(source.clone()).or_default().browsing = false;
+            if let Some(message) = failure {
+                bus.send(CoreEvent::BackgroundFailure { context: source.to_string(), message: format!("playlists: {message}") });
             }
             bus.send(CoreEvent::PlaylistsChanged);
         });
@@ -464,9 +480,9 @@ impl ViewCache {
         if member { Membership::Member } else { Membership::NotMember }
     }
 
-    /// Is `source`'s top-level playlist-folder list still loading? `true` before anything lands.
+    /// Is a fetch of `source`'s top-level playlist-folder list in flight?
     pub fn remote_playlists_loading(&self, source: &SourceId) -> bool {
-        self.remote_playlists.lock().unwrap().get(source).map(|e| e.partial).unwrap_or(true)
+        self.remote_playlists.lock().unwrap().get(source).is_some_and(|e| e.browsing)
     }
 
     /// Is more of `(source, node)` still loading? `true` before anything has landed.

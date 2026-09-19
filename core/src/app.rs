@@ -948,6 +948,7 @@ impl Session {
         self.touch();
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
+            self.view.invalidate_remote_playlists(id);
             self.prune_synthetic_hotkeys();
         }
         // Also pushed to the scan driver's own live wiring, so a source
@@ -1359,10 +1360,13 @@ impl Session {
         self.view.remote_playlists(source)
     }
 
-    /// Kicks a single-flight background folder fetch for every registered source.
+    /// Kicks a single-flight background folder fetch for every registered source whose plugin is healthy.
     pub fn ensure_remote_playlists(&self) {
         let ctx = self.remote_ctx();
         for source in self.source_ids() {
+            if self.shown.plugin_health.iter().any(|(id, health)| *id == source && !health.is_ok()) {
+                continue;
+            }
             self.view.ensure_remote_playlists(&source, ctx);
         }
     }

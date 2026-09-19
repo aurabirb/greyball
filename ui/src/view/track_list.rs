@@ -51,6 +51,18 @@ pub(super) fn top_row_name(row: &TopRow, playlists: &[Playlist]) -> String {
     }
 }
 
+/// A bound playlist's display name; a remote one not in its source's landed list shows its id.
+pub(super) fn hotkey_target_name(s: &Session, target: &HotkeyTarget) -> String {
+    let playlists = s.playlists();
+    match top_rows(s).into_iter().find(|r| &r.target() == target) {
+        Some(row) => top_row_name(&row, &playlists),
+        None => match target {
+            HotkeyTarget::Remote(sid, BrowseNode::Path(id)) => format!("[{sid}] {id}"),
+            _ => String::new(),
+        },
+    }
+}
+
 /// Every local playlist, then every source's landed remote playlists.
 pub(super) fn top_rows(s: &Session) -> Vec<TopRow> {
     let mut rows: Vec<TopRow> = s.playlists().into_iter().map(|p| TopRow::Local(p.id)).collect();

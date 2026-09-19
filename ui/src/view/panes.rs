@@ -175,6 +175,14 @@ impl MedleyView {
             self.focus = Focus::Window(id);
         }
         self.active = id;
+        self.kick_playlists(id);
+    }
+
+    /// A shown Playlists window retries a source's top-level list that failed or came back empty.
+    fn kick_playlists(&self, id: WindowId) {
+        if self.windows[id].kind == Kind::List(ListKind::Playlists) {
+            self.with_session(Session::ensure_remote_playlists);
+        }
     }
 
     /// Brings `id` into view: its tab, else open and focused; a Search list takes the query input at once, same as `/`.
@@ -186,6 +194,7 @@ impl MedleyView {
                 self.open.push((id, self.focus));
             }
             self.focus_window(id);
+            self.kick_playlists(id);
         }
         if self.windows[id].kind == Kind::List(ListKind::Search) {
             self.editing = Editing::Search;
@@ -199,6 +208,7 @@ impl MedleyView {
             self.activate(id);
         } else if !self.close_window(id) {
             self.open.push((id, self.focus));
+            self.kick_playlists(id);
             if self.windows.placement(id) != Placement::Docked {
                 self.focus = Focus::Window(id);
             }

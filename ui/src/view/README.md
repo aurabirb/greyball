@@ -212,9 +212,10 @@ on `revision` — it is read fresh or kept in its own small cache.
   `TrackUpdated`/`Materialized` event, so every `MediaCache` write site must send one once the write
   lands.
 - `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
-  `Session::ensure_remote_playlists` from two points, never from the getter or the view: once at
-  startup (`app/src/main.rs`) and on `CoreEvent::PluginStatusChanged`. A landed fetch, clean or failed,
-  is final for the session unless the source reported a partial page.
+  `Session::ensure_remote_playlists`, never from the getter or a redraw: at startup (`app/src/main.rs`), on
+  `CoreEvent::PluginStatusChanged`, and when a Playlists window is shown. It skips a source whose plugin
+  health isn't `Ok`. A clean fetch with playlists is final for the session; a failed or empty one is
+  retried, at most once per `PLAYLISTS_RETRY_FLOOR`, and a re-wire clears that floor.
 - Writes: `run(cmd)` → `Session::dispatch` → a `Dispatch` saying what happened (`Queued(n)`,
   `ShuffleSet(on)`, `MembershipSet`, `Done(result)`, `Refused(why)`, …) or an `Err`; `run` never
   re-reads the session to find out.

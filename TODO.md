@@ -47,33 +47,6 @@
   no-argument command's item carries its built-in, which this item needs anyway), and let
   `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
   owner decision, do not make it a fixed-size array.
-- [ ] After a restart the Playlists window shows only `[spotify] Liked Songs` — the user's Spotify
-  playlists are missing. They appear after a fresh Spotify login in the running app, and are gone
-  again after the next restart. Do NOT reproduce (it needs the owner's real login): analyse the code
-  and fix every way this can happen. The login clue points at token timing: a fresh login fetches
-  with a brand-new token; a restart starts from the cached token, which has usually expired. Likely
-  chain, to verify by reading: `app/src/main.rs` kicks `Session::ensure_remote_playlists()` once
-  right after startup → Spotify's source fetches `/v1/me/playlists` with the stale cached token (or
-  before `kick_off_auto_refresh`, started from `probe()` in `sources/spotify/src/plugin.rs`, has
-  finished) → 401/empty → `ViewCache::ensure_remote_playlists` (`core/src/view_cache.rs`) freezes
-  the entry (`partial = false` whether the fetch landed `Ok` or `Err`; later kicks return early on
-  `entry.browsing || !entry.partial`) → when the refresh lands, `CoreEvent::PluginStatusChanged` →
-  `rewire_all_plugins()` + `ensure_remote_playlists()` runs, but the frozen entry makes it a no-op
-  — and if the token was refreshed inline without a health transition, no event fires at all. The
-  synthetic Liked Songs row doesn't come from that request, which is why it alone survives. Check
-  also: whether the source object used for the startup fetch still holds the old token after
-  `wiring()`'s `set_token` (`SpotifySource`), whether the Web API client refreshes on 401 and
-  retries, whether a persisted folder cache is preferred over a fresh fetch, and whether paging
-  (`BrowsePage::partial`, `set_folders` replacing vs extending) can drop everything after page 1.
-  Fix: an `Err` (or an auth failure surfaced as an empty list) must leave the entry retriable, not
-  frozen; re-fetch a source's top-level list when its token/wiring changes (`apply_wiring`/
-  `PluginStatusChanged` should invalidate that source's frozen folder entry, bumping its
-  generation) and when a Playlists window is shown while the entry is failed/empty, with a floor
-  between attempts; don't kick the startup fetch for a source whose plugin health isn't `Ok` yet —
-  let the health transition kick it; a failure lands in the warnings list (`Session::warn`). This
-  also resolves the "failed fetch of a source's top-level playlist list is final" bug below —
-  delete that entry too. Hotkeys bound to remote playlists that aren't in the root list (the user's
-  `a` binding) should still resolve a name in the Playlists/Help windows.
 - [ ] Move the assigned key on Playlists top-level rows from the left gutter (the tags column before
   the name) to the right-hand hotkeys column, where track rows show their playlist letters
   (`Column::Hotkeys` in `render_cell`, `ui/src/view/rows.rs`; the top-level rows are built in
@@ -283,14 +256,6 @@
   started (a stale stop or a dropped channel racing the new load), or a history entry resolving to
   a rendition whose reader was already consumed/closed. Likely related to the rapid-skip bug
   above — fix them together if the cause is shared.
-- [ ] A failed fetch of a source's top-level playlist list is final for the session:
-  `ViewCache::ensure_remote_playlists` (`core/src/view_cache.rs`) sets `partial = false` whether the
-  fetch landed `Ok` or `Err`, and every later kick returns early on `!entry.partial` — so starting
-  offline (or a transient 5xx) leaves the Playlists screen without that source's playlists until
-  restart. Keep a failed entry retriable (don't clear `partial` on `Err`, or track a failed state)
-  and retry when the Playlists screen is opened and when the source's plugin health returns to
-  `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
-  hammered.
 - [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
   dialog; drops its hotkey binding; windows showing it back out to the top level) and
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`

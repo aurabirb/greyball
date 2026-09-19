@@ -12,7 +12,7 @@ use crate::screen::Kind;
 use super::memo::Memo;
 use super::scroll::{LIST_JUMP_STEP, Nav, bound_offset, draw_scrollbar};
 use super::text::{pad, pad_right_aligned, wrap};
-use super::track_list::{top_row_name, top_rows};
+use super::track_list::hotkey_target_name;
 use super::window::WindowOutcome;
 
 /// Blank columns between two lanes.
@@ -93,15 +93,16 @@ fn table_cells(section: Section, s: &Session) -> Vec<Cells> {
 
 /// The playlists that have a key, as rebindable rows.
 fn playlist_cells(s: &Session) -> Vec<Cells> {
-    let (playlists, rows) = (s.playlists(), top_rows(s));
     let mut keyed: Vec<(char, Cells)> = s
         .hotkeys()
         .into_iter()
         .filter_map(|(key, target)| {
-            let row = rows.iter().find(|row| row.target() == target)?;
+            if matches!(target, HotkeyTarget::Builtin(_)) {
+                return None;
+            }
             let cells = Cells {
                 command: String::new(),
-                summary: top_row_name(row, &playlists),
+                summary: hotkey_target_name(s, &target),
                 detail: String::new(),
                 shortcut: key_label(key),
                 target: Target::Bindable(target),

@@ -7,17 +7,14 @@ use crate::keybindings::{self, Taken};
 
 use super::{MedleyView, Notice};
 use super::input::confirm;
-use super::track_list::{top_row_name, top_rows};
+use super::track_list::hotkey_target_name;
 
 impl MedleyView {
     /// This row's display name, looked up fresh.
     fn hotkey_row_name_for(&self, target: &HotkeyTarget) -> String {
         match target {
             HotkeyTarget::Builtin(action) => items::describe(*action).to_string(),
-            HotkeyTarget::Local(_) | HotkeyTarget::Remote(..) => self.with_session(|s| {
-                let playlists = s.playlists();
-                top_rows(s).into_iter().find(|r| &r.target() == target).map(|r| top_row_name(&r, &playlists))
-            }).unwrap_or_default(),
+            HotkeyTarget::Local(_) | HotkeyTarget::Remote(..) => self.with_session(|s| hotkey_target_name(s, target)),
         }
     }
 
