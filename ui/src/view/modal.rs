@@ -39,10 +39,10 @@ pub(super) fn modal_body(rect: Rect, titled: bool) -> Rect {
     Rect::from_size((rect.left(), rect.top() + top), (rect.width(), rect.height().saturating_sub(top + 1)))
 }
 
-/// A modal's list area: its body minus a spacer row above and a free row below.
+/// A modal's list area: its body minus a spacer row above.
 pub(super) fn modal_list(rect: Rect) -> Rect {
     let body = modal_body(rect, true);
-    Rect::from_size((body.left(), body.top() + 1), (body.width(), body.height().saturating_sub(2)))
+    Rect::from_size((body.left(), body.top() + 1), (body.width(), body.height().saturating_sub(1)))
 }
 
 /// Title bar and footer hint at the edges of `rect`; returns the printer for the body between them.
