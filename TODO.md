@@ -29,21 +29,25 @@
   closes on Esc. `M` on the tab still opens its companion docked. The `[M] <next>` status hint stops
   ever saying "close", and the README's companion cycle text follows.
 - [ ] Rework the status-row hints of every window (`TrackList::idle` in `ui/src/view/track_list.rs`,
-  `HelpPane::idle`, the other windows' idle text; keys come from the effective bindings via the
-  status context, never hard-coded letters):
-  - Playlists top level: no like hint. When the selected playlist has no key show `[any] assign`;
-    when it already has one show `[Backspace] clear` instead of assign. The Playlists TAB shows
-    the switch key (`` [`] `` playlists window, from `SwitchPlaylists`) and no `[M]`; the popout
-    playlist window (`playlist-keys`) follows the same assign/clear rule and keeps its `[M] <next>`
-    placement hint (it has no other way to be placed — confirm with the owner).
-  - Inside a playlist (its track list): `[l] like   [w] queue   [any] assign` — like, the queue key,
-    and the assign hint; no `` [`] `` and no `[M]` here.
-  - Now Playing (the first tab): `[?] help   [p/n] prev/next   [w/e] queue`, using the real keys
-    of Help, Previous/Next and the queue actions (the owner wrote `w/e`; the defaults are
-    Enqueue `q`, Wedge `w`, ClearQueue `E` — show whatever the bindings actually are).
-  - Sweep the remaining windows (Search, History, Queue, Log, Settings, Vis stays blank) so each
-    shows the few keys that matter in it, in this same `[key] action` style, and never a key the
-    user has unbound (omit the hint instead).
+  `HelpPane::idle`, the other windows' idle text). Every key shown comes from the effective bindings
+  through the status context, never a hard-coded letter; a key the user has unbound is omitted
+  together with its hint; the backspace key is always written `[Bksp]` (never `[Backspace]`, in
+  hints and in Help rows alike). Exact texts:
+  - Main Playlists tab, top level: the contextual assign OR clear hint — `[any key] assign` when the
+    selected playlist has no key, `[Bksp] clear` when it already has one — then the switch key
+    (`` [`] `` from `SwitchPlaylists`), and nothing else (no like, no `[M]`, no help).
+  - Main Playlists tab, inside a playlist (its track list): `[l] like`, the queue key (`[w] queue`
+    with the real binding), and `[<all playlist keys>] send to playlist` where the bracket holds
+    every key currently assigned to a playlist as a compact run (e.g. `[abcdx]`; it is fine to
+    truncate with an ellipsis when it does not fit). No `` [`] ``, no `[M]`.
+  - Popout playlist window (`playlist-keys`), top level: `[any key] assign` / `[Bksp] clear` (same
+    contextual rule), then `[Esc] close` and `[M] <next>`. Inside a playlist: `[<all playlist keys>]
+    playlist` (the same run of assigned keys), `[Esc] close`, `[M] <next>`.
+  - Now Playing (the first tab): `[?] help`, `[p/n] prev/next`, the queue keys (`[w/e] queue`, with
+    the real bindings — the defaults are Enqueue `q`, Wedge `w`, ClearQueue `E`, so confirm which
+    the owner wants shown), and `[P] cycle layout` only when something is docked.
+  - Sweep the remaining windows (Search, History, Queue, Log, Settings; Vis stays blank) into the same
+    `[key] action` style showing the few keys that matter in each.
 - [ ] Unify like and unlike into one key called "like" that works exactly like a playlist hotkey:
   it toggles the selected track's membership in Liked Songs (`Session::set_liked` through the same
   pending/settle path as `ViewCache::set_remote_membership`, with the italic pending dot), so a
