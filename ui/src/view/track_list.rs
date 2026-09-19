@@ -267,6 +267,22 @@ impl TrackList {
         s.playing_row(&self.visible_track_ids(s), &own)
     }
 
+    pub(super) fn open_row_target(&mut self, row: TopRow) {
+        match row {
+            TopRow::Local(id) => self.reset_for_new_list(Open::Local(id)),
+            TopRow::Remote(sid, name, node) => self.reset_for_new_list(Open::Remote(sid, name, node)),
+        }
+    }
+
+    /// Puts the cursor on `track`; false when the list does not hold it.
+    pub(super) fn select_track(&mut self, s: &Session, track: TrackId) -> bool {
+        let row = self.visible_track_ids(s).iter().position(|&id| id == track);
+        if let Some(i) = row {
+            self.state.cursor = i;
+        }
+        row.is_some()
+    }
+
     /// Moves the cursor to the playing row; false when the list does not hold it.
     pub(super) fn reveal(&mut self, s: &Session) -> bool {
         let row = self.playing_index(s);
@@ -386,8 +402,7 @@ impl TrackList {
             return WindowOutcome::Ignored;
         }
         match self.top_row(s) {
-            Some(TopRow::Local(id)) => self.reset_for_new_list(Open::Local(id)),
-            Some(TopRow::Remote(sid, name, node)) => self.reset_for_new_list(Open::Remote(sid, name, node)),
+            Some(row) => self.open_row_target(row),
             None => return WindowOutcome::Ignored,
         }
         WindowOutcome::Consumed
@@ -484,7 +499,7 @@ impl TrackList {
         }
     }
 
-    fn loading(&self, s: &Session) -> bool {
+    pub(super) fn loading(&self, s: &Session) -> bool {
         match (self.kind, &self.open) {
             (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_loading(sid, node),
             (ListKind::Playlists, Open::TopLevel) => s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid)),

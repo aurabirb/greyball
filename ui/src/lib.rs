@@ -20,7 +20,7 @@ use cursive::event::EventResult;
 use cursive::view::Nameable;
 use cursive::views::NamedView;
 use cursive::{Cursive, CursiveRunner};
-use core::{CoreEvent, Layout, LogBuf, Session};
+use core::{CoreEvent, LastPlayed, Layout, LogBuf, Session};
 
 pub mod command;
 mod filebrowser;
@@ -59,13 +59,14 @@ pub fn create_cursive() -> Result<CursiveRunner<Cursive>, Box<dyn std::error::Er
     Ok(CursiveRunner::new(Cursive::new(), backend))
 }
 
-/// The root view; `layout` is last run's `saved_layout`.
+/// The root view; `layout` is last run's `saved_layout`, `last_played` the track to select once it is found.
 pub fn root_view(
     session: SessionHandle,
     log: Arc<LogBuf>,
     layout: Option<Layout>,
+    last_played: Option<LastPlayed>,
 ) -> NamedView<MedleyView> {
-    MedleyView::new(session, log, layout).with_name(ROOT)
+    MedleyView::new(session, log, layout, last_played).with_name(ROOT)
 }
 
 /// The window layout to persist, read at shutdown.

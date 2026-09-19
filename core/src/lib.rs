@@ -27,7 +27,7 @@ pub mod waveform;
 mod view_cache;
 
 pub use app::{
-    BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, ListRef,
+    BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, LastPlayed, ListRef,
     PLUGIN_HEALTH_CHECK_INTERVAL, Session, cache_rendition,
 };
 pub use view_cache::PendingRows;

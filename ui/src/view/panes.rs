@@ -2,13 +2,13 @@ use cursive::{Printer, Rect, Vec2};
 use cursive::event::EventResult;
 use cursive::theme::ColorStyle;
 
-use core::{Axis, PaneLayoutConfig, Session, Side};
+use core::{Axis, HotkeyTarget, PaneLayoutConfig, Session, Side};
 
 use crate::screen::{HELP, Kind, ListKind, Placement};
 
 use super::{Focus, MedleyView};
 use super::input::Editing;
-use super::track_list::TrackList;
+use super::track_list::{TrackList, top_rows};
 use super::window::WindowId;
 
 /// Rows reserved at the very top of the terminal and bottom.
@@ -397,6 +397,65 @@ pub(super) fn draw_separator(side: Side, printer: &Printer, main_rect: Rect) {
             for x in 0..printer.size.x {
                 printer.print((x, y), "─");
             }
+        }
+    }
+}
+
+/// What `select_last_played` does next.
+enum Step {
+    Wait,
+    Open(super::track_list::TopRow),
+    Select(WindowId),
+    Fallback,
+    Done,
+}
+
+impl MedleyView {
+    /// Opens the playlist the last-played track came from, else the Now Playing list, and puts the cursor on it.
+    pub(super) fn select_last_played(&mut self) {
+        let Some((last, opened)) = self.to_select.clone() else { return };
+        let (Some(playlists), Some(playing)) = (self.windows.named("playlists"), self.windows.named("now-playing")) else {
+            self.to_select = None;
+            return;
+        };
+        let session = self.session.clone();
+        let step = {
+            let s = session.lock().unwrap();
+            let holds = |id: WindowId| self.windows[id].list().is_some_and(|list| list.visible_track_ids(&s).contains(&last.track));
+            match (&last.playlist, opened) {
+                (Some(target), false) => match top_rows(&s).into_iter().find(|row| &row.target() == target) {
+                    Some(row) => Step::Open(row),
+                    None if matches!(target, HotkeyTarget::Remote(sid, _) if s.remote_playlists_loading(sid)) => Step::Wait,
+                    None => Step::Fallback,
+                },
+                (Some(_), true) if holds(playlists) => Step::Select(playlists),
+                (Some(_), true) if self.windows[playlists].list().is_some_and(|list| list.loading(&s)) => Step::Wait,
+                (Some(_), true) => Step::Fallback,
+                (None, _) if holds(playing) => Step::Select(playing),
+                (None, _) => Step::Done,
+            }
+        };
+        match step {
+            Step::Wait => {}
+            Step::Open(row) => {
+                self.show(playlists);
+                if let Some(list) = self.windows[playlists].list_mut() {
+                    list.open_row_target(row);
+                }
+                self.to_select = Some((last, true));
+            }
+            Step::Select(id) => {
+                self.show(id);
+                let s = session.lock().unwrap();
+                if let Some(list) = self.windows[id].list_mut() {
+                    list.select_track(&s, last.track);
+                }
+                drop(s);
+                self.clamp_scroll();
+                self.to_select = None;
+            }
+            Step::Fallback => self.to_select = Some((core::LastPlayed { playlist: None, ..last }, false)),
+            Step::Done => self.to_select = None,
         }
     }
 }

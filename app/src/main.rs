@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use medley_core::{
-    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, Layout, LogBuf, MediaCache, MediaProvider, Player,
-    PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, Uuid,
+    BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LastPlayed, Layout, LogBuf, MediaCache, MediaProvider, Player,
+    PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, TrackId, Uuid,
 };
 #[cfg(any(feature = "spotify", feature = "soundcloud", feature = "soulseek"))]
 use medley_core::{PluginHealth, Wiring};
@@ -208,7 +208,38 @@ fn load_layout() -> Option<Layout> {
     v.get("layout")?.clone().try_into().ok()
 }
 
+/// The `[last_played]` table: the track id and, when it played from a playlist, that playlist's target string.
+fn load_last_played() -> Option<LastPlayed> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    let table = v.get("last_played")?;
+    let track = TrackId(Uuid::parse_str(table.get("track")?.as_str()?).ok()?);
+    let playlist = table.get("playlist").and_then(|p| p.as_str()).and_then(hotkey_target_from_string);
+    Some(LastPlayed { track, playlist })
+}
+
+fn last_played_table(last: &LastPlayed) -> toml::Table {
+    let mut table = toml::Table::new();
+    table.insert("track".into(), last.track.0.to_string().into());
+    if let Some(target) = &last.playlist {
+        table.insert("playlist".into(), hotkey_target_to_string(target).into());
+    }
+    toml::Table::from_iter([("last_played".to_string(), toml::Value::Table(table))])
+}
+
+/// Rewrites just the `[last_played]` table, so a track change is saved without waiting for quit.
+fn save_last_played(last: &LastPlayed) {
+    let mut state = std::fs::read_to_string(state_path()).ok().and_then(|text| text.parse::<toml::Table>().ok()).unwrap_or_default();
+    state.extend(last_played_table(last));
+    if let Ok(text) = toml::to_string(&state) {
+        let _ = std::fs::create_dir_all(data_dir());
+        let _ = std::fs::write(state_path(), text);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn save_state(
+    last_played: Option<&LastPlayed>,
     volume: f32,
     vis_fps: Option<u32>,
     status_line: Option<bool>,
@@ -242,6 +273,9 @@ fn save_state(
     }
     let layout = layout.and_then(|layout| toml::Value::try_from(layout).ok());
     if let Some(table) = layout.and_then(|layout| toml::to_string(&toml::Table::from_iter([("layout".to_string(), layout)])).ok()) {
+        text.push_str(&format!("\n{table}"));
+    }
+    if let Some(table) = last_played.and_then(|last| toml::to_string(&last_played_table(last)).ok()) {
         text.push_str(&format!("\n{table}"));
     }
     let _ = std::fs::write(state_path(), text);
@@ -536,9 +570,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let session = Arc::new(Mutex::new(session));
     spawn_plugin_health_timer(session.clone(), bus.clone());
 
+    let mut last_played = load_last_played();
     siv.set_theme(ui::theme::load(&theme));
     siv.set_user_data(session.clone());
-    siv.add_fullscreen_layer(ui::root_view(session.clone(), log_buf, load_layout()));
+    siv.add_fullscreen_layer(ui::root_view(session.clone(), log_buf, load_layout(), last_played.clone()));
 
     // Hardware media keys, lock-screen/notification widgets, etc. — Linux/BSD
     // only (D-Bus). Fails soft internally if no session bus is reachable.
@@ -588,6 +623,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             }
             // For the terminal window title's marquee — read here, applied
             // to `siv` below once `s` is released.
+            if let Some(now) = s.last_played().filter(|now| last_played.as_ref() != Some(now)) {
+                save_last_played(&now);
+                last_played = Some(now);
+            }
             let now_playing_track = s.now_playing();
             let player_state = s.player_status().state;
             // Only signal on state transitions / track changes, never on
@@ -662,7 +701,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let vis_fps = Some(s.cfg.vis.limit()).filter(|&fps| fps != config_vis_fps);
     let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
-    save_state(s.player_status().volume, vis_fps, status_line, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

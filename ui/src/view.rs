@@ -9,7 +9,7 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use core::{Layout, LogBuf, PaneLayoutConfig, Session};
+use core::{LastPlayed, Layout, LogBuf, PaneLayoutConfig, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
@@ -103,11 +103,13 @@ pub struct MedleyView {
     chrome: Memo<(u64, u64), Arc<Chrome>>,
     waveform: WaveformMemo,
     help_from: Option<(WindowId, Focus)>,
+    /// The last-played track still to be selected, and whether its playlist is open.
+    to_select: Option<(LastPlayed, bool)>,
 }
 
 impl MedleyView {
     /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on its first tab.
-    pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>) -> Self {
+    pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>, last_played: Option<LastPlayed>) -> Self {
         let (pane_cfg, session_status_line) = {
             let mut s = session.lock().unwrap();
             // `command::parse` reads the item table first, so a plugin word spelled like an item never runs.
@@ -141,6 +143,7 @@ impl MedleyView {
             chrome: Memo::default(),
             waveform: Memo::default(),
             help_from: None,
+            to_select: last_played.map(|last| (last, false)),
         };
         if let Some(layout) = layout {
             view.restore(&layout);
@@ -314,6 +317,7 @@ impl MedleyView {
             s.warning_count()
         };
         self.clamp_focus_given(warn_count);
+        self.select_last_played();
     }
 
     /// Keep the active tab's and the focused window's scroll windows around their cursors.

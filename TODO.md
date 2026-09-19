@@ -138,14 +138,6 @@
   `Session::revision` change, so the new row appears without reopening; add the key to the
   picker's footer hint (`[+] new playlist`). An empty picker ("no playlists") gets the same key
   in place of the `:newplaylist <name>` instruction text.
-- [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
-  `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
-  plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),
-  updated when the playing track changes, not only on quit. On launch, if that track still resolves,
-  open the context it came from and put the cursor on it the way `click_row` does
-  (`self.cursor[screen] = idx; self.clamp_scroll()`), waiting for a remote playlist to paginate far
-  enough if needed; if the context is gone, fall back to wherever the track can be found (library/
-  Liked Songs), else do nothing. Select only — don't start playback.
 - [ ] Add a hard-redraw key (a `BuiltinAction` with a default key and a Help row in `ui/src/items.rs`,
   rebindable like the other built-ins; no `:` command, e.g. Ctrl-L if the key table can carry a
   control key, else a plain letter) that clears the whole screen (`Cursive::clear`, so nothing stale

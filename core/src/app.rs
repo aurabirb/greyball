@@ -305,6 +305,13 @@ pub const HISTORY_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_
 /// other two reserved ids.
 pub const NOW_PLAYING_PLAYLIST_ID: PlaylistId = PlaylistId(crate::types::Uuid::from_u128(2));
 
+/// The track last played and the playlist it came from, if any.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastPlayed {
+    pub track: TrackId,
+    pub playlist: Option<HotkeyTarget>,
+}
+
 /// Which list a row list is, for `Session::playing_row`.
 pub enum ListRef {
     /// The Now Playing list: the playing context's own snapshot.
@@ -1431,6 +1438,10 @@ impl Session {
         let ctx = self.shown.context.as_ref()?;
         let remote = ctx.remote.clone().map(|(source, node)| HotkeyTarget::Remote(source, node));
         remote.or(ctx.local.map(HotkeyTarget::Local))
+    }
+
+    pub fn last_played(&self) -> Option<LastPlayed> {
+        Some(LastPlayed { track: self.shown.now_playing?, playlist: self.playing_playlist() })
     }
 
     /// A window of the playing context's tracks (`offset..offset+limit`) —
