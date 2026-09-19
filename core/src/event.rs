@@ -20,6 +20,8 @@ pub enum CoreEvent {
     /// Queue moved `current` to this track and wants it played. `Session`
     /// resolves + routes to a `Player`; nothing else listens.
     PlayRequested(TrackId),
+    /// A skip's debounce elapsed; carries the skip's sequence number.
+    DeferredLoad(u64),
     Player(PlayerEvent),
     /// `Session::play_from_cache` decoded-and-cached this track's audio on a
     /// background thread (no `MediaCache` entry existed yet when the

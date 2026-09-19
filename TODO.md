@@ -146,38 +146,6 @@
   preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
-- [ ] Skipping tracks very fast (holding/mashing next/prev) makes playback misbehave. Reproduce
-  first and write down the exact symptoms from `medley.log` (wrong track playing vs. shown, audio
-  of two tracks overlapping, stuck `Loading`, a skipped-over track starting late, extra
-  auto-advances, history/scrobble spam, a burst of downloads/streams left running), then fix the
-  cause rather than the symptom. Where to look: `Command::Next`/`Previous` → `advance(manual)` →
-  `play_next_in_context`/`play_track` (`core/src/app.rs`), each of which starts a real load;
-  `RodioPlayer`'s `generation` counter (`player/src/rodio_player.rs`) already drops stale `Loaded`
-  results and stale `Finished` events — check the Spotify player (`sources/spotify/src/player.rs`)
-  has the equivalent, that stale `PlayerEvent`s (`Finished`/`Stopped`/`Playing` from a superseded
-  load) can't reach `on_player_event` and trigger `advance(false)` or overwrite `now_playing`, that
-  `pending_cache_fallback` and history recording only fire for the track that actually ends up
-  playing, and that superseded resolves/HTTP streams/cache downloads are cancelled instead of
-  piling up. Likely shape of the fix: make skips cheap — move the cursor/now-playing immediately
-  but debounce the actual load (~150–250 ms after the last skip) so only the final target is
-  resolved, with every async result tagged by a load generation and ignored when stale.
-- [ ] Going to the previous track can fail with `symphonia error: Decoder channel closed` — the
-  same track plays fine when clicked/Enter-ed in a list, but not when reached by going back from a
-  different track. Reproduce and take the exact sequence from `medley.log` (which source/rendition
-  both tracks were, cached vs streamed, which player — `RodioPlayer` or the Spotify player — handled
-  each). The error text isn't in this repo, so first find which layer emits it (rodio's symphonia
-  decoder, librespot's decoder thread, or a `Media::Reader`/`StreamingReader` whose feeding side was
-  dropped). Where the two paths differ: `Command::Previous` (`core/src/app.rs`) takes the id from
-  `queue.previous_from_history()`, wedges the current track back onto the queue front
-  (`queue.play_next`) and calls `play_track(id, false)`, while a click goes through the list's
-  play-in-context path — compare what each does before `load` (stop/teardown of the outgoing
-  player, switching between players when the two tracks belong to different sources, reuse of an
-  already-open reader/decoder or cached `Media` for a track that was played moments ago, the
-  `generation` handling in `player/src/rodio_player.rs`, `pending_cache_fallback`). Suspects: the
-  previous track's stream/decoder being torn down by the outgoing track's stop AFTER the new load
-  started (a stale stop or a dropped channel racing the new load), or a history entry resolving to
-  a rendition whose reader was already consumed/closed. Likely related to the rapid-skip bug
-  above — fix them together if the cause is shared.
 - [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
   dialog; drops its hotkey binding; windows showing it back out to the top level) and
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`

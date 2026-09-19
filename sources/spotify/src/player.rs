@@ -433,6 +433,9 @@ impl Loaded {
     }
 }
 
+/// Failed loads in a row (no `Playing` between) that mark the session as bad.
+const WEDGED_AFTER_FAILURES: u32 = 2;
+
 /// Validates `req`, updates `snap`, announces `Loading` and hands the track to librespot.
 fn do_load(
     player: &LsPlayer,
@@ -544,6 +547,7 @@ async fn run(
         // The requested preload, and whether librespot got it on a live session.
         let mut preload: Option<(String, bool)> = None;
         let mut tick = tokio::time::interval(TICK);
+        let mut failures: u32 = 0;
 
         let exit = 'inner: loop {
             let generation = link.live_generation();
@@ -612,6 +616,7 @@ async fn run(
                     }
                     Some(LsEvent::Playing { position_ms, track_id, .. }) => {
                         set_state(&snap, PlayerState::Playing, position_ms);
+                        failures = 0;
                         if let Some(c) = cur.as_mut() {
                             c.confirm(&track_id);
                             c.playback_start = Some(Instant::now() - Duration::from_millis(u64::from(position_ms)));
@@ -667,6 +672,13 @@ async fn run(
                     Some(LsEvent::Unavailable { track_id, .. })
                         if cur.as_ref().is_some_and(|c| c.is_track(&track_id)) =>
                     {
+                        failures += 1;
+                        if failures >= WEDGED_AFTER_FAILURES {
+                            // Key requests can time out on an AP link that still looks alive; `link.live()` then reconnects.
+                            log::warn!("spotify: {failures} loads failed in a row, recycling the session");
+                            link.session.shutdown();
+                            failures = 0;
+                        }
                         set_state(&snap, PlayerState::Stopped, 0);
                         let (source, uri) = cur.take().expect("guarded").id;
                         bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));

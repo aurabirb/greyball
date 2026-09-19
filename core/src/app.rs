@@ -31,6 +31,9 @@ use crate::types::{
 };
 use crate::view_cache::{RemoteCtx, ViewCache};
 
+/// How long a skip waits for another before its track actually loads.
+const SKIP_DEBOUNCE: Duration = Duration::from_millis(200);
+
 /// Build the synthetic playback-fallback `Rendition` for `track`, if any of
 /// its real renditions already has a `MediaCache` entry — routed through the
 /// `"local"` source, which already reads straight off disk with no
@@ -417,6 +420,12 @@ pub struct Session {
     failed_playback_sources: Vec<SourceId>,
     /// Tracks in a row that failed to load with none playing in between.
     load_failures: usize,
+    /// Set while `Next`/`Previous` run, to a press arriving within `SKIP_DEBOUNCE` of the last one.
+    skipping: bool,
+    last_skip: Option<Instant>,
+    /// The skip's load waiting out `SKIP_DEBOUNCE`; a newer skip replaces it.
+    deferred_load: Option<(u64, TrackId, Arc<dyn Player>, Rendition)>,
+    deferred_seq: u64,
     /// Where the play-history M3U log lives — one entry appended per play,
     /// see `append_history_entry`. The whole `Session` already lives behind
     /// one `Arc<Mutex<Session>>` in `main.rs`, so every call in here is
@@ -539,6 +548,10 @@ impl Session {
             pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
+            skipping: false,
+            last_skip: None,
+            deferred_load: None,
+            deferred_seq: 0,
             history_path,
             shown: Revised::new(shown),
             warned: Revised::new(Warned { plugin_health: Vec::new(), failures: Vec::new() }),
@@ -662,7 +675,9 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::Next => {
+                self.skipping = self.skip_is_repeat();
                 self.advance(true);
+                self.skipping = false;
                 Ok(Dispatch::Ok)
             }
             Command::ClearQueue => {
@@ -693,7 +708,9 @@ impl Session {
                 if let Some(playing) = just_playing {
                     self.queue.play_next(playing);
                 }
+                self.skipping = self.skip_is_repeat();
                 self.play_track(id, false);
+                self.skipping = false;
                 Ok(just_playing.map_or(Dispatch::Ok, |_| Dispatch::Wedged(self.queue.len())))
             }
             Command::Seek(delta) => {
@@ -819,6 +836,14 @@ impl Session {
                 Ok(true)
             }
             CoreEvent::Player(pe) => self.on_player_event(pe),
+            CoreEvent::DeferredLoad(seq) => {
+                if let Some((_, id, p, r)) = self.deferred_load.take_if(|(s, ..)| s == seq)
+                    && self.queue.get_current() == Some(id)
+                {
+                    p.load(&r, false, 0, true);
+                }
+                Ok(false)
+            }
             CoreEvent::CacheFallbackReady(id) => {
                 // Plays the fallback rendition directly rather than
                 // re-`play_track`ing: whatever made the decode-on-demand
@@ -1649,6 +1674,13 @@ impl Session {
         }
     }
 
+    /// Whether this skip follows the last within `SKIP_DEBOUNCE`; stamps the press.
+    fn skip_is_repeat(&mut self) -> bool {
+        let repeat = self.last_skip.is_some_and(|t| t.elapsed() < SKIP_DEBOUNCE);
+        self.last_skip = Some(Instant::now());
+        repeat
+    }
+
     /// Actually start `p` playing `r` for `track` — the common tail of a
     /// normal resolve and a `play_from_cache` fallback.
     fn start_playback(&mut self, track: &Track, r: &Rendition, p: Arc<dyn Player>, record: bool) {
@@ -1666,7 +1698,19 @@ impl Session {
                 other.stop();
             }
         }
-        p.load(r, false, 0, true);
+        if self.skipping {
+            self.deferred_seq += 1;
+            let seq = self.deferred_seq;
+            self.deferred_load = Some((seq, track.id, p.clone(), r.clone()));
+            let bus = self.bus.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(SKIP_DEBOUNCE);
+                bus.send(CoreEvent::DeferredLoad(seq));
+            });
+        } else {
+            self.deferred_load = None;
+            p.load(r, false, 0, true);
+        }
         self.shown.write().now_playing = Some(track.id);
         // The player's own status still describes the previous track until it processes the load.
         self.shown.write().player_state = PlayerState::Playing;
