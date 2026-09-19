@@ -159,28 +159,21 @@ pub(super) fn bound_offset(offset: usize, len: usize, list_h: usize) -> usize {
     offset.min(len.saturating_sub(list_h))
 }
 
-/// Draw a scrollbar thumb in the column at `x = gutter_x` of `printer`, covering rows `1..=list_h`.
+/// Draw a scrollbar thumb in the column at `x = gutter_x` of `printer`, covering rows `0..list_h`; every other gutter cell is blanked.
 pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, offset: usize, total: usize) {
-    if list_h == 0 {
-        return;
-    }
-    for y in 0..list_h {
-        printer.print((gutter_x, y), "│");
-    }
-    if total <= list_h {
-        return;
-    }
-    let thumb_len = (list_h * list_h / total).max(1).min(list_h);
-    let track = list_h - thumb_len;
-    let thumb_start = if total > list_h {
-        (offset * track) / (total - list_h)
+    let thumb = if total > list_h {
+        let thumb_len = (list_h * list_h / total).max(1).min(list_h);
+        let track = list_h - thumb_len;
+        let start = ((offset * track) / (total - list_h)).min(track);
+        start..start + thumb_len
     } else {
-        0
-    }
-    .min(track);
-    printer.with_color(ColorStyle::highlight(), |p| {
-        for y in thumb_start..thumb_start + thumb_len {
-            p.print((gutter_x, y), "┃");
+        0..0
+    };
+    for y in 0..list_h {
+        if thumb.contains(&y) {
+            printer.with_color(ColorStyle::highlight(), |p| p.print((gutter_x, y), "┃"));
+        } else {
+            printer.print((gutter_x, y), " ");
         }
-    });
+    }
 }
