@@ -32,11 +32,6 @@
   run it bare. Decided: `>`/`<` and the arrows seek stay fixed second keys for next/previous/seek
   (the rows say so in their detail line). `o` becomes the default key for `:open`; a persisted playlist
   binding on a new default key is dropped at load by `Session::set_hotkeys`, with a warnings row. `Item.names` stays a slice (owner decision, not a fixed-size array).
-  test those first; (b) `command::parse` still switches on `item.names[0]` strings
-  (`ui/src/command.rs` ~79): give items a typed id the match switches on exhaustively (a
-  no-argument command's item carries its built-in, which this item needs anyway), and let
-  `Key::Fixed` rows carry their `Action` if that is a net reduction. `Item.names` stays a slice —
-  owner decision, do not make it a fixed-size array.
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
   reach it through `show(id)` + the shell's search text field (`Editing::Search`,
