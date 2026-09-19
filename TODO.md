@@ -127,6 +127,21 @@
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
   slow interval) on an actual triggering event instead of polling for one.
+- [ ] Question (analysis first, related to the duplicate-occurrence item below): when a track that
+  occurs several times in a remote playlist is removed (hotkey toggle off, `ViewCache::
+  set_remote_membership`, `core/src/view_cache.rs` ~551; `Source::remove_from_playlist`,
+  `core/src/traits.rs`), every occurrence of it dims and then disappears. Answer, from the code:
+  are the removal requests sent in parallel or in series, and how many per press? Does the source
+  actually remove all occurrences from the playlist? Spotify's `remove_playlist_track`
+  (`sources/spotify/src/webapi.rs` ~538) is documented as removing every occurrence with one
+  `DELETE /v1/playlists/{id}/tracks` by URI — verify that claim, and check the other sources
+  (soundcloud, local playlists) and the local-catalog removal path. Check whether the pending marker
+  is keyed by track identity rather than by position (which is why all rows dim), whether the settle
+  step removes rows by identity (all occurrences) or by index, and whether a later refetch can bring
+  back occurrences the server did not remove. Write the answers down, then decide whether removal
+  should target one occurrence (by position/`snapshot_id`) or all, and make the dimming and the
+  settle consistent with that. Fix together with the duplicate-marker item below if the cause is
+  shared (position-aware row identity).
 - [ ] A track that appears multiple times in a playlist shows up as playing on every occurrence while
   it plays — only the one occurrence actually being played (by position in the context, not by track
   identity) should be marked.
