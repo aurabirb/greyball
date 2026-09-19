@@ -174,6 +174,22 @@
   retriable, retry when the Playlists window is shown and when the source's health returns to
   `Ok`, with a floor between attempts. Hotkeys bound to remote playlists that aren't in the root
   list (the user's `a` binding) should still resolve a name in the Playlists/Help windows.
+- [ ] A focused floating window must own the keyboard: every key press goes to it and nothing falls
+  through to the window or tab beneath. Seen: with the Help/hotkey window (or `playlist-keys`)
+  floating and focused, pressing a playlist hotkey letter went through to the track list underneath
+  and toggled that list's selected track in the playlist. Cause: `route` (`ui/src/view.rs`) offers a
+  key to the focused window and, when the window returns `Ignored`, hands it to the shell
+  (`on_shell_key` → `keybindings::map`), where playlist hotkeys, `q` enqueue, `+`, Space, seek keys
+  etc. act on `active_list()` — the hidden list. New rule: while a `float` (or `screen`) window has
+  focus, a key it ignores is dropped, except the small set of shell keys that are about windows
+  themselves — the placement key (`M`), backtick (`toggle-playlist-keys`), `?` (toggle Help), `:`
+  (command line), Tab/Shift-Tab focus cycling where the window doesn't use them, and Esc (close) —
+  derive that set from the key table (`ui/src/items.rs`/`keybindings`), not a hand-copied list. A
+  floating LIST window keeps acting on its OWN selection for track keys (playlist hotkeys, `q`,
+  `+`, Enter): those must target the focused list, never the tab beneath — check `active_list()`
+  resolves to the focused floating list. Docked windows keep today's behaviour (keys fall through
+  to the shell, acting on the active list). Supersedes the earlier decision that shell/number keys
+  fall through a focused float. No repro needed.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
