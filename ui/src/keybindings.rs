@@ -15,10 +15,7 @@ use crate::screen::Screen;
 pub enum Action {
     /// Forward this to `Session::dispatch`.
     Command(Command),
-    /// UI-local: focus the search edit box on the Search screen, or start a
-    /// screen-local fuzzy filter over the current track list everywhere
-    /// else — the view decides which, since it's the one that knows the
-    /// current screen (`map` has no screen context).
+    /// UI-local: `/` — filters the active list, or focuses the Search input when that list is the Search one.
     FocusSearch,
     /// UI-local: switch to screen 0-4 (now playing/queue/playlists/
     /// history/search — the raw `view::Screen::NowPlaying`/`Screen::Queue`/`Screen::Playlists`/

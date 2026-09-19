@@ -325,8 +325,7 @@ impl MedleyView {
         Some(EventResult::consumed())
     }
 
-    /// The command/hint row: the text being typed, else transient feedback, else a key hint.
-    /// `hotkey_target_selected` and `help_key` come from the frame snapshot so this never locks the session itself.
+    /// The command/hint row: typed text, else transient feedback, else a key hint; all session data comes from the frame.
     pub(super) fn hint_line(
         &self,
         membership_feedback: Option<String>,
