@@ -92,6 +92,8 @@ pub(super) struct StatusCtx<'a> {
     pub(super) chrome: &'a Chrome,
     /// Some window is docked.
     pub(super) docked: bool,
+    /// Whether the idle text of key hints is drawn.
+    pub(super) hints: bool,
     /// Cells at the row's right end the shell draws over.
     pub(super) reserved: usize,
 }
@@ -252,7 +254,7 @@ impl Window {
             _ => None,
         };
         let fit = room.saturating_sub(count.as_ref().map_or(0, |count| count.width() + 2));
-        let (text, refused) = message.unwrap_or_else(|| (self.idle(frame, placement, status, fit), false));
+        let (text, refused) = message.unwrap_or_else(|| (if status.hints { self.idle(frame, placement, status, fit) } else { String::new() }, false));
         let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
         // A message keeps its room; the idle hint gives way to the count.
         let count = count.filter(|count| idle || text.width() + count.width() + 2 <= room);

@@ -83,6 +83,8 @@ pub struct MedleyView {
     last_screen_size: Vec2,
     /// Mirrors `cfg.status_line`: whether the scrubber row is reserved.
     status_line: bool,
+    /// Mirrors `cfg.show_hints`: whether windows draw key hints on their status row.
+    show_hints: bool,
     editing: Editing,
     buffer: String,
     /// The focused window's status row's one transient message, cleared by the next input event or once `FLASH_LIFETIME` has passed.
@@ -110,13 +112,13 @@ pub struct MedleyView {
 impl MedleyView {
     /// `layout` is what `saved_layout` returned last run; without a usable one, the default layout on its first tab.
     pub fn new(session: SessionHandle, log: Arc<LogBuf>, layout: Option<Layout>, last_played: Option<LastPlayed>) -> Self {
-        let (pane_cfg, session_status_line) = {
+        let (pane_cfg, session_status_line, session_show_hints) = {
             let mut s = session.lock().unwrap();
             // `command::parse` reads the item table first, so a plugin word spelled like an item never runs.
             for (word, _) in s.plugin_command_help().into_iter().filter(|(word, _)| crate::items::named(word).is_some()) {
                 s.warn("commands", &format!("plugin command :{word} is shadowed by the built-in command of that spelling"));
             }
-            (s.cfg.panes, s.cfg.status_line)
+            (s.cfg.panes, s.cfg.status_line, s.cfg.show_hints)
         };
         let vis = crate::vis::Vis::spawn(session.clone());
         let windows = Windows::new(log, vis.clone(), pane_cfg.mode.into());
@@ -130,6 +132,7 @@ impl MedleyView {
             focus: Focus::Window(active),
             last_screen_size: Vec2::new(0, 0),
             status_line: session_status_line,
+            show_hints: session_show_hints,
             editing: Editing::None,
             buffer: String::new(),
             feedback: None,
@@ -441,6 +444,7 @@ impl View for MedleyView {
                 place,
                 chrome,
                 docked,
+                hints: self.show_hints,
                 reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect.width()),
             };
             window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);

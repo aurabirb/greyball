@@ -32,6 +32,8 @@ pub struct Config {
     pub vis: VisConfig,
     /// Whether the bottom scrubber row is shown.
     pub status_line: bool,
+    /// Whether windows show key hints on their last row.
+    pub show_hints: bool,
     /// Whether a newer release is downloaded in the background at startup.
     pub auto_update: bool,
     pub theme: String,
@@ -252,6 +254,7 @@ impl Default for Config {
             panes: PaneLayoutConfig::default(),
             vis: VisConfig::default(),
             status_line: true,
+            show_hints: true,
             auto_update: true,
             theme: "default".to_string(),
             volume: 1.0,

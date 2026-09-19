@@ -1715,6 +1715,11 @@ impl Session {
         Arc::make_mut(&mut self.cfg).status_line = shown;
     }
 
+    pub fn set_show_hints(&mut self, shown: bool) {
+        self.touch();
+        Arc::make_mut(&mut self.cfg).show_hints = shown;
+    }
+
     pub fn set_auto_update(&mut self, on: bool) {
         self.touch();
         Arc::make_mut(&mut self.cfg).auto_update = on;

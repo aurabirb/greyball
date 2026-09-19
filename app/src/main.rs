@@ -88,6 +88,12 @@ fn load_status_line() -> Option<bool> {
     v.get("status_line")?.as_bool()
 }
 
+fn load_show_hints() -> Option<bool> {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("show_hints")?.as_bool()
+}
+
 fn load_auto_update() -> Option<bool> {
     let text = std::fs::read_to_string(state_path()).ok()?;
     let v: toml::Value = text.parse().ok()?;
@@ -249,6 +255,7 @@ fn save_state(
     volume: f32,
     vis_fps: Option<u32>,
     status_line: Option<bool>,
+    show_hints: Option<bool>,
     auto_update: Option<bool>,
     scan_mode: Option<ScanMode>,
     hotkeys: &HashMap<char, HotkeyTarget>,
@@ -262,6 +269,9 @@ fn save_state(
     }
     if let Some(shown) = status_line {
         text.push_str(&format!("status_line = {shown}\n"));
+    }
+    if let Some(shown) = show_hints {
+        text.push_str(&format!("show_hints = {shown}\n"));
     }
     if let Some(on) = auto_update {
         text.push_str(&format!("auto_update = {on}\n"));
@@ -431,6 +441,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let config_status_line = cfg.status_line;
     if let Some(shown) = load_status_line() {
         cfg.status_line = shown;
+    }
+    let config_show_hints = cfg.show_hints;
+    if let Some(shown) = load_show_hints() {
+        cfg.show_hints = shown;
     }
     let config_auto_update = cfg.auto_update;
     if let Some(on) = load_auto_update() {
@@ -720,8 +734,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let vis_fps = Some(s.cfg.vis.limit()).filter(|&fps| fps != config_vis_fps);
     let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
+    let show_hints = Some(s.cfg.show_hints).filter(|&shown| shown != config_show_hints);
     let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
-    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, auto_update, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

@@ -25,6 +25,7 @@ pub(super) enum SettingsEntry {
     VisFps(u32),
     /// The bottom scrubber row shown or hidden — live.
     StatusLine(bool),
+    ShowHints(bool),
     AutoUpdate(bool),
 }
 
@@ -38,6 +39,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
             format!("[{}] bpm scan", if *enabled { "x" } else { " " })
         }
         SettingsEntry::StatusLine(shown) => format!("[{}] status line", if *shown { "x" } else { " " }),
+        SettingsEntry::ShowHints(shown) => format!("[{}] hints", if *shown { "x" } else { " " }),
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
@@ -62,6 +64,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     });
     v.push(SettingsEntry::VisFps(cfg.vis.limit()));
     v.push(SettingsEntry::StatusLine(cfg.status_line));
+    v.push(SettingsEntry::ShowHints(cfg.show_hints));
     v.push(SettingsEntry::AutoUpdate(cfg.auto_update));
     v.push(SettingsEntry::Info(String::new()));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
@@ -135,6 +138,10 @@ impl MedleyView {
             SettingsEntry::StatusLine(shown) => {
                 self.with_session_mut(|s| s.set_status_line(!shown));
                 self.status_line = !shown;
+            }
+            SettingsEntry::ShowHints(shown) => {
+                self.with_session_mut(|s| s.set_show_hints(!shown));
+                self.show_hints = !shown;
             }
             SettingsEntry::AutoUpdate(on) => self.with_session_mut(|s| s.set_auto_update(!on)),
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
