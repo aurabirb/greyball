@@ -196,6 +196,25 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Remove the global bottom hint/command row and move the warnings widget to the closest
+  bottom-right slot, now that the status row is a generic window feature (`Startup::status_row`,
+  `Window::content()`). Today the row above the scrubber line (`draw` in `ui/src/view.rs` ~425-465)
+  carries the shell hint text, the command/search line, the flash feedback, the cursor/total readout
+  and, right-aligned, the red warnings button (`warnings_span`/`warnings_label`, `Focus::Warnings`,
+  focus order, click hit-test in `on_event`). New placement of the button: in the bottom scrubber
+  status line (`StatusLine`) at its right edge when that line is shown; otherwise in the status row
+  of whichever visible tab window or docked window occupies the bottom-right corner (the same
+  "closest slot to the bottom-right" rule, computed once from the placed rects) — enable it there
+  as a right-aligned widget of that window's status row, so every window gets the same optional
+  right-hand widget slot. Decide and write down where the rest of the row goes before deleting it
+  (one guess to verify: the hint text moves into each window's own status row, the command and
+  search lines become an input row drawn by the window that has focus, flashes go to the focused
+  window's status row via `Notice::Status` and the cursor/total readout to the status row of its
+  list); windows without a status row need one enabled or a fallback. The warnings button must keep
+  its Enter/click behaviour and its place in the Tab focus cycle, and the reserved bottom rows feed
+  `split`, `required_size`, `list_h()` and the mouse row maths (`BOTTOM_BAR_ROWS`), so the list
+  gains the freed row. Judge it in real-terminal screenshots (tab, docked window, floating windows
+  covering the corner, narrow terminal).
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
   bottom status line keeps its scrubber bar, times and click handling as they are. Draw: leave the title
