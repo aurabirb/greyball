@@ -63,6 +63,8 @@ struct RemotePlaylistTracks {
     /// itself, so retrying it on every redraw would just hammer the source
     /// and spam the log forever.
     consecutive_failures: u32,
+    /// When the walk last froze on a failure, for `PLAYLISTS_RETRY_FLOOR`.
+    failed_at: Option<Instant>,
 }
 
 impl RemotePlaylistTracks {
@@ -78,6 +80,7 @@ impl RemotePlaylistTracks {
             persisted_len: 0,
             errored: false,
             consecutive_failures: 0,
+            failed_at: None,
         }
     }
 
@@ -506,9 +509,16 @@ impl ViewCache {
         self.remote_playlist_cached(source, node, |e| e.ids.contains(&track)).unwrap_or(false).then_some(false)
     }
 
-    /// Starts (or resumes) loading `(source, node)` without demanding any of it.
+    /// Starts (or resumes) loading `(source, node)` without demanding any of it; a walk frozen on
+    /// a failure is reopened once `PLAYLISTS_RETRY_FLOOR` has passed.
     pub fn ensure_remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) {
-        self.ensure_remote_playlist_tracks(source, node, 0, ctx);
+        let retry_want = self
+            .remote_playlist_cached(source, node, |e| {
+                (e.errored && !e.partial && e.failed_at.is_some_and(|at| at.elapsed() >= PLAYLISTS_RETRY_FLOOR))
+                    .then_some(e.tracks.len() + 1)
+            })
+            .flatten();
+        self.ensure_remote_playlist_tracks(source, node, retry_want.unwrap_or(0), ctx);
     }
 
     /// Is a fetch of `source`'s top-level playlist-folder list in flight?
@@ -747,6 +757,7 @@ impl ViewCache {
                         persisted_len: len,
                         errored: false,
                         consecutive_failures: 0,
+                        failed_at: None,
                     };
                     cache.insert(key.clone(), entry);
                     (len, len > 0, false)
@@ -792,6 +803,7 @@ impl ViewCache {
                         entry.partial = false;
                         entry.errored = true;
                         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+                        entry.failed_at = Some(Instant::now());
                     }
                     deps.bus.send(CoreEvent::BackgroundFailure {
                         context: key.0.to_string(),
@@ -815,6 +827,7 @@ impl ViewCache {
                     entry.partial = false;
                     entry.errored = true;
                     entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+                    entry.failed_at = Some(Instant::now());
                 }
                 deps.bus.send(CoreEvent::BackgroundFailure {
                     context: key.0.to_string(),

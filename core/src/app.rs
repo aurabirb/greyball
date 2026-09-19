@@ -791,6 +791,7 @@ impl Session {
             }
             CoreEvent::PlaylistsChanged => {
                 self.invalidate_hotkey_memberships();
+                self.ensure_liked_lists();
                 Ok(true)
             }
             CoreEvent::QueueChanged => {
@@ -1368,8 +1369,17 @@ impl Session {
                 continue;
             }
             self.view.ensure_remote_playlists(&source, ctx);
-            if let Some(node) = self.sources.get(&source).and_then(|s| s.liked_songs_node()) {
-                self.view.ensure_remote_playlist_loading(&source, &node, ctx);
+        }
+        self.ensure_liked_lists();
+    }
+
+    /// Kicks (or resumes, page by page as each lands) the liked-list load of every source whose plugin is healthy.
+    fn ensure_liked_lists(&self) {
+        let ctx = self.remote_ctx();
+        for (id, source) in &self.sources {
+            let healthy = self.shown.plugin_health.iter().any(|(pid, health)| pid == id && health.is_ok());
+            if let Some(node) = source.liked_songs_node().filter(|_| healthy) {
+                self.view.ensure_remote_playlist_loading(id, &node, ctx);
             }
         }
     }
