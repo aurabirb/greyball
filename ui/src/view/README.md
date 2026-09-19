@@ -45,8 +45,9 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 - `playlist-keys` is a second Playlists window, the key overview meant to be opened mid-work: it
   starts floating and closed, and differs from the Playlists tab by one instance setting,
   `Startup::keyed_first` (playlists with a key are listed first, each group in its usual order).
-  The `TogglePlaylistKeys` key (backtick) runs `toggle_playlist_keys`: as the active tab it only takes
-  focus; else close it when it has focus, else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
+  The `SwitchPlaylists` key (backtick) runs `switch_playlists`: when that window is shown it takes focus (the
+  open entry remembers the focus it came from, and the key on the focused one returns there, else to the
+  Playlists tab, and closes it only when it floats); else `TrackList::show_top` and `show` — back at its top level, the cursor on the playlist the user
   came from (`Session::playing_playlist`, else the one open in the active list, else in any other window),
   else on the playlist it was left in, else where it was. The hint row reads the focused window's
   frame: `ListFrame::assignable` (a Playlists top level with rows) swaps in the assign/clear/open

@@ -71,7 +71,7 @@ pub enum BuiltinAction {
     Wedge,
     Like,
     Unlike,
-    TogglePlaylistKeys,
+    SwitchPlaylists,
     OpenHelp,
 }
 
@@ -98,7 +98,7 @@ impl BuiltinAction {
         // instead (`ui::command`), leaving 'l'/'L' free for "like"/"unlike".
         (BuiltinAction::Like, 'l'),
         (BuiltinAction::Unlike, 'L'),
-        (BuiltinAction::TogglePlaylistKeys, '`'),
+        (BuiltinAction::SwitchPlaylists, '`'),
         (BuiltinAction::OpenHelp, '?'),
     ];
 
@@ -131,7 +131,7 @@ impl BuiltinAction {
             BuiltinAction::Wedge => "wedge",
             BuiltinAction::Like => "like",
             BuiltinAction::Unlike => "unlike",
-            BuiltinAction::TogglePlaylistKeys => "toggle-playlist-keys",
+            BuiltinAction::SwitchPlaylists => "switch-playlists",
             BuiltinAction::OpenHelp => "open-help",
         }
     }

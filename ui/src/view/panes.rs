@@ -215,15 +215,28 @@ impl MedleyView {
         }
     }
 
-    /// The `TogglePlaylistKeys` key: a tab is switched to; any other placement closes when focused, else shows at its top level.
-    pub(super) fn toggle_playlist_keys(&mut self) {
+    /// The `SwitchPlaylists` key: the other Playlists window takes focus, or opens at its top level when none is shown.
+    pub(super) fn switch_playlists(&mut self) {
         let Some(id) = self.windows.named(PLAYLIST_KEYS) else { return };
-        if self.active == id {
-            self.activate(id);
-            self.focus = Focus::Window(id);
+        let shown = self.visible();
+        if self.focus == Focus::Window(id) {
+            if self.windows.placement(id) == Placement::Floating {
+                self.close_window(id);
+                return;
+            }
+            let prior = self.open.iter().find(|&&(open, _)| open == id).map(|&(_, prior)| prior);
+            let tab = self.windows.ids().find(|&tab| self.windows.companion(tab) == Some(id));
+            let back = prior.into_iter().chain(tab.map(Focus::Window)).find(|focus| matches!(focus, Focus::Window(w) if *w != id && shown.contains(w)));
+            if let Some(Focus::Window(back)) = back {
+                self.focus_window(back);
+            }
             return;
         }
-        if self.focus == Focus::Window(id) && self.close_window(id) {
+        if shown.contains(&id) {
+            if let Some(entry) = self.open.iter_mut().find(|entry| entry.0 == id) {
+                entry.1 = self.focus;
+            }
+            self.focus_window(id);
             return;
         }
         // The playlist the user came from: the one playing, else open in the active list, else in any other window.

@@ -74,15 +74,6 @@
   dropping a `Finished` as stale; `Session::on_player_event` ignoring `Finished` when
   `progress`/duration is zero. Fix so that "the decoder ran out of samples" always advances
   (`advance(false)`), and fill in the duration when the decoder learns it late.
-- [ ] Backtick (`BuiltinAction::TogglePlaylistKeys`) means "switch to the other Playlists window":
-  if another Playlists-kind window is shown, focus it (from the Playlists tab → the companion, from
-  the companion → back to the Playlists tab or whichever list had focus before; from any other
-  window → the companion); if none is open, open the floating one (`playlist-keys`) as today —
-  keyed-first order, preselect, top level. It never closes on backtick when it was already open
-  elsewhere (docked/screen): it just takes focus; backtick on the focused floating one closes it
-  (unchanged). With the static-tabs item above, `playlist-keys` IS the Playlists tab's companion:
-  `M` on the Playlists tab cycles `playlist-keys` through embedded/screen/float/closed, backtick
-  jumps between the two. Rename the action/id to what it does.
 - [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
   as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
   reach it through `show(id)` + the shell's search text field (`Editing::Search`,
@@ -93,6 +84,11 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
+
+- [ ] Switching to a tab with the keyboard (the tab digit keys, Tab/Shift-Tab focus cycling) must focus
+  that tab's window, so it receives the following key presses itself rather than the previously
+  focused window or the shell. Check the mouse tab click does the same, and that a companion or
+  float focused before the switch doesn't keep the keyboard.
 
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:

@@ -32,7 +32,7 @@ impl MedleyView {
                     status: StatusCore::snapshot(s),
                     warn_count: s.warning_count(),
                     help_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::OpenHelp)),
-                    keys_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::TogglePlaylistKeys)),
+                    keys_key: s.effective_hotkey(&HotkeyTarget::Builtin(BuiltinAction::SwitchPlaylists)),
                 })
             });
             // Live per-tick data, never memoized.

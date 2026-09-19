@@ -146,7 +146,7 @@ pub const ITEMS: &[Item] = &[
         "on a row of a Playlists list: bind that key to the playlist",
         "Backspace clears it. With a track selected, a playlist's key adds it to or removes it from that playlist.",
     ),
-    builtin(Section::Windows, BuiltinAction::TogglePlaylistKeys, "open the playlist keys window over the view", "Again, or Esc, closes it."),
+    builtin(Section::Windows, BuiltinAction::SwitchPlaylists, "switch to the other Playlists window", "Opens the playlist keys window over the view when it is closed; on that window floating, closes it."),
     builtin(Section::Windows, BuiltinAction::CyclePlacement, "move the focused window: tabbed, embedded, screen, float", ""),
     builtin(Section::Windows, BuiltinAction::CyclePaneLayout, "cycle the embedded-pane layout", ""),
 ];

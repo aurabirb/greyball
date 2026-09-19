@@ -109,7 +109,7 @@ const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str)
     Startup { companion_of: Some(of), ..startup(name, kind, home) }
 }
 
-/// The window the `TogglePlaylistKeys` key opens over whatever is shown.
+/// The Playlists tab's companion, which the `SwitchPlaylists` key opens over whatever is shown.
 pub const PLAYLIST_KEYS: &str = "playlist-keys";
 
 /// The window the `OpenHelp` key and `:help` open over whatever is shown.

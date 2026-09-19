@@ -21,8 +21,8 @@ pub enum Action {
     Tab(usize),
     /// UI-local: open the `:` command line.
     CommandLine,
-    /// UI-local: open the playlist keys window over the view, or close it when it has focus.
-    TogglePlaylistKeys,
+    /// UI-local: switch to the other Playlists window, opening the playlist keys window when none is shown.
+    SwitchPlaylists,
     /// UI-local: rotate the shared embedded-pane dock through
     /// right+vertical -> bottom+horizontal -> left+vertical ->
     /// top+horizontal -> back to right+vertical (`view::PANE_LAYOUT_CYCLE`)
@@ -57,7 +57,7 @@ pub enum Action {
 impl Action {
     /// A key about the windows themselves, which a window shown over the view still lets through.
     pub fn is_window_action(&self) -> bool {
-        matches!(self, Action::CommandLine | Action::TogglePlaylistKeys | Action::CyclePlacement | Action::OpenHelp)
+        matches!(self, Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp)
     }
 }
 
@@ -126,7 +126,7 @@ pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTa
             .map(|id| Action::Command(Command::Like(id)))
             .unwrap_or(Action::None),
         BuiltinAction::Unlike => selected.map(Action::ConfirmUnlike).unwrap_or(Action::None),
-        BuiltinAction::TogglePlaylistKeys => Action::TogglePlaylistKeys,
+        BuiltinAction::SwitchPlaylists => Action::SwitchPlaylists,
         BuiltinAction::OpenHelp => Action::OpenHelp,
     }
 }

@@ -226,8 +226,8 @@ impl MedleyView {
                 self.cycle_placement();
                 EventResult::consumed()
             }
-            Action::TogglePlaylistKeys => {
-                self.toggle_playlist_keys();
+            Action::SwitchPlaylists => {
+                self.switch_playlists();
                 EventResult::consumed()
             }
             Action::OpenHelp => {
