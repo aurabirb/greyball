@@ -13,6 +13,10 @@
 ## TODOs:
 
 ### Bugs
+- [ ] A second `:s` started while the first is still streaming mixes both result sets:
+  `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
+  query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag
+  hits and `SearchDone` with the search they belong to and drop the ones that are not current.
 - [ ] Confirm Log-pane wheel scrolling is responsive under `RUST_LOG=debug` with a large log; if not,
   check wheel events queuing up behind draws (coalesce consecutive scroll events) and whether the
   `pane == Pane::Log` branch in `ui/src/view/mouse.rs`'s `handle_pane_mouse` swallows or mis-routes
@@ -290,7 +294,7 @@
   with a hint. Playlist hotkeys appear as a read-only-or-rebindable section fed from the same
   `s.hotkeys()` data as the floating Playlists window — don't build a second editor for them.
 - [ ] Per-window mode toggle, so the layout can be rearranged: every window — the tab screens
-  (`TABS` in `ui/src/view/tab_bar.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
+  (`Screen::ALL` in `ui/src/screen.rs`: Now Playing, Playlists, Search, History, Queue) and the panes
   (`command::Pane`: Log, Settings, Vis, Queue, History) alike — can be switched between four modes:
   **tabbed** (a tab in the top bar, shown in the main area when active), **docked** (a slice of the
   main screen beside the primary content — today's `PaneMode::Embedded`, laid out by `split`),
@@ -300,11 +304,11 @@
   Today the two families are separate mechanisms: tab screens are fixed numbered screens that can
   only be tabs, panes have only `Screen`/`Embedded` (`pane_mode`/`pane_mode_overrides`, `:panes
   <pane> <screen|embedded>`, `toggle_pane`), and Queue/History exist twice — as a tab and as a pane
-  bridged by `list_screen_for_pane`. Unify them: one window identity per thing, one four-value mode
+  bridged by `Screen::from_pane`. Unify them: one window identity per thing, one four-value mode
   per window (extend `core::config::PaneMode`; no `Screen`/`Embedded` leftovers or aliases), one
   renderer per window that draws into whatever rect its mode hands it, with the tab bar
   (`tab_layout`/`draw_tab_bar`/tab click hit-test, number-key screen switching) built from
-  whichever windows are currently tabbed instead of the fixed `TABS` array, and `focus_order`/
+  whichever windows are currently tabbed instead of the fixed `Screen::ALL` array, and `focus_order`/
   `Focus` covering docked and floating windows. Toggle: a key (and `:panes <window> <mode>`) that
   cycles the focused window's mode tabbed → docked → screen → floating, applied immediately (not
   "next time it's toggled" as `pane_mode_overrides` is now), plus a way to target a window that
@@ -421,22 +425,14 @@
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for
   future features by moving them on the main todo list. never keep done items on the todo list.
 
-- [ ] UI architecture work order (each step is an item below or under Features): (1) `Memo` +
-  `Screen` enum; (2) per-window modes stage A, whose first steps are the list component and the
-  modal plumbing items below, plus owner-held generations and per-window memos; (3) dispatch
+- [ ] UI architecture work order (each step is an item below or under Features): (1) per-window
+  modes stage A, whose first steps are the list component and the modal plumbing items below, plus
+  owner-held generations and per-window memos (`Memo`, `ui/src/view/memo.rs`); (2) dispatch
   outcomes + single feedback slot + mailboxes as event payloads (the last two sub-bullets of the
   event-driven item), before the playlist hotkey rework and the merged Help/hotkey window since
-  both consume feedback; (4) stages B and C; (5) those two features, the status-row widget, the
+  both consume feedback; (3) stages B and C; (4) those two features, the status-row widget, the
   title scrubber. The `commit_edit`/`Parsed`→`Action` cleanup, `Option<TextField>`, the Vis levels
   lock and a `split` axis helper get no pass of their own — fold them in when those files are touched.
-- [ ] One memo type and a `Screen` enum. `ui/src/view` has four hand-rolled
-  `Mutex<Option<(key, value)>>` caches — `MedleyView::frame_cache` (`frame.rs`), `LocalFilter::cache`
-  (`filter.rs`), `follow_sig` (`lists.rs`), the Log pane's `WrapCache` (`log.rs`) — plus `built_at`
-  stamps on `HelpModal`/`PlaylistPicker`. Add one `Memo<K: PartialEq, V>` (`ui/src/view/memo.rs`)
-  with a `get_or_build(key, || value)` and move the caches onto it, so a window instance can own its
-  memos. Replace the `usize` screen constants (`NOW_PLAYING`, `PLAYLISTS`, `SEARCH`, `HIST`, `QUEUE`),
-  `lists: [ListState; N_SCREENS]` indexing and the parallel mappings over them (`TABS`,
-  `startup_screen`, `list_screen_for_pane`, `screen_name`) with a `Screen` enum.
 - [ ] Owner-held generations instead of `Session::list_revision`: `list_revision`/`touch_lists()`
   (`core/src/app.rs`) make every mutation site judge "list change or attribute change", are too
   coarse (Help and the filter rebuild on every `QueueChanged`/`SearchHit`) and are correct in places
@@ -477,8 +473,7 @@
   rect-contains test, differing only in title-row offset; `clamp_cursor` and `bump_pane_cursor`
   (`lists.rs`) are the same clamp. Make a `TrackList` component (a `ListState`, its screen, one
   `body_rect`) whose `on_event` returns `ListEvent`, used for main and docked lists alike. That also
-  removes the fixed `lists: [ListState; N_SCREENS]` slot array, the `usize` screen constants (make
-  `Screen` an enum) and the single `PlaylistNav` slot that stop two views of one list kind coexisting.
+  removes the fixed `lists: PerScreen<ListState>` slot array (`ui/src/screen.rs`) and the single `PlaylistNav` slot that stop two views of one list kind coexisting.
 - [ ] Modal plumbing in `ui/src/view`: the exclusive layers are five separate `MedleyView` fields
   checked in two hand-ordered `if` chains that disagree (`draw`: warnings, hotkeys, picker, help;
   `on_event`: warnings, picker, hotkeys, help), each with a `draw_*`/`on_*_event` wrapper repeating

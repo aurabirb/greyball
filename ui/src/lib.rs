@@ -24,6 +24,7 @@ mod filebrowser;
 pub mod keybindings;
 pub mod theme;
 mod row;
+mod screen;
 mod view;
 mod vis;
 

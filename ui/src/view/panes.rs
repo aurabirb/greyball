@@ -7,19 +7,12 @@ use cursive::theme::ColorStyle;
 use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 
 use crate::command::Pane;
+use crate::screen::Screen;
 
-use super::{HIST, MedleyView, QUEUE};
+use super::MedleyView;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::settings::settings_entries;
 use super::text::pad;
-
-pub(super) fn list_screen_for_pane(pane: Pane) -> Option<usize> {
-    match pane {
-        Pane::Queue => Some(QUEUE),
-        Pane::History => Some(HIST),
-        Pane::Log | Pane::Settings | Pane::Vis => None,
-    }
-}
 
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
@@ -230,7 +223,7 @@ impl MedleyView {
     /// Open/close `pane`, per its own placement mode — `:log`, `:settings`, bare `:vis`, `:queue`, `:history`.
     pub(super) fn toggle_pane(&mut self, pane: Pane) {
         if self.panes.mode(pane) == PaneMode::Screen {
-            if let Some(screen) = list_screen_for_pane(pane) {
+            if let Some(screen) = Screen::from_pane(pane) {
                 self.screen = screen;
                 self.playlists.leave();
             } else {

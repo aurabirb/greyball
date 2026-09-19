@@ -3,8 +3,9 @@ use cursive::event::EventResult;
 use core::{BrowseNode, Command, HotkeyTarget, Playlist, PlaylistId, Session, SourceId};
 
 use crate::command;
+use crate::screen::Screen;
 
-use super::{MedleyView, PLAYLISTS};
+use super::MedleyView;
 use super::input::popup;
 
 /// One row of the Playlists screen's top-level list.
@@ -113,7 +114,7 @@ impl MedleyView {
 
     /// The local playlist selected/open on the Playlists screen.
     pub(super) fn selected_playlist(&self, s: &Session) -> Option<PlaylistId> {
-        if self.screen != PLAYLISTS {
+        if self.screen != Screen::Playlists {
             return None;
         }
         if let Some(id) = self.playlists.open {
@@ -122,7 +123,7 @@ impl MedleyView {
         if self.playlists.remote.is_some() {
             return None;
         }
-        match self.top_rows(s).get(self.lists[PLAYLISTS].cursor) {
+        match self.top_rows(s).get(self.lists[Screen::Playlists].cursor) {
             Some(TopRow::Local(id)) => Some(*id),
             _ => None,
         }
@@ -130,7 +131,7 @@ impl MedleyView {
 
     /// The playlist (local *or* remote) selected/open on the Playlists screen.
     pub(super) fn selected_hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
-        if self.screen != PLAYLISTS {
+        if self.screen != Screen::Playlists {
             return None;
         }
         if let Some(id) = self.playlists.open {
@@ -139,7 +140,7 @@ impl MedleyView {
         if let Some((sid, _, node)) = &self.playlists.remote {
             return Some(HotkeyTarget::Remote(sid.clone(), node.clone()));
         }
-        self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor).map(|r| r.target())
+        self.top_rows(s).into_iter().nth(self.lists[Screen::Playlists].cursor).map(|r| r.target())
     }
 
     /// `:open <url-or-path>`'s remote-link case.
@@ -155,9 +156,9 @@ impl MedleyView {
                     core::BrowseNode::Path(id) => id.clone(),
                     core::BrowseNode::Root => String::new(),
                 };
-                self.screen = PLAYLISTS;
+                self.screen = Screen::Playlists;
                 self.playlists.open_remote(sid, name, node);
-                self.lists[PLAYLISTS].cursor = 0;
+                self.lists[Screen::Playlists].cursor = 0;
                 self.filter.query = None; // a different list now — stale filter would be confusing
                 self.clamp_scroll(); // new list under an old (now meaningless) cursor
                 EventResult::consumed()
@@ -180,21 +181,21 @@ impl MedleyView {
     }
 
     pub(super) fn activate(&mut self) -> EventResult {
-        if self.screen == PLAYLISTS && self.playlists.at_top_level() {
+        if self.screen == Screen::Playlists && self.playlists.at_top_level() {
             let row = self.with_session(|s| {
-                self.top_rows(s).into_iter().nth(self.lists[PLAYLISTS].cursor)
+                self.top_rows(s).into_iter().nth(self.lists[Screen::Playlists].cursor)
             });
             match row {
                 Some(TopRow::Local(id)) => {
                     self.playlists.open_local(id);
-                    self.lists[PLAYLISTS].cursor = 0;
+                    self.lists[Screen::Playlists].cursor = 0;
                     self.filter.query = None;
                     self.clamp_scroll(); // opened a new list — old window is meaningless
                     return EventResult::consumed();
                 }
                 Some(TopRow::Remote(sid, name, node)) => {
                     self.playlists.open_remote(sid, name, node);
-                    self.lists[PLAYLISTS].cursor = 0;
+                    self.lists[Screen::Playlists].cursor = 0;
                     self.filter.query = None;
                     self.clamp_scroll();
                     return EventResult::consumed();

@@ -5,6 +5,7 @@ use cursive::Rect;
 use core::{BrowseNode, BuiltinAction, HotkeyTarget, PlaylistId, Session, SourceId};
 
 use crate::command::Pane;
+use crate::screen::Screen;
 
 use super::MedleyView;
 use super::input::Editing;
@@ -23,7 +24,7 @@ pub(super) struct PaneFrame {
 #[derive(Clone, PartialEq)]
 pub(super) struct FrameKey {
     revision: u64,
-    screen: usize,
+    screen: Screen,
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: Option<String>,
     editing: Editing,
@@ -32,7 +33,7 @@ pub(super) struct FrameKey {
     offset: usize,
     list_h: usize,
     /// `(pane, screen, offset, height)` per open list pane, in draw order.
-    panes: Vec<(Pane, usize, usize, usize)>,
+    panes: Vec<(Pane, Screen, usize, usize)>,
     want_settings: bool,
     pane_cfg: core::PaneLayoutConfig,
 }
@@ -64,7 +65,7 @@ impl MedleyView {
         revision: u64,
         list_h: usize,
         offset: usize,
-        list_panes: &[(Pane, Rect, usize, usize, usize)],
+        list_panes: &[(Pane, Rect, Screen, usize, usize)],
         want_settings: bool,
     ) -> FrameKey {
         FrameKey {
@@ -88,7 +89,7 @@ impl MedleyView {
         &self,
         list_h: usize,
         offset: usize,
-        list_panes: &[(Pane, Rect, usize, usize, usize)],
+        list_panes: &[(Pane, Rect, Screen, usize, usize)],
         want_settings: bool,
     ) -> Frame {
         self.with_session(|s| {
@@ -109,14 +110,14 @@ impl MedleyView {
         s: &Session,
         list_h: usize,
         offset: usize,
-        list_panes: &[(Pane, Rect, usize, usize, usize)],
+        list_panes: &[(Pane, Rect, Screen, usize, usize)],
         want_settings: bool,
     ) -> CachedFrame {
         let rows = self.rows(s, self.screen, offset, list_h);
         let total = self.list_len(s, self.screen);
         let main_title = self.list_title(s, self.screen);
         // A paginated remote list only knows what it has loaded so far.
-        let list_loading = self.screen == super::PLAYLISTS
+        let list_loading = self.screen == Screen::Playlists
             && match &self.playlists.remote {
                 Some((sid, _, node)) => s.remote_playlist_loading(sid, node),
                 None => {

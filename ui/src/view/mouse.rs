@@ -5,9 +5,9 @@ use cursive::event::{EventResult, MouseButton, MouseEvent};
 
 use crate::command::Pane;
 use crate::keybindings::{self, Action};
+use crate::screen::Screen;
 
 use super::{Focus, MedleyView};
-use super::panes::list_screen_for_pane;
 use super::rows::LIST_TITLE_ROWS;
 use super::scroll::WHEEL_STEP;
 
@@ -15,7 +15,7 @@ use super::scroll::WHEEL_STEP;
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// Whether a click on (`screen`, `idx`) at `now`, given the previous click `last`, counts as a double-click.
-fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: usize, idx: usize) -> bool {
+fn is_double_click(last: Option<(Instant, Screen, usize)>, now: Instant, screen: Screen, idx: usize) -> bool {
     matches!(
         last,
         Some((t, s, i)) if s == screen && i == idx && now.duration_since(t) <= DOUBLE_CLICK_WINDOW
@@ -24,7 +24,7 @@ fn is_double_click(last: Option<(Instant, usize, usize)>, now: Instant, screen: 
 
 impl MedleyView {
     /// Selects row `idx` of `screen`'s list.
-    fn click_row(&mut self, screen: usize, idx: usize) -> EventResult {
+    fn click_row(&mut self, screen: Screen, idx: usize) -> EventResult {
         self.lists[screen].cursor = idx;
         self.clamp_scroll();
         let now = Instant::now();
@@ -104,7 +104,7 @@ impl MedleyView {
         }
         self.focus = Focus::Pane(pane);
 
-        let Some(screen) = list_screen_for_pane(pane) else {
+        let Some(screen) = Screen::from_pane(pane) else {
             // Log/Settings/Vis: no per-row click target, but the wheel still scrolls or is simply absorbed.
             match event {
                 MouseEvent::WheelUp => self.scroll_pane(pane, true, WHEEL_STEP),

@@ -6,8 +6,9 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use core::{BrowseNode, PlaylistId, Session, SourceId, TrackId};
 
 use crate::row::RowItem;
+use crate::screen::Screen;
 
-use super::{HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE};
+use super::MedleyView;
 use super::input::Editing;
 use super::memo::Memo;
 
@@ -24,7 +25,7 @@ pub(super) struct LocalFilter {
 #[derive(PartialEq)]
 struct FilterKey {
     list_revision: u64,
-    screen: usize,
+    screen: Screen,
     /// `PlaylistNav::list_id`, so two same-length playlists never share a cache entry.
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: String,
@@ -44,12 +45,12 @@ fn rank_filter(matcher: &SkimMatcherV2, text: &str, query: &str) -> Option<Filte
 
 impl MedleyView {
     /// Every track already loaded for `screen`'s list, unwindowed.
-    fn all_tracks_for_screen(&self, s: &Session, screen: usize) -> Vec<core::Track> {
+    fn all_tracks_for_screen(&self, s: &Session, screen: Screen) -> Vec<core::Track> {
         match screen {
-            NOW_PLAYING => s.playing_context_window(0, s.playing_context_len()),
-            QUEUE => s.queue_window(0, s.queue_len()),
-            HIST => s.history_window(0, s.queue.history_len()),
-            PLAYLISTS => {
+            Screen::NowPlaying => s.playing_context_window(0, s.playing_context_len()),
+            Screen::Queue => s.queue_window(0, s.queue_len()),
+            Screen::History => s.history_window(0, s.queue.history_len()),
+            Screen::Playlists => {
                 if let Some(id) = self.playlists.open {
                     s.playlist_window(id, 0, s.playlist_len(id))
                 } else if let Some((sid, _, node)) = &self.playlists.remote {
@@ -58,16 +59,16 @@ impl MedleyView {
                     vec![]
                 }
             }
-            _ => vec![],
+            Screen::Search => vec![],
         }
     }
 
     /// Whether `/` on `screen` should filter it locally rather than jump to Search.
-    pub(super) fn filterable_screen(&self, screen: usize) -> bool {
+    pub(super) fn filterable_screen(&self, screen: Screen) -> bool {
         match screen {
-            NOW_PLAYING | QUEUE | HIST => true,
-            PLAYLISTS => !self.playlists.at_top_level(),
-            _ => false,
+            Screen::NowPlaying | Screen::Queue | Screen::History => true,
+            Screen::Playlists => !self.playlists.at_top_level(),
+            Screen::Search => false,
         }
     }
 
@@ -80,7 +81,7 @@ impl MedleyView {
     }
 
     /// `screen`'s track ids narrowed/ranked by the local filter; callers resolve rows via `Session::tracks_for`.
-    pub(super) fn filtered_ids(&self, s: &Session, screen: usize) -> Option<Arc<[TrackId]>> {
+    pub(super) fn filtered_ids(&self, s: &Session, screen: Screen) -> Option<Arc<[TrackId]>> {
         let query = self.active_filter()?;
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;

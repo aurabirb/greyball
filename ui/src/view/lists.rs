@@ -4,19 +4,18 @@ use cursive::event::EventResult;
 
 use core::{BrowseNode, Command, PlaylistId, ScanDriver, Session, SourceId, TrackId};
 
-use super::{Focus, HIST, MedleyView, NOW_PLAYING, PLAYLISTS, QUEUE, SEARCH};
+use crate::screen::Screen;
+
+use super::{Focus, MedleyView};
 use super::input::Editing;
-use super::panes::list_screen_for_pane;
 use super::playlists::TopRow;
 use super::rows::{Cell, LIST_TITLE_ROWS, Row, plain_row, tracks_to_rows};
-
-use super::tab_bar::screen_name;
 
 /// What `follow_scan` last fed `ScanDriver::follow_view` under, keyed on `list_revision` to dedupe.
 #[derive(PartialEq, Eq)]
 pub(super) struct FollowKey {
     list_revision: u64,
-    screen: usize,
+    screen: Screen,
     list_id: (Option<PlaylistId>, Option<(SourceId, BrowseNode)>),
     query: Option<String>,
     highlighted: usize,
@@ -24,16 +23,16 @@ pub(super) struct FollowKey {
 
 impl MedleyView {
     /// Track ids visible on `screen`, in display order.
-    pub(super) fn visible_track_ids(&self, s: &Session, screen: usize) -> Vec<TrackId> {
+    pub(super) fn visible_track_ids(&self, s: &Session, screen: Screen) -> Vec<TrackId> {
         if let Some(ids) = self.filtered_ids(s, screen) {
             return ids.to_vec();
         }
         match screen {
-            NOW_PLAYING => s.playing_context_ids(),
-            SEARCH => s.results_ids(),
-            QUEUE => s.queue_ids(),
-            HIST => s.history_ids(),
-            PLAYLISTS => {
+            Screen::NowPlaying => s.playing_context_ids(),
+            Screen::Search => s.results_ids(),
+            Screen::Queue => s.queue_ids(),
+            Screen::History => s.history_ids(),
+            Screen::Playlists => {
                 if let Some(id) = self.playlists.open {
                     s.playlist_track_ids(id)
                 } else if let Some((sid, _, node)) = &self.playlists.remote {
@@ -42,26 +41,25 @@ impl MedleyView {
                     vec![]
                 }
             }
-            _ => vec![],
         }
     }
 
     /// The track selected on `screen`.
-    pub(super) fn selected_track(&self, s: &Session, screen: usize) -> Option<TrackId> {
+    pub(super) fn selected_track(&self, s: &Session, screen: Screen) -> Option<TrackId> {
         let ids = self.visible_track_ids(s, screen);
         ids.get(self.lists[screen].cursor).copied()
     }
 
     /// Which screen index keyboard nav/selection currently targets.
-    pub(super) fn active_screen(&self) -> usize {
+    pub(super) fn active_screen(&self) -> Screen {
         match self.focus {
-            Focus::Pane(p) => list_screen_for_pane(p).unwrap_or(self.screen),
+            Focus::Pane(p) => Screen::from_pane(p).unwrap_or(self.screen),
             Focus::Main | Focus::Warnings => self.screen,
         }
     }
 
     /// Plays row `idx` of `screen`'s track list, same as pressing Enter on it while selected.
-    pub(super) fn play_track_at(&mut self, screen: usize, idx: usize) -> EventResult {
+    pub(super) fn play_track_at(&mut self, screen: Screen, idx: usize) -> EventResult {
         let (tracks, sel, name) = self.with_session(|s| {
             let tracks = self.visible_track_ids(s, screen);
             let sel = tracks.get(idx).copied();
@@ -72,7 +70,7 @@ impl MedleyView {
         };
         let index = tracks.iter().position(|t| *t == id).unwrap_or(0);
         // Only the Playlists screen's own remote-browse state is ever meaningful here.
-        let remote = if screen == PLAYLISTS {
+        let remote = if screen == Screen::Playlists {
             self.playlists.remote.as_ref().map(|(sid, _, node)| (sid.clone(), node.clone()))
         } else {
             None
@@ -81,25 +79,24 @@ impl MedleyView {
     }
 
     /// `screen`'s track list's display name.
-    fn context_name(&self, s: &Session, screen: usize) -> Option<String> {
+    fn context_name(&self, s: &Session, screen: Screen) -> Option<String> {
         match screen {
-            NOW_PLAYING => s.playing_context_name(),
-            SEARCH => Some("Search results".to_string()),
-            QUEUE => Some("Queue".to_string()),
-            HIST => Some("History".to_string()),
-            PLAYLISTS => {
+            Screen::NowPlaying => s.playing_context_name(),
+            Screen::Search => Some("Search results".to_string()),
+            Screen::Queue => Some("Queue".to_string()),
+            Screen::History => Some("History".to_string()),
+            Screen::Playlists => {
                 if let Some(id) = self.playlists.open {
                     s.playlists().into_iter().find(|p| p.id == id).map(|p| p.name)
                 } else {
                     self.playlists.remote.as_ref().map(|(_, name, _)| name.clone())
                 }
             }
-            _ => None,
         }
     }
 
-    pub(super) fn row_unit(&self, screen: usize, count: usize) -> &'static str {
-        let playlists = screen == PLAYLISTS && self.playlists.at_top_level();
+    pub(super) fn row_unit(&self, screen: Screen, count: usize) -> &'static str {
+        let playlists = screen == Screen::Playlists && self.playlists.at_top_level();
         match (playlists, count == 1) {
             (true, true) => "playlist",
             (true, false) => "playlists",
@@ -109,16 +106,16 @@ impl MedleyView {
     }
 
     /// `screen`'s list title row: `<name>`, optionally followed by `  (<hint>)`.
-    pub(super) fn list_title(&self, s: &Session, screen: usize) -> String {
+    pub(super) fn list_title(&self, s: &Session, screen: Screen) -> String {
         if let Some(query) = self.active_filter().filter(|q| !q.is_empty() && self.filterable_screen(screen)) {
             let total = self.list_len(s, screen);
             let plural = if total == 1 { "" } else { "es" };
             return format!("filter {query:?} ({total} match{plural})");
         }
         let (name, hint) = match screen {
-            NOW_PLAYING => (s.playing_context_name(), None),
-            SEARCH => (self.last_query.clone(), (self.editing == Editing::Search).then_some("Esc to cancel")),
-            PLAYLISTS => {
+            Screen::NowPlaying => (s.playing_context_name(), None),
+            Screen::Search => (self.last_query.clone(), (self.editing == Editing::Search).then_some("Esc to cancel")),
+            Screen::Playlists => {
                 let name = match (self.playlists.open, &self.playlists.remote) {
                     (Some(id), _) => s.playlists().into_iter().find(|p| p.id == id).map(|p| p.name),
                     (None, Some((sid, name, _))) => Some(format!("[{sid}] {name}")),
@@ -131,7 +128,7 @@ impl MedleyView {
         };
         let name = name.unwrap_or_else(|| {
             let total = self.list_len(s, screen);
-            format!("{} ({total} {})", screen_name(screen), self.row_unit(screen, total))
+            format!("{} ({total} {})", screen.label(), self.row_unit(screen, total))
         });
         match hint {
             Some(hint) => format!("{name}  ({hint})"),
@@ -140,9 +137,9 @@ impl MedleyView {
     }
 
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
-    pub(super) fn rows(&self, s: &Session, screen: usize, offset: usize, limit: usize) -> Vec<Row> {
+    pub(super) fn rows(&self, s: &Session, screen: Screen, offset: usize, limit: usize) -> Vec<Row> {
         let pending: HashSet<TrackId> = match &self.playlists.remote {
-            Some((sid, _, node)) if screen == PLAYLISTS => s.remote_pending_ids(sid, node).into_iter().collect(),
+            Some((sid, _, node)) if screen == Screen::Playlists => s.remote_pending_ids(sid, node).into_iter().collect(),
             _ => HashSet::new(),
         };
         let track_rows = |tracks| tracks_to_rows(s, tracks, &pending);
@@ -156,14 +153,14 @@ impl MedleyView {
             return track_rows(s.tracks_for(&window));
         }
         match screen {
-            NOW_PLAYING => {
+            Screen::NowPlaying => {
                 if s.playing_context_len() == 0 {
                     vec![plain_row("nothing played yet — press Enter on a track to start playing")]
                 } else {
                     track_rows(s.playing_context_window(offset, limit))
                 }
             }
-            SEARCH => {
+            Screen::Search => {
                 if s.results_len() == 0 {
                     match &self.last_query {
                         // A search ran and came back empty — say so.
@@ -176,9 +173,9 @@ impl MedleyView {
                     track_rows(s.results_window(offset, limit))
                 }
             }
-            QUEUE => track_rows(s.queue_window(offset, limit)),
-            HIST => track_rows(s.history_window(offset, limit)),
-            PLAYLISTS => {
+            Screen::Queue => track_rows(s.queue_window(offset, limit)),
+            Screen::History => track_rows(s.history_window(offset, limit)),
+            Screen::Playlists => {
                 if let Some(id) = self.playlists.open {
                     track_rows(s.playlist_window(id, offset, limit))
                 } else if let Some((sid, _, node)) = &self.playlists.remote {
@@ -206,21 +203,20 @@ impl MedleyView {
                         .collect()
                 }
             }
-            _ => vec![],
         }
     }
 
     /// The current screen's full list length.
-    pub(super) fn list_len(&self, s: &Session, screen: usize) -> usize {
+    pub(super) fn list_len(&self, s: &Session, screen: Screen) -> usize {
         if let Some(len) = self.filtered_ids(s, screen).map(|t| t.len()) {
             return len;
         }
         match screen {
-            NOW_PLAYING => s.playing_context_len(),
-            SEARCH => s.results_len(),
-            QUEUE => s.queue_len(),
-            HIST => s.queue.history_len(),
-            PLAYLISTS => {
+            Screen::NowPlaying => s.playing_context_len(),
+            Screen::Search => s.results_len(),
+            Screen::Queue => s.queue_len(),
+            Screen::History => s.queue.history_len(),
+            Screen::Playlists => {
                 if let Some(id) = self.playlists.open {
                     s.playlist_len(id)
                 } else if let Some((sid, _, node)) = &self.playlists.remote {
@@ -229,7 +225,6 @@ impl MedleyView {
                     self.top_rows(s).len()
                 }
             }
-            _ => 0,
         }
     }
 
@@ -243,10 +238,10 @@ impl MedleyView {
     }
 
     /// The screen index Shift-J/Shift-K and PageUp/PageDown's cursor-jump should act on.
-    fn active_list_screen(&self) -> Option<usize> {
+    fn active_list_screen(&self) -> Option<Screen> {
         match self.focus {
             Focus::Main => Some(self.screen),
-            Focus::Pane(pane) => list_screen_for_pane(pane),
+            Focus::Pane(pane) => Screen::from_pane(pane),
             Focus::Warnings => None,
         }
     }
@@ -264,7 +259,7 @@ impl MedleyView {
     }
 
     /// `clamp_cursor`, generalized to an explicit `screen` and folding in the forward step + length lookup.
-    pub(super) fn bump_pane_cursor(&mut self, screen: usize, step: usize) {
+    pub(super) fn bump_pane_cursor(&mut self, screen: Screen, step: usize) {
         self.lists[screen].cursor = self.lists[screen].cursor.saturating_add(step);
         let len = self.with_session(|s| self.list_len(s, screen));
         let c = &mut self.lists[screen].cursor;
@@ -282,10 +277,11 @@ impl MedleyView {
 
     /// Keep each visible list's window around its cursor.
     pub(super) fn clamp_scroll(&mut self) {
-        self.lists[self.screen].follow(self.list_h());
+        let list_h = self.list_h();
+        self.lists[self.screen].follow(list_h);
         // A focused docked list-pane has its own cursor and scroll window, sized to its own rect.
         if let Focus::Pane(pane) = self.focus
-            && let Some(screen) = list_screen_for_pane(pane)
+            && let Some(screen) = Screen::from_pane(pane)
             && let Some(h) = self.panes.body_h(pane)
         {
             self.lists[screen].follow(h);
@@ -293,7 +289,7 @@ impl MedleyView {
     }
 
     /// Feeds the scan walk the visible list, but only rebuilds/re-reports it when `key` changed.
-    pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: usize) {
+    pub(super) fn follow_scan(&self, s: &Session, scan: &ScanDriver, screen: Screen) {
         let highlighted = self.lists[screen].cursor;
         let key = FollowKey {
             list_revision: s.list_revision(),

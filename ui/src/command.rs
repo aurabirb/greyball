@@ -9,7 +9,7 @@ use core::{Axis, Command, PaneMode, Session, Side, TrackId};
 /// An optional, toggleable side pane. UI-local — not a `core::Command`, since
 /// "is this pane open" is view state, not application state.
 /// `Queue`/`History` reuse the exact same track-list rendering/navigation as
-/// their numbered-screen form (`view::QUEUE`/`view::HIST`) — the pane system
+/// their numbered-screen form (`Screen::Queue`/`Screen::History`) — the pane system
 /// just adds a second way to reach them (docked alongside another screen)
 /// on top of the pre-existing "switch to it" one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

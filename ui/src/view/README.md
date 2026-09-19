@@ -24,6 +24,9 @@ A component is a plain struct owning only its own UI state — never the session
   that knows the screen size): re-follow the cursor on resize, else clamp the offset to the data length.
 - Shared: `ListState` + `Nav` (key/wheel → `(up, step)`), `Marquee` (one scroll clock for the tab bar
   and status line), `text.rs`, `draw_row_list` (`rows.rs`) for every track list.
+- `Screen` (`../screen.rs`) names the tab screens and owns every mapping over them (`ALL` in tab and
+  number-key order, `label`, `digit`/`from_digit`, `from_config`, `from_pane`); per-screen state is a
+  `PerScreen<T>` indexed by it (`MedleyView::lists`).
 
 ## App interaction
 

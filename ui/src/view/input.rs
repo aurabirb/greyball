@@ -9,8 +9,9 @@ use core::{Command, CoreEvent, Dispatch, Plugin, SourceId, TrackId};
 
 use crate::command::{self, Pane};
 use crate::keybindings::Action;
+use crate::screen::Screen;
 
-use super::{HIST, MedleyView, PLAYLISTS, SEARCH};
+use super::MedleyView;
 use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
@@ -84,7 +85,7 @@ impl MedleyView {
                     return self.vis_fps_cb();
                 }
                 if command::Parsed::History == parsed {
-                    self.screen = HIST;
+                    self.screen = Screen::History;
                     self.playlists.leave();
                     self.filter.query = None;
                     self.clamp_scroll();
@@ -219,8 +220,8 @@ impl MedleyView {
             Action::Command(c) => self.run(c),
             // On the Search screen itself, same as switching to the Search tab (focuses the input too).
             Action::FocusSearch => {
-                if self.screen == SEARCH {
-                    self.handle_action(Action::Screen(SEARCH))
+                if self.screen == Screen::Search {
+                    self.handle_action(Action::Screen(Screen::Search))
                 } else {
                     self.editing = Editing::Filter;
                     self.buffer.clear();
@@ -233,10 +234,10 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::Screen(n) => {
-                let was_playlists = self.screen == PLAYLISTS;
+                let was_playlists = self.screen == Screen::Playlists;
                 self.screen = n;
                 // Leaving the Playlists screen for anything else.
-                if n != PLAYLISTS {
+                if n != Screen::Playlists {
                     self.playlists.leave();
                 } else if !was_playlists && self.playlists.at_top_level() {
                     // Switching into Playlists fresh: restore the remembered playlist.
@@ -246,7 +247,7 @@ impl MedleyView {
                 // A different screen's list — any filter over the old one is meaningless now.
                 self.filter.query = None;
                 // Switching to Search focuses the input immediately, same as `/`.
-                if n == SEARCH {
+                if n == Screen::Search {
                     self.editing = Editing::Search;
                     self.buffer.clear();
                 }
@@ -351,7 +352,7 @@ impl MedleyView {
                 .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
-                    if self.screen == PLAYLISTS && hotkey_target_selected {
+                    if self.screen == Screen::Playlists && hotkey_target_selected {
                         return "  [`] set hotkey".to_string();
                     }
                     let help_key = help_key.map(String::from).unwrap_or_default();

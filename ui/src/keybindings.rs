@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 use core::{BuiltinAction, Command, HotkeyTarget, TrackId};
 
+use crate::screen::Screen;
+
 /// What a keypress means outside an active text field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -19,9 +21,9 @@ pub enum Action {
     /// current screen (`map` has no screen context).
     FocusSearch,
     /// UI-local: switch to screen 0-4 (now playing/queue/playlists/
-    /// history/search — the raw `view::NOW_PLAYING`/`QUEUE`/`PLAYLISTS`/
-    /// `HIST`/`SEARCH` constant, not a hotkey/tab-bar position).
-    Screen(usize),
+    /// history/search — the raw `view::Screen::NowPlaying`/`Screen::Queue`/`Screen::Playlists`/
+    /// `Screen::History`/`Screen::Search` constant, not a hotkey/tab-bar position).
+    Screen(Screen),
     /// UI-local: open the `:` command line.
     CommandLine,
     /// UI-local: activate the selected row (open a playlist, etc).
@@ -77,17 +79,12 @@ pub enum Action {
 /// `/`, `:`, `1`-`5`, `Enter`, `Space` stay hardcoded: they're structural
 /// (screen/focus navigation, not a "command"), not remappable commands.
 pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
+    if let Some(screen) = Screen::from_digit(key) {
+        return Action::Screen(screen);
+    }
     match key {
         "/" => return Action::FocusSearch,
         ":" => return Action::CommandLine,
-        // Hotkey order: 1 Now Playing, 2 Playlists, 3 Search, 4 History,
-        // 5 Queue — matches `view::TABS`, not the raw constants' numeric
-        // values (`view::QUEUE`/`PLAYLISTS`/`HIST`/`SEARCH`).
-        "1" => return Action::Screen(0), // NOW_PLAYING
-        "2" => return Action::Screen(2), // PLAYLISTS
-        "3" => return Action::Screen(4), // SEARCH
-        "4" => return Action::Screen(3), // HIST
-        "5" => return Action::Screen(1), // QUEUE
         "Space" => return Action::Command(Command::PlayPause),
         // Fixed aliases regardless of whether `n`/`p` themselves were
         // remapped — `>`/`<` are punctuation, not commands of their own.
