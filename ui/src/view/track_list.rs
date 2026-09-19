@@ -109,6 +109,8 @@ pub(super) struct TrackList {
     keyed_first: bool,
     /// The playlist whose top-level row the next layout pass puts the cursor on.
     select: Option<HotkeyTarget>,
+    /// Keyed-first only: the unkeyed playlist a key was just pressed for, and the playlist listed after it.
+    assigned: Option<(HotkeyTarget, HotkeyTarget)>,
     /// When and on which row the last left click landed.
     last_click: Option<(Instant, usize)>,
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
@@ -124,6 +126,7 @@ impl TrackList {
             kind,
             keyed_first,
             select: None,
+            assigned: None,
             top: Memo::default(),
             state: ListState::default(),
             open: Open::default(),
@@ -477,6 +480,10 @@ impl TrackList {
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
     pub(super) fn relayout(&mut self, resized: bool, s: &Session, rect: Rect) {
         let len = self.len(s);
+        // Its first key moves a row up into the keyed group; the cursor goes to the playlist that followed it.
+        if let Some((_, next)) = self.assigned.take_if(|(bound, _)| s.playlist_hotkey(bound).is_some()) {
+            self.select = Some(next);
+        }
         let selected = self.select.take().and_then(|target| self.top(s).iter().position(|row| row.target() == target));
         self.state.cursor = selected.unwrap_or(self.state.cursor).min(len.saturating_sub(1));
         self.state.relayout(resized || selected.is_some(), len, Self::body(rect).height());
@@ -490,6 +497,7 @@ impl TrackList {
     /// Nav keys, Enter, Esc out of a filter then an open playlist, wheel and clicks inside `rect`; anything else is `Ignored`.
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx, rect: Rect) -> WindowOutcome {
         let (s, body) = (ctx.s, Self::body(rect));
+        self.assigned = None;
         if let Event::Mouse { offset, position, event: mouse } = event {
             if !position.checked_sub(*offset).is_some_and(|pos| rect.contains(pos)) {
                 return WindowOutcome::Ignored;
@@ -535,15 +543,15 @@ impl TrackList {
             return WindowOutcome::Ignored;
         }
         let Some(target) = self.top_row(s).as_ref().map(TopRow::target) else { return WindowOutcome::Ignored };
-        let outcome = match event {
-            Event::Key(Key::Backspace) if s.playlist_hotkey(&target).is_some() => WindowOutcome::Unbind(target.clone()),
+        let keyed = s.playlist_hotkey(&target).is_some();
+        match event {
+            Event::Key(Key::Backspace) if keyed => WindowOutcome::Unbind(target),
             Event::Char(key) if keybindings::taken(*key, &s.hotkeys().into_iter().collect()).is_none() => {
-                WindowOutcome::Bind(target.clone(), *key)
+                let next = self.top(s).get(self.state.cursor + 1).map(TopRow::target);
+                self.assigned = next.filter(|_| self.keyed_first && !keyed).map(|next| (target.clone(), next));
+                WindowOutcome::Bind(target, *key)
             }
-            _ => return WindowOutcome::Ignored,
-        };
-        // The rows re-sort under the cursor once the key lands; it stays on this playlist.
-        self.select = Some(target);
-        outcome
+            _ => WindowOutcome::Ignored,
+        }
     }
 }

@@ -119,9 +119,14 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   playlist, a remote one), its `/`-filter query and three memos. `TrackList::top` is the one
   function that orders a Playlists window's top-level rows; the cursor, a click, Enter, the row
   builder and a bound key all index it. `select` names the playlist the next `relayout` puts the
-  cursor on, which is how the cursor stays on a playlist whose row a bind just re-sorted, lands on
+  cursor on, which is how the cursor lands on
   a playlist `:newplaylist` made in every Playlists window at its top level (`Dispatch::PlaylistCreated`),
-  and returns to the playlist Esc backed out of. `reset_for_new_list` is the only way
+  on the one `show_top` was given, and returns to the playlist Esc backed out of. A direct assign
+  leaves the cursor at its row index, so in the Playlists tab it stays on the bound playlist; in a
+  keyed-first window a playlist's first key moves its row up into the keyed group, and `assigned`
+  (that playlist and the one listed after it, taken at the keypress) has `relayout` select the
+  follower once the key has landed — straight away or after the confirm — so successive keys bind
+  successive playlists. `reset_for_new_list` is the only way
   `Open` changes and `set_query` the only way the filter does; both reset the selection and bump
   `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
   (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
@@ -131,7 +136,13 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `keybindings::fixed` (the one table `map` reads its structural keys from), not a `Nav` key and not a
   built-in's effective key — is `Bind(target, key)`, and Backspace on a row with a key is
   `Unbind(target)`; every other key stays `Ignored`, so it still does what it does everywhere.
-  `MedleyView::bind_hotkey` asks the same `taken` for any target, a Help row's capture included. Inside an open playlist a playlist key
+  `MedleyView::bind_hotkey` is the one bind path, for a list's direct assign and a Help row's capture
+  alike: it asks the same `taken`, binds at once when nothing is overwritten, and otherwise — the key
+  is on another playlist, or the target playlist has a different key — opens `input::confirm`, the
+  Yes/No cursive dialog `F` (unlike) also uses (Enter/`y` confirms, Esc/`n` cancels). The dialog is a
+  layer over the shell, so no key reaches a window while it is open, and its closure owns the
+  `(target, key)` it named; `commit_bind` runs through `on_root` on a yes. A built-in rebound in Help
+  asks only when it takes a playlist's key; a key another built-in answers to stays a refusal. Inside an open playlist a playlist key
   toggles the selected track's membership as in any list. A filter stays with its window
   across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 

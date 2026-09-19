@@ -275,10 +275,7 @@ impl MedleyView {
                 self.toggle_setting(row);
                 EventResult::consumed()
             }
-            WindowOutcome::Bind(target, key) => {
-                self.bind_hotkey(target, key);
-                EventResult::consumed()
-            }
+            WindowOutcome::Bind(target, key) => self.bind_hotkey(target, key),
             WindowOutcome::Unbind(target) => {
                 self.clear_hotkey(target);
                 EventResult::consumed()

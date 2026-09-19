@@ -4,7 +4,7 @@ use std::thread;
 use cursive::Cursive;
 use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::view::Nameable;
-use cursive::views::{Dialog, ScrollView, TextView};
+use cursive::views::{Dialog, OnEventView, ScrollView, TextView};
 
 use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId, TrackId};
 
@@ -33,6 +33,27 @@ pub(super) enum Editing {
 
 /// The open notice dialog's text view, which further popup notices append to.
 const NOTICE_TEXT: &str = "notice";
+
+/// A Yes/No dialog over everything, so no key gets past it: Enter or `y` runs `yes` on the shell, Esc or `n` cancels.
+pub(super) fn confirm(
+    title: &'static str,
+    question: String,
+    button: &'static str,
+    yes: impl Fn(&mut MedleyView) -> EventResult + Clone + Send + Sync + 'static,
+) -> EventResult {
+    EventResult::with_cb(move |c: &mut Cursive| {
+        let yes = yes.clone();
+        let run = move |c: &mut Cursive| {
+            c.pop_layer();
+            crate::on_root(c, yes.clone());
+        };
+        let cancel = |c: &mut Cursive| {
+            c.pop_layer();
+        };
+        let dialog = Dialog::text(question.clone()).title(title).button(button, run.clone()).dismiss_button("Cancel");
+        c.add_layer(OnEventView::new(dialog).on_event('y', run).on_event('n', cancel).on_event(Key::Esc, cancel));
+    })
+}
 
 impl MedleyView {
     /// Run a plugin-registered `:`-command (e.g. `:spotify addlogin`) on a background thread.
@@ -167,16 +188,7 @@ impl MedleyView {
             .with_session(|s| s.store.get_track(id).ok().flatten())
             .map(|t| format!("{} - {}", t.display_artist(), t.title))
             .unwrap_or_else(|| "this track".to_string());
-        EventResult::with_cb(move |c: &mut Cursive| {
-            let dialog = Dialog::text(format!("Remove {name:?} from Liked Songs?"))
-                .title("Unlike")
-                .button("Remove", move |c| {
-                    c.pop_layer();
-                    crate::on_root(c, |view| view.run(Command::Unlike(id)));
-                })
-                .dismiss_button("Cancel");
-            c.add_layer(dialog);
-        })
+        confirm("Unlike", format!("Remove {name:?} from Liked Songs?"), "Remove", move |view| view.run(Command::Unlike(id)))
     }
 
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {

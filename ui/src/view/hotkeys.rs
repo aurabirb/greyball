@@ -1,9 +1,12 @@
+use cursive::event::EventResult;
+
 use core::{BindError, HotkeyTarget};
 
 use crate::items;
 use crate::keybindings::{self, Taken};
 
-use super::MedleyView;
+use super::{MedleyView, Notice};
+use super::input::confirm;
 use super::track_list::{top_row_name, top_rows};
 
 impl MedleyView {
@@ -18,24 +21,38 @@ impl MedleyView {
         }
     }
 
-    /// Binds `key` to `target` and reports the result as feedback.
-    pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) {
+    /// Binds `key` to `target`, asking first when that takes the key from a playlist or replaces a playlist's key.
+    pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) -> EventResult {
         let held = |by: &HotkeyTarget, view: &Self| format!("Can't bind '{key}': already used by built-in {}", view.hotkey_row_name_for(by));
         // A key the shell or a list reads first would never reach its binding.
         match self.with_session(|s| keybindings::taken(key, &s.hotkeys().into_iter().collect())) {
-            Some(Taken::Fixed) => {
-                self.feedback = Some(format!("Can't bind '{key}': it is a fixed key"));
-                return;
-            }
+            Some(Taken::Fixed) => return self.notify(Notice::Flash(format!("Can't bind '{key}': it is a fixed key"))),
             Some(Taken::Builtin(action)) if target != HotkeyTarget::Builtin(action) => {
-                self.feedback = Some(held(&HotkeyTarget::Builtin(action), self));
-                return;
+                return self.notify(Notice::Flash(held(&HotkeyTarget::Builtin(action), self)));
             }
             _ => {}
         }
+        let (holder, old) = self.with_session(|s| (s.hotkey_for(key), s.playlist_hotkey(&target)));
+        let name = self.hotkey_row_name_for(&target);
+        // A built-in is rebound on purpose; only a playlist's own key going is news.
+        let old = old.filter(|&old| old != key && !matches!(target, HotkeyTarget::Builtin(_)));
+        let question = match (holder.filter(|holder| *holder != target), old) {
+            (Some(holder), None) => format!("Move '{key}' from {} to {name}?", self.hotkey_row_name_for(&holder)),
+            (Some(holder), Some(old)) => {
+                format!("Move '{key}' from {} to {name}, replacing its key '{old}'?", self.hotkey_row_name_for(&holder))
+            }
+            (None, Some(old)) => format!("Replace {name}'s key '{old}' with '{key}'?"),
+            (None, None) => return self.commit_bind(target, key),
+        };
+        // The dialog holds what it named, so nothing that re-sorts or rebinds meanwhile can retarget it.
+        confirm("Bind key", question, "Bind", move |view| view.commit_bind(target.clone(), key))
+    }
+
+    fn commit_bind(&mut self, target: HotkeyTarget, key: char) -> EventResult {
+        let held = |by: &HotkeyTarget, view: &Self| format!("Can't bind '{key}': already used by built-in {}", view.hotkey_row_name_for(by));
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
         let name = self.hotkey_row_name_for(&target);
-        self.feedback = Some(match result {
+        self.notify(Notice::Flash(match result {
             Ok(Some(stolen_from)) => {
                 let stolen_name = self.hotkey_row_name_for(&stolen_from);
                 format!("Bound '{key}' to {name} (moved from {stolen_name})")
@@ -45,7 +62,7 @@ impl MedleyView {
             Err(BindError::SyntheticPlaylist) => {
                 format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead")
             }
-        });
+        }))
     }
 
     pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) {

@@ -211,25 +211,6 @@
   and retry when the Playlists screen is opened and when the source's plugin health returns to
   `Ok` (`CoreEvent::PluginStatusChanged`), with a floor between attempts so a dead endpoint isn't
   hammered.
-- [ ] Decided behaviour fixes, pass 2 (owner decisions; one pass):
-  - After a direct key assign on a Playlists top-level row the cursor stays at the same row INDEX
-    (the next playlist slides under it in the keyed-first `playlist-keys` window, so `a` `b` `c`
-    binds three playlists in a row) instead of following the bound row; the flash names what was
-    bound. `TrackList::select` keeps serving `:newplaylist`, `show_top` and Esc-back-out.
-  - Direct assign stays enabled on the Playlists tab and the `playlist-keys` window alike, but a
-    key assignment that would OVERWRITE something — the key is already on another playlist, or the
-    target playlist already has a different key that would be replaced — first shows a confirm
-    dialog naming both sides ("Move 'z' from X to Y?" / "Replace Y's key 'q' with 'z'?"); Enter/y
-    confirms, Esc/n cancels, nothing changes until confirmed. Same for a rebind captured in the
-    Help window. Binding a free key to an unkeyed playlist stays immediate. Reuse the unlike-confirm
-    dialog pattern (`confirm_unlike`) rather than a new modal kind.
-  Settled, no work: placement vocabulary stays `tabbed/embedded/screen/float` everywhere incl. the
-  flash; float slots by id rank; `M` acts on the focused window; Esc closes a float only when it is
-  focused; bare `:panes <mode>` moves every non-tabbed window except `playlist-keys`; backtick on an
-  open unfocused `playlist-keys` focuses it first; the assigned key sits in the left gutter; a
-  failed Enter-to-play stays a warnings row; a failed plugin setup shows popup + health row; press
-  anywhere focuses a window; Esc in a filtered sub-playlist clears the filter first; `>`/`<` and
-  arrow seeks stay fixed second keys; all commands live in the one Commands section.
 - [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
   dialog; drops its hotkey binding; windows showing it back out to the top level) and
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`
