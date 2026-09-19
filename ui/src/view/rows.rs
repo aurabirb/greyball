@@ -179,7 +179,7 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
         let mark = if row.current { "> " } else { "  " };
         let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
         let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
-        let cols = five_col(&tags, &main, &hotkeys, &source, &duration, content_w.saturating_sub(ROW_MARK_W));
+        let cols = five_col([&tags, &main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
         let line = pad(&format!("{mark}{cols}"), content_w);
         let mut row_style = Style::from(if selected {
             ColorStyle::highlight()
@@ -194,7 +194,7 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
         printer.with_style(row_style, |p| p.print((0, y), &line));
         // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
         let plain = !selected && !row.current;
-        for (&(start, width, right_aligned), cell) in layout.iter().zip(cells) {
+        for (&(start, width, right_aligned), cell) in layout.iter().zip(cells).filter_map(|(l, c)| Some((l.as_ref()?, c))) {
             if !cell.styled() {
                 continue;
             }
@@ -219,25 +219,31 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
     draw_scrollbar(printer, content_w, list_h, offset, total);
 }
 
-/// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order.
-fn column_layout(width: usize) -> Vec<(usize, usize, bool)> {
-    let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4;
+/// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
+fn column_layout(width: usize) -> [Option<(usize, usize, bool)>; 5] {
+    let show_source = width + ROW_MARK_W + 1 >= SOURCE_MIN_LIST_W;
+    let source_w = if show_source { SOURCE_COL_W } else { 0 };
+    let gaps = if show_source { 4 } else { 3 };
+    let fixed = TAGS_COL_W + source_w + DURATION_COL_W + HOTKEYS_COL_W + gaps;
     if width <= fixed {
-        return Vec::new();
+        return [None; 5];
     }
     let main_w = width - fixed;
     let main_start = TAGS_COL_W + 1;
     let hotkeys_start = main_start + main_w + 1;
     let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
-    let duration_start = source_start + SOURCE_COL_W + 1;
-    vec![
-        (0, TAGS_COL_W, true),
-        (main_start, main_w, false),
-        (hotkeys_start, HOTKEYS_COL_W, false),
-        (source_start, SOURCE_COL_W, false),
-        (duration_start, DURATION_COL_W, false),
+    let duration_start = if show_source { source_start + SOURCE_COL_W + 1 } else { source_start };
+    [
+        Some((0, TAGS_COL_W, true)),
+        Some((main_start, main_w, false)),
+        Some((hotkeys_start, HOTKEYS_COL_W, false)),
+        show_source.then_some((source_start, SOURCE_COL_W, false)),
+        Some((duration_start, DURATION_COL_W, false)),
     ]
 }
+
+/// Narrowest list (including mark and scrollbar gutter) that still shows the source column.
+const SOURCE_MIN_LIST_W: usize = 80;
 
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
 const ROW_MARK_W: usize = 2;
@@ -245,7 +251,7 @@ const ROW_MARK_W: usize = 2;
 /// Column a row's main text starts at — what the title row is indented by to line up with it.
 fn main_col_start(content_w: usize) -> usize {
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
-    ROW_MARK_W + layout.get(1).map_or(0, |&(start, ..)| start)
+    ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start)
 }
 
 /// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`).
@@ -257,18 +263,17 @@ const DURATION_COL_W: usize = 6;
 
 const HOTKEYS_COL_W: usize = 8;
 
-fn five_col(tags: &str, main: &str, hotkeys: &str, source: &str, duration: &str, width: usize) -> String {
-    let fixed = TAGS_COL_W + SOURCE_COL_W + DURATION_COL_W + HOTKEYS_COL_W + 4; // 4 single-space gaps
-    if width <= fixed {
-        return truncate(main, width);
+fn five_col(cells: [&str; 5], layout: &[Option<(usize, usize, bool)>; 5], width: usize) -> String {
+    if layout[1].is_none() {
+        return truncate(cells[1], width);
     }
-    let main_w = width - fixed;
-    format!(
-        "{} {} {} {} {}",
-        pad_right_aligned(tags, TAGS_COL_W),
-        pad(main, main_w),
-        pad(hotkeys, HOTKEYS_COL_W),
-        pad(source, SOURCE_COL_W),
-        pad(duration, DURATION_COL_W),
-    )
+    let cols: Vec<String> = layout
+        .iter()
+        .zip(cells)
+        .filter_map(|(l, cell)| {
+            let &(_, w, right) = l.as_ref()?;
+            Some(if right { pad_right_aligned(cell, w) } else { pad(cell, w) })
+        })
+        .collect();
+    cols.join(" ")
 }
