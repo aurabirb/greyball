@@ -201,8 +201,8 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Notice::Status { text, refused } => {
-                let focused = self.focused_id();
-                self.windows[focused].set_status(&text, refused);
+                let target = self.status_id();
+                self.windows[target].set_status(&text, refused);
                 EventResult::consumed()
             }
             // One notice dialog at most: a batch of failures reads as one list, dismissed once.

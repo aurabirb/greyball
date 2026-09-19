@@ -216,6 +216,12 @@ impl MedleyView {
         }
     }
 
+    /// The window whose status row shows what the focused one reports: itself, else the active tab's.
+    fn status_id(&self) -> WindowId {
+        let focused = self.focused_id();
+        if self.windows[focused].shows_status() { focused } else { self.main_id() }
+    }
+
     /// Floating or fullscreen: shown over the view rather than in it.
     fn over_view(&self, id: WindowId) -> bool {
         self.windows.placement(id).over_view()
@@ -413,7 +419,7 @@ impl View for MedleyView {
                 format!("[{key}] {target}")
             });
             let status = StatusCtx {
-                flash: self.feedback.as_deref().filter(|_| self.focused_id() == placed.id),
+                flash: self.feedback.as_deref().filter(|_| self.status_id() == placed.id),
                 place,
                 help_key: chrome.help_key,
                 keys_key: chrome.keys_key,

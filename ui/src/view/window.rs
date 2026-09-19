@@ -124,6 +124,11 @@ impl Window {
     /// Every window has a status row: both bottom corners are offered in it.
     pub(super) const CORNERS: Corners = Corners::BOTH;
 
+    /// Whether the row carries text; the rest of its behaviour is the same for every window.
+    pub(super) fn shows_status(&self) -> bool {
+        !matches!(self.body, Body::Vis(_))
+    }
+
     /// The status row in screen coordinates, when the window has room to draw it.
     pub(super) fn status_rect(&self) -> Option<Rect> {
         let y = self.rect.height().checked_sub(1).filter(|&y| y > 0)?;
@@ -207,6 +212,9 @@ impl Window {
             (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
         }
         let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0) else { return };
+        if !self.shows_status() {
+            return;
+        }
         let message = self.status.message.clone().or_else(|| status.flash.map(|flash| (flash.to_string(), false)));
         let idle = message.is_none();
         let (text, refused) = message.unwrap_or_else(|| (self.idle(frame, placement, status), false));
