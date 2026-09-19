@@ -17,15 +17,16 @@ pub(super) struct PlaylistPicker {
     list: ListState,
     /// Captured when the picker opens, so it stays fixed if the underlying list scrolls.
     track: TrackId,
-    /// Opens empty; `refresh_playlist_picker` fills it on the next layout pass.
     playlists: Vec<Playlist>,
     /// The `list_revision` that `playlists` was read under.
     built: Memo<u64>,
 }
 
 impl PlaylistPicker {
-    pub(super) fn new(track: TrackId) -> Self {
-        Self { list: ListState::default(), track, playlists: Vec::new(), built: Memo::default() }
+    fn new(track: TrackId, playlists: Vec<Playlist>, list_revision: u64) -> Self {
+        let built = Memo::default();
+        built.changed(list_revision);
+        Self { list: ListState::default(), track, playlists, built }
     }
 
     /// Replaces `playlists`, keeps the cursor on the same playlist, and keeps it in view.
@@ -65,6 +66,11 @@ impl PlaylistPicker {
 }
 
 impl MedleyView {
+    pub(super) fn open_playlist_picker(&mut self, track: TrackId) {
+        let (playlists, list_revision) = self.with_session(|s| (s.playlists(), s.list_revision()));
+        self.playlist_picker = Some(PlaylistPicker::new(track, playlists, list_revision));
+    }
+
     /// Rebuilds the picker's playlist list once `list_revision` drifts — called from `required_size`.
     pub(super) fn refresh_playlist_picker(&mut self, list_revision: u64, size: Vec2) {
         if !self.playlist_picker.as_ref().is_some_and(|p| p.built.changed(list_revision)) {

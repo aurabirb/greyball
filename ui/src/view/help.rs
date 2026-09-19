@@ -2,7 +2,7 @@ use cursive::{Printer, Vec2};
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::ColorStyle;
 
-use core::HotkeyTarget;
+use core::{HotkeyTarget, Session};
 
 use crate::{command, keybindings};
 
@@ -15,8 +15,7 @@ use super::text::pad;
 /// Row the help screen's content starts on (row 0 = title).
 const LIST_TOP: usize = 1;
 
-/// The help/shortcuts screen (`?`/`:help`); opens empty, `refresh_help` fills it on the next layout pass.
-#[derive(Default)]
+/// The help/shortcuts screen (`?`/`:help`).
 pub(super) struct HelpModal {
     scroll: usize,
     lines: Vec<String>,
@@ -25,6 +24,12 @@ pub(super) struct HelpModal {
 }
 
 impl HelpModal {
+    fn new(lines: Vec<String>, list_revision: u64) -> Self {
+        let built = Memo::default();
+        built.changed(list_revision);
+        Self { scroll: 0, lines, built }
+    }
+
     /// Replaces the lines in place and re-clamps `scroll`, so a rebuild never jumps to the top.
     fn refresh(&mut self, lines: Vec<String>, size: Vec2) {
         self.lines = lines;
@@ -106,29 +111,32 @@ fn build_help_lines(
 }
 
 impl MedleyView {
-    fn help_lines(&self) -> Vec<String> {
-        self.with_session(|s| {
-            let plugin_commands = s.plugin_command_help();
-            let playlists = s.playlists();
-            let rows = self.top_rows(s);
-            let hotkeys = s.hotkeys();
-            let playlist_hotkeys = hotkeys
-                .iter()
-                .filter_map(|(ch, target)| {
-                    rows.iter()
-                        .find(|r| r.target() == *target)
-                        .map(|r| (*ch, top_row_name(r, &playlists)))
-                })
-                .collect::<Vec<_>>();
-            let builtin_remaps = hotkeys
-                .into_iter()
-                .filter_map(|(ch, target)| match target {
-                    HotkeyTarget::Builtin(action) => Some((ch, action.label().to_string())),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
-        })
+    fn help_lines(&self, s: &Session) -> Vec<String> {
+        let plugin_commands = s.plugin_command_help();
+        let playlists = s.playlists();
+        let rows = self.top_rows(s);
+        let hotkeys = s.hotkeys();
+        let playlist_hotkeys = hotkeys
+            .iter()
+            .filter_map(|(ch, target)| {
+                rows.iter()
+                    .find(|r| r.target() == *target)
+                    .map(|r| (*ch, top_row_name(r, &playlists)))
+            })
+            .collect::<Vec<_>>();
+        let builtin_remaps = hotkeys
+            .into_iter()
+            .filter_map(|(ch, target)| match target {
+                HotkeyTarget::Builtin(action) => Some((ch, action.label().to_string())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
+    }
+
+    pub(super) fn open_help(&mut self) {
+        let (lines, list_revision) = self.with_session(|s| (self.help_lines(s), s.list_revision()));
+        self.help = Some(HelpModal::new(lines, list_revision));
     }
 
     /// Rebuilds Help's content once `list_revision` drifts — called from `required_size`, never per-draw.
@@ -136,7 +144,7 @@ impl MedleyView {
         if !self.help.as_ref().is_some_and(|h| h.built.changed(list_revision)) {
             return;
         }
-        let lines = self.help_lines();
+        let lines = self.with_session(|s| self.help_lines(s));
         if let Some(help) = &mut self.help {
             help.refresh(lines, size);
         }

@@ -12,9 +12,7 @@ use crate::keybindings::Action;
 use crate::screen::Screen;
 
 use super::MedleyView;
-use super::help::HelpModal;
 use super::panes::PANE_LAYOUT_CYCLE;
-use super::playlist_picker::PlaylistPicker;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
@@ -72,7 +70,7 @@ impl MedleyView {
                 };
                 let open = self.playlists.open;
                 if parsed == command::Parsed::Help {
-                    self.help = Some(HelpModal::default());
+                    self.open_help();
                     return EventResult::consumed();
                 }
                 // `Screen` mode: fullscreen, one at a time.
@@ -262,11 +260,11 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.help = Some(HelpModal::default());
+                self.open_help();
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                self.playlist_picker = Some(PlaylistPicker::new(id));
+                self.open_playlist_picker(id);
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {

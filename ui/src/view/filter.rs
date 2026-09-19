@@ -22,7 +22,6 @@ pub(super) struct LocalFilter {
     cache: Memo<FilterKey, Arc<[TrackId]>>,
 }
 
-#[derive(PartialEq)]
 struct FilterKey {
     list_revision: u64,
     screen: Screen,
@@ -86,20 +85,19 @@ impl MedleyView {
         if query.is_empty() || !self.filterable_screen(screen) {
             return None;
         }
-        let key = FilterKey {
-            list_revision: s.list_revision(),
-            screen,
-            list_id: self.playlists.list_id(),
-            query: query.to_string(),
+        let (list_revision, nav) = (s.list_revision(), &self.playlists);
+        let hit = |k: &FilterKey| {
+            k.list_revision == list_revision && k.screen == screen && k.query == query && nav.is_list(&k.list_id)
         };
-        Some(self.filter.cache.get_or_build(key, || {
+        Some(self.filter.cache.get_or_build_by(hit, || {
+            let key = FilterKey { list_revision, screen, list_id: nav.list_id(), query: query.to_string() };
             let mut ranked: Vec<(TrackId, FilterRank)> = self
                 .all_tracks_for_screen(s, screen)
                 .into_iter()
                 .filter_map(|t| rank_filter(&self.filter.matcher, &t.main(), query).map(|r| (t.id, r)))
                 .collect();
             ranked.sort_by(|a, b| a.1.cmp(&b.1));
-            ranked.into_iter().map(|(id, _)| id).collect()
+            (key, ranked.into_iter().map(|(id, _)| id).collect())
         }))
     }
 

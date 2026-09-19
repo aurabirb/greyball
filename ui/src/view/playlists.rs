@@ -66,6 +66,12 @@ impl PlaylistNav {
         (self.open, self.remote.clone().map(|(sid, _, node)| (sid, node)))
     }
 
+    /// `list_id() == *id` without cloning the open remote node.
+    pub(super) fn is_list(&self, id: &(Option<PlaylistId>, Option<(SourceId, BrowseNode)>)) -> bool {
+        let remote = self.remote.as_ref().map(|(sid, _, node)| (sid, node));
+        self.open == id.0 && remote == id.1.as_ref().map(|(sid, node)| (sid, node))
+    }
+
     /// Leaving the screen closes whatever is open but remembers it.
     pub(super) fn leave(&mut self) {
         self.remembered = match (self.open.take(), self.remote.take()) {

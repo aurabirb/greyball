@@ -108,13 +108,14 @@ not a source length, so a same-length content swap still recomputes, and holding
 go stale inside it — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
 `MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`, keyed on `revision`).
 
-A modal that snapshots session data while it stays open (`HelpModal`, `PlaylistPicker`) opens empty
-with a `built: Memo<u64>` stamp and is filled from `MedleyView::required_size` — never per-draw, and
-always before its first draw — whenever `Session::list_revision` differs from the stamp
-(`MedleyView::refresh_help`/`refresh_playlist_picker`); both replace their content in place rather than
-resetting it — `HelpModal::refresh` keeps `scroll` (re-clamped to the new line count) and
-`PlaylistPicker::refresh` re-clamps its cursor onto the same playlist id (or the new length if that
-playlist is gone) and re-follows it into view.
+A modal is constructed with its data at the open site (`open_help`, `open_playlist_picker`): cursive
+drains every buffered input event through `on_event` before any layout pass, so type-ahead must never
+meet an empty modal. A modal that snapshots session data (`HelpModal`, `PlaylistPicker`) also carries a
+`built: Memo<u64>` stamp, and `MedleyView::required_size` — never `draw` — refreshes it only when
+`Session::list_revision` moves while it is open (`refresh_help`/`refresh_playlist_picker`), in place:
+`HelpModal::refresh` keeps `scroll` (re-clamped to the new line count) and `PlaylistPicker::refresh`
+re-clamps its cursor onto the same playlist id (or the new length if that playlist is gone) and
+re-follows it into view.
 
 ## Adding a component
 
