@@ -42,45 +42,33 @@ pub(super) fn truncate(s: &str, width: usize) -> String {
 
 /// Greedy word-wrap into `<= width`-column segments, hard-breaking a word longer than `width`.
 pub(super) fn wrap(s: &str, width: usize) -> Vec<String> {
-    wrap_at(s, width, false)
-}
-
-/// `wrap` that also breaks right after a `/`, so an alias cluster like `:a/:b` splits between its names.
-pub(super) fn wrap_slashes(s: &str, width: usize) -> Vec<String> {
-    wrap_at(s, width, true)
-}
-
-fn wrap_at(s: &str, width: usize, after_slash: bool) -> Vec<String> {
     if width == 0 {
         return Vec::new();
     }
     let mut lines = Vec::new();
     let mut cur = String::new();
     for word in s.split_whitespace() {
-        let pieces: Vec<&str> = if after_slash { word.split_inclusive('/').collect() } else { vec![word] };
-        for (n, piece) in pieces.into_iter().enumerate() {
-            let mut chars: Vec<char> = piece.chars().collect();
-            loop {
-                let sep = usize::from(n == 0 && !cur.is_empty());
-                if cur.chars().count() + sep + chars.len() <= width {
-                    if sep == 1 {
-                        cur.push(' ');
-                    }
-                    cur.extend(chars.iter());
-                    break;
+        let mut chars: Vec<char> = word.chars().collect();
+        loop {
+            let sep = usize::from(!cur.is_empty());
+            if cur.chars().count() + sep + chars.len() <= width {
+                if sep == 1 {
+                    cur.push(' ');
                 }
-                if !cur.is_empty() {
-                    lines.push(std::mem::take(&mut cur));
-                    continue; // retry the same piece against a fresh line
-                }
-                // the piece alone is longer than `width` — hard-break it.
-                let take = width.min(chars.len());
-                let rest = chars.split_off(take);
-                lines.push(chars.into_iter().collect());
-                chars = rest;
-                if chars.is_empty() {
-                    break;
-                }
+                cur.extend(chars.iter());
+                break;
+            }
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+                continue; // retry the same word against a fresh line
+            }
+            // the word alone is longer than `width` — hard-break it.
+            let take = width.min(chars.len());
+            let rest = chars.split_off(take);
+            lines.push(chars.into_iter().collect());
+            chars = rest;
+            if chars.is_empty() {
+                break;
             }
         }
     }

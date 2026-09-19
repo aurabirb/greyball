@@ -60,12 +60,6 @@
 - [ ] Make the Help command rows bindable where that is not hard (`ui/src/view/help.rs`, rows in
   `ui/src/items.rs`): the no-argument `:`-commands first, as the "bindable Help rows" item above
   describes; leave the argument commands and Space/`x` to that item.
-- [ ] In the Help window, remove the separate command lane/column: a row's `:command` spelling (long
-  and short) becomes the first line of its description, and the rest of the description follows on the
-  following lines exactly as before. This should simplify `HelpPane`'s layout (`ui/src/view/help.rs`):
-  two lanes (description block, key) instead of three, and the command-cell wrapping (`wrap_slashes`,
-  the command lane cap) goes away. Do it together with, or right before, the Help row tweaks item
-  above since both reshape the same lanes; judge it in a real-terminal screenshot.
 ### Bugs
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded

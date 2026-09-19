@@ -63,11 +63,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   key stays in `core::BuiltinAction::ALL`. Structural keys (`keybindings::fixed`, `Nav`, the shell's Tab
   and arrows) are matched as events in code; their rows only describe them. Sections come in
   `Section::ALL` order — Commands (plugin commands appended), Movement, Player, Tracks and playlists,
-  Windows — then the playlists that have a key. `build` lays a section out in three lanes (command,
-  description, shortcut showing the live effective key, drawn underlined over its whole cell), the
-  shortcut lane one width shared by every section (so all keys share a column), the command lane sized
-  per section, capped at two fifths and dropped when no item has a command; command and description
-  wrap inside their own lanes, description lines after the first indented two spaces, with one blank
+  Windows — then the playlists that have a key. `build` lays a section out in two lanes (description, shortcut showing the live effective key, drawn underlined over its whole cell), the
+  shortcut lane one width shared by every section (so all keys share a column); an item's `:command`
+  spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces,
+  with one blank
   line between items. The result, a flat
   line list plus each row's `first..end` line span and each section's title line, is cached in
   `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll

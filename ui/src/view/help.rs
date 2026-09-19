@@ -11,11 +11,11 @@ use crate::screen::{Kind, Placement};
 
 use super::memo::Memo;
 use super::scroll::{LIST_JUMP_STEP, Nav, bound_offset, draw_scrollbar};
-use super::text::{pad, wrap, wrap_slashes};
+use super::text::{pad, wrap};
 use super::track_list::hotkey_target_name;
 use super::window::WindowOutcome;
 
-/// Blank columns between two lanes.
+/// Blank columns between the description and key lanes.
 const GAP: usize = 2;
 /// Blank columns kept clear of the right edge, so text never meets the border or scrollbar.
 const RIGHT_PAD: usize = 3;
@@ -53,7 +53,7 @@ pub(super) struct Built {
     sections: Vec<(usize, usize)>,
 }
 
-/// An item before layout: its three cells.
+/// An item before layout: its cells.
 struct Cells {
     command: String,
     summary: String,
@@ -125,13 +125,9 @@ fn build(width: usize, s: &Session) -> Built {
     let avail = width.saturating_sub(RIGHT_PAD).max(1);
     // One key lane for every section, so all keys share a column.
     let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count()).max().unwrap_or(0).min(avail / 4);
+    let text_w = avail.saturating_sub(if shortcut_w == 0 { 0 } else { shortcut_w + GAP }).max(1);
+    let wrap_w = text_w.saturating_sub(CONT_PAD).max(1);
     for (title, cells) in sections {
-        // The command lane is sized per section and capped so the description keeps room.
-        let widest = |cell: fn(&Cells) -> &String| cells.iter().map(|c| cell(c).chars().count()).max().unwrap_or(0);
-        let command_w = widest(|c| &c.command).min((avail * 2 / 5).min(32));
-        let lane = |w: usize| if w == 0 { 0 } else { w + GAP };
-        let text_w = avail.saturating_sub(lane(command_w) + lane(shortcut_w)).max(1);
-        let wrap_w = text_w.saturating_sub(CONT_PAD).max(1);
         if !built.lines.is_empty() {
             built.lines.push(Line::Blank);
         }
@@ -139,20 +135,15 @@ fn build(width: usize, s: &Session) -> Built {
         built.lines.push(Line::Title(format!("[ {title} ]")));
         for cell in cells {
             built.lines.push(Line::Blank);
-            let command = if command_w == 0 { Vec::new() } else { wrap_slashes(&cell.command, command_w) };
-            let mut text = wrap(&cell.summary, wrap_w);
+            let mut text = if cell.command.is_empty() { Vec::new() } else { wrap(&cell.command, wrap_w) };
+            text.extend(wrap(&cell.summary, wrap_w));
             if !cell.detail.is_empty() {
                 text.extend(wrap(&cell.detail, wrap_w));
             }
             let first = built.lines.len();
-            for i in 0..command.len().max(text.len()) {
-                let part = |lines: &[String]| lines.get(i).cloned().unwrap_or_default();
-                let mut line = String::new();
-                if command_w > 0 {
-                    line.push_str(&pad(&part(&command), lane(command_w)));
-                }
+            for (i, part) in text.iter().enumerate() {
                 let indent = if i == 0 { "" } else { "  " };
-                line.push_str(&pad(&format!("{indent}{}", part(&text)), text_w + if shortcut_w > 0 { GAP } else { 0 }));
+                let line = pad(&format!("{indent}{part}"), text_w + if shortcut_w > 0 { GAP } else { 0 });
                 let key = if shortcut_w > 0 { pad(&cell.shortcut, shortcut_w) } else { String::new() };
                 built.lines.push(if i == 0 { Line::First(built.rows.len(), line, key) } else { Line::Rest(line) });
             }
