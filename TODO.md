@@ -46,7 +46,8 @@
   - Now Playing (the first tab): `[?] help`, `[p/n] prev/next`, the queue keys (`[w/e] queue`, with
     the real bindings — the defaults are Enqueue `q`, Wedge `w`, ClearQueue `E`, so confirm which
     the owner wants shown), and `[P] cycle layout` only when something is docked.
-  - Sweep the remaining windows (Search, History, Queue, Log, Settings; Vis stays blank) into the same
+  - Queue tab: mention the clear-queue key (`[E] clear queue`, the real `ClearQueue` binding).
+  - Sweep the remaining windows (Search, History, Log, Settings; Vis stays blank) into the same
     `[key] action` style showing the few keys that matter in each.
 - [ ] Unify like and unlike into one key called "like" that works exactly like a playlist hotkey:
   it toggles the selected track's membership in Liked Songs (`Session::set_liked` through the same
