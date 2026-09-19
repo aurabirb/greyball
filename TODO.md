@@ -107,6 +107,23 @@
   piling up. Likely shape of the fix: make skips cheap — move the cursor/now-playing immediately
   but debounce the actual load (~150–250 ms after the last skip) so only the final target is
   resolved, with every async result tagged by a load generation and ignored when stale.
+- [ ] Going to the previous track can fail with `symphonia error: Decoder channel closed` — the
+  same track plays fine when clicked/Enter-ed in a list, but not when reached by going back from a
+  different track. Reproduce and take the exact sequence from `medley.log` (which source/rendition
+  both tracks were, cached vs streamed, which player — `RodioPlayer` or the Spotify player — handled
+  each). The error text isn't in this repo, so first find which layer emits it (rodio's symphonia
+  decoder, librespot's decoder thread, or a `Media::Reader`/`StreamingReader` whose feeding side was
+  dropped). Where the two paths differ: `Command::Previous` (`core/src/app.rs`) takes the id from
+  `queue.previous_from_history()`, wedges the current track back onto the queue front
+  (`queue.play_next`) and calls `play_track(id, false)`, while a click goes through the list's
+  play-in-context path — compare what each does before `load` (stop/teardown of the outgoing
+  player, switching between players when the two tracks belong to different sources, reuse of an
+  already-open reader/decoder or cached `Media` for a track that was played moments ago, the
+  `generation` handling in `player/src/rodio_player.rs`, `pending_cache_fallback`). Suspects: the
+  previous track's stream/decoder being torn down by the outgoing track's stop AFTER the new load
+  started (a stale stop or a dropped channel racing the new load), or a history entry resolving to
+  a rendition whose reader was already consumed/closed. Likely related to the rapid-skip bug
+  above — fix them together if the cause is shared.
 ### Features
 - [ ] Make the top bar's now-playing title (the right-aligned `marquee` text `TabBar::draw` draws in
   row 0, `ui/src/view/tab_bar.rs`) double as a scrubber. Additive only — nothing is replaced or removed: the
