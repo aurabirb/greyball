@@ -167,7 +167,7 @@ build closure against its key.
 | --- | --- | --- |
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
 | `TrackList::top` (ordered top-level rows) | playlists, remote-playlists and hotkeys generations | local and remote playlists, which have a key, `keyed_first` |
-| `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
+| `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, liked marks, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, help key |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |

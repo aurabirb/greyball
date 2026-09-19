@@ -496,6 +496,21 @@ impl ViewCache {
         if member { Membership::Member } else { Membership::NotMember }
     }
 
+    /// How `track` stands in the liked list `(source, node)`: `None` when absent, `Some(pending)`
+    /// when it is in the list or a like/unlike of it is in flight.
+    pub fn liked_mark(&self, source: &SourceId, node: &BrowseNode, track: TrackId) -> Option<bool> {
+        let key = (source.clone(), node.clone());
+        if self.pending.lock().unwrap().get(&key).is_some_and(|c| c.iter().any(|c| c.track.id == track)) {
+            return Some(true);
+        }
+        self.remote_playlist_cached(source, node, |e| e.ids.contains(&track)).unwrap_or(false).then_some(false)
+    }
+
+    /// Starts (or resumes) loading `(source, node)` without demanding any of it.
+    pub fn ensure_remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) {
+        self.ensure_remote_playlist_tracks(source, node, 0, ctx);
+    }
+
     /// Is a fetch of `source`'s top-level playlist-folder list in flight?
     pub fn remote_playlists_loading(&self, source: &SourceId) -> bool {
         self.remote_playlists.lock().unwrap().get(source).is_some_and(|e| e.browsing)

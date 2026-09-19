@@ -81,11 +81,24 @@ enum Column {
 }
 
 /// The single per-column cell renderer — a pure function of the track plus the state handed in.
-fn render_cell(col: Column, t: &core::Track, cached: bool, visible: &[String], hotkeys: &[HotkeyMembership]) -> Cell {
+fn render_cell(
+    col: Column,
+    t: &core::Track,
+    cached: bool,
+    liked: Option<bool>,
+    visible: &[String],
+    hotkeys: &[HotkeyMembership],
+) -> Cell {
     match col {
         Column::Tags => {
             let color = visible.iter().find_map(|attr| t.attrs.get(attr).and_then(|v| tag_color(attr, v)));
-            Cell::colored(t.tags(visible), color)
+            let dot = if liked.is_some() { LIKED_MARK } else { " " };
+            Cell {
+                spans: vec![
+                    Span { text: dot.to_string(), color: None, italic: liked == Some(true) },
+                    Span { text: pad_right_aligned(&t.tags(visible), TAGS_COL_W - 1), color, italic: false },
+                ],
+            }
         }
         Column::Main => Cell::plain(t.main()),
         Column::Source => Cell::plain(t.source(cached)),
@@ -112,12 +125,13 @@ pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &Ha
         .into_iter()
         .map(|t| {
             let cached = s.is_track_cached(&t);
+            let liked = s.liked_mark(t.id);
             Row {
-                tags: render_cell(Column::Tags, &t, cached, visible, &hotkeys),
-                main: render_cell(Column::Main, &t, cached, visible, &hotkeys),
-                hotkeys: render_cell(Column::Hotkeys, &t, cached, visible, &hotkeys),
-                source: render_cell(Column::Source, &t, cached, visible, &hotkeys),
-                duration: render_cell(Column::Duration, &t, cached, visible, &hotkeys),
+                tags: render_cell(Column::Tags, &t, cached, liked, visible, &hotkeys),
+                main: render_cell(Column::Main, &t, cached, liked, visible, &hotkeys),
+                hotkeys: render_cell(Column::Hotkeys, &t, cached, liked, visible, &hotkeys),
+                source: render_cell(Column::Source, &t, cached, liked, visible, &hotkeys),
+                duration: render_cell(Column::Duration, &t, cached, liked, visible, &hotkeys),
                 current: t.is_current(now_playing),
                 pending: pending.contains(&t.id),
             }
@@ -254,8 +268,11 @@ fn main_col_start(content_w: usize) -> usize {
     ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start)
 }
 
-/// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`).
-const TAGS_COL_W: usize = 3;
+/// Fixed widths for the tags/hotkeys/source/duration columns of a track row (see `ui::row::RowItem`);
+/// the tags column is the liked-mark slot plus three cells of tags.
+const TAGS_COL_W: usize = 4;
+
+const LIKED_MARK: &str = "·";
 
 const SOURCE_COL_W: usize = 6;
 

@@ -271,19 +271,6 @@
   `Session::revision` change, so the new row appears without reopening; add the key to the
   picker's footer hint (`[+] new playlist`). An empty picker ("no playlists") gets the same key
   in place of the `:newplaylist <name>` instruction text.
-- [ ] Show a liked marker on track rows: a centre dot `·` at the left of the row, in the Tags
-  column where the bpm value sits (`Column::Tags` in `render_cell`, `ui/src/view/rows.rs`; the
-  `tags` cell of `Row`), for every track that is in a source's Liked Songs — in every list that
-  uses the shared row builder (`tracks_to_rows`): library, search, queue, history, playlists.
-  Give the dot its own fixed one-cell slot at the start of the tags cell (blank when not liked) so
-  bpm values stay aligned whether or not a row is liked, and account for it in `column_layout`'s
-  tags width. Liked state needs a cheap lookup: no list knows it today (see the like/unlike bug
-  above — `Session::set_liked`/`liked_targets`, `core/src/app.rs`, only talk to the source), so
-  keep a set of liked track ids in core, filled from each source's Liked Songs listing as
-  `ViewCache` loads it and updated through the same pending/settle path that bug item introduces
-  for like/unlike; rows read it under the frame snapshot, and a change bumps `Session::revision`.
-  While a like/unlike is pending, draw the dot italic like a pending playlist-hotkey letter. Best
-  done together with, or right after, the like/unlike bug fix.
 - [ ] Remember the last-playing track across restarts and select it on startup. Persist it in
   `state.toml` (`app/src/main.rs`'s `save_state`/load path, next to volume and hotkeys): the track id
   plus the context it was playing from (screen and playlist — local id or remote `(source, node)`),

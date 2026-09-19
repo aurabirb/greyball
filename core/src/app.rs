@@ -1368,7 +1368,19 @@ impl Session {
                 continue;
             }
             self.view.ensure_remote_playlists(&source, ctx);
+            if let Some(node) = self.sources.get(&source).and_then(|s| s.liked_songs_node()) {
+                self.view.ensure_remote_playlist_loading(&source, &node, ctx);
+            }
         }
+    }
+
+    /// `None` when `track` isn't in any source's liked list; `Some(pending)` when it is, or a
+    /// like/unlike of it is in flight (`pending`).
+    pub fn liked_mark(&self, track: TrackId) -> Option<bool> {
+        self.sources
+            .iter()
+            .filter_map(|(id, src)| self.view.liked_mark(id, &src.liked_songs_node()?, track))
+            .reduce(|a, b| a || b)
     }
 
     /// All of a remote playlist's ingested track ids, cheap (reads straight
