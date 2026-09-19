@@ -94,11 +94,15 @@ pub trait Source: Send + Sync {
         Err(Error::Unsupported("add_to_playlist"))
     }
 
-    /// Remove every occurrence of `track_uri` from playlist `node`. Blocking,
-    /// like `browse`. Default: unsupported.
-    fn remove_from_playlist(&self, _node: &BrowseNode, _track_uri: &str) -> Result<()> {
+    /// Remove `track_uri` from playlist `node`: only the occurrence at `position` when given (it
+    /// must still be that track, else an error), every occurrence otherwise. Blocking, like
+    /// `browse`. Default: unsupported.
+    fn remove_from_playlist(&self, _node: &BrowseNode, _track_uri: &str, _position: Option<usize>) -> Result<()> {
         Err(Error::Unsupported("remove_from_playlist"))
     }
+
+    /// Drop any cached copy of playlist `node`, so the next `browse` fetches it afresh. Default: nothing cached.
+    fn forget_playlist(&self, _node: &BrowseNode) {}
 
     /// True for a source-specific synthetic browse folder that isn't a real
     /// user playlist (e.g. Spotify's "Liked Songs", backed by `/me/tracks`

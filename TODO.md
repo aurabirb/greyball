@@ -23,12 +23,6 @@
   in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
   `/` from another list jumps to the docked one. Make the window the unit: everything Search does
   as a tab it does in any placement, through the same `TrackList` paths.
-- [ ] Unify like and unlike into one key called "like" that works exactly like a playlist hotkey:
-  it toggles the selected track's membership in Liked Songs (`Session::set_liked` through the same
-  pending/settle path as `ViewCache::set_remote_membership`, with the italic pending dot), so a
-  liked track pressed again is removed. Remove the separate `BuiltinAction::Unlike` (default `L`),
-  its Help row and its own confirm; the unlike direction asks for confirmation the way the
-  playlist-key removal item below describes (one shared confirm path). `Like` stays `l`.
 - [ ] Show the approximate position of the now-playing track on the scrollbar: a small marker in
   the scrollbar gutter (`draw_scrollbar`, `ui/src/view/scroll.rs`) at the proportional row
   `playing_row * list_h / total`, drawn only in a list that contains the playing track (the row from
@@ -104,21 +98,6 @@
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
   slow interval) on an actual triggering event instead of polling for one.
-- [ ] Question (analysis first, related to the duplicate-occurrence item below): when a track that
-  occurs several times in a remote playlist is removed (hotkey toggle off, `ViewCache::
-  set_remote_membership`, `core/src/view_cache.rs` ~551; `Source::remove_from_playlist`,
-  `core/src/traits.rs`), every occurrence of it dims and then disappears. Answer, from the code:
-  are the removal requests sent in parallel or in series, and how many per press? Does the source
-  actually remove all occurrences from the playlist? Spotify's `remove_playlist_track`
-  (`sources/spotify/src/webapi.rs` ~538) is documented as removing every occurrence with one
-  `DELETE /v1/playlists/{id}/tracks` by URI — verify that claim, and check the other sources
-  (soundcloud, local playlists) and the local-catalog removal path. Check whether the pending marker
-  is keyed by track identity rather than by position (which is why all rows dim), whether the settle
-  step removes rows by identity (all occurrences) or by index, and whether a later refetch can bring
-  back occurrences the server did not remove. Write the answers down, then decide whether removal
-  should target one occurrence (by position/`snapshot_id`) or all, and make the dimming and the
-  settle consistent with that.
-  A row is identified by (list, absolute index) — see `Session::playing_row`.
 - [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
   (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
   Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the
@@ -138,27 +117,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Confirm before a playlist hotkey removes a track: when pressing a playlist's key on the selected
-  track would REMOVE it from that playlist (the track is already a member, so the toggle is a
-  removal — local playlists and remote ones through `ViewCache::set_remote_membership`,
-  `core/src/view_cache.rs`, the hotkey path in `ui/src/keybindings.rs`/`Session`), ask for
-  confirmation first, exactly like the unlike key does (`Unlike`'s "Confirms first." flow — find
-  its confirm dialog and reuse it, worded for the playlist: `Remove <track> from <playlist>?`).
-  Adding needs no confirmation. Enter/`y` confirms, Esc/`n` cancels, and nothing is sent before
-  confirmation (no pending marker, no request). One shared confirm path for both.
-  Position-aware removal: when the playlist the pressed key belongs to is the one open in the focused
-  list, the key removes only the highlighted OCCURRENCE (by its position in that playlist), not every
-  instance of the track; the confirmation names it (`Remove <track> (row N) from <playlist>?`) and only
-  that row dims and disappears. From any other view (a different list, Search, History) there is no
-  position, so the key keeps meaning "remove the track from that playlist" and the confirmation says
-  how many occurrences go when there are several. This needs a removal request that targets a
-  position: local playlists remove by index; Spotify's `DELETE /v1/playlists/{id}/tracks`
-  (`remove_playlist_track`, `sources/spotify/src/webapi.rs` ~538) currently removes every occurrence
-  of a URI, so use its `positions` field with the playlist's `snapshot_id` (and
-  `Source::remove_from_playlist` in `core/src/traits.rs` grows a position argument); the settle step
-  and the pending dimming must be keyed by position too. Fix together with the duplicate-occurrence
-  items (the playing-position bug and the removal question), which share the position-aware row
-  identity.
 - [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
   `BAR_WIDTH` (24, `ui/src/view/status_line.rs`). Today `StatusLine::layout` reserves the fixed bar and
   hands every spare column to the title field (`name_w`), which `pad`s a short title with

@@ -20,7 +20,7 @@ Queue, Playlists.
 | <kbd>q</kbd> | Enqueue the selected track |
 | <kbd>.</kbd> / <kbd>,</kbd> | Seek forward / back |
 | <kbd>+</kbd> / <kbd>-</kbd> | Volume up / down |
-| <kbd>l</kbd> / <kbd>Shift</kbd>+<kbd>l</kbd> | Like / unlike the selected track |
+| <kbd>l</kbd> | Like the selected track, or unlike it (after a confirmation) when it is liked |
 | <kbd>Shift</kbd>+<kbd>Q</kbd> | Quit |
 
 `:` commands include `search`/`s`, `newplaylist`/`np`, `add-to-playlist`/`add`,

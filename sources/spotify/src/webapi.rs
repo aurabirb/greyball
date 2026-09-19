@@ -340,6 +340,10 @@ impl WebApi {
         self.request(reqwest::Method::GET, url, None)
     }
 
+    fn get_json(&self, url: &str) -> Result<serde_json::Value, String> {
+        self.get(url)?.json().map_err(|e| e.to_string())
+    }
+
     fn post(&self, url: &str, body: &serde_json::Value) -> Result<(), String> {
         self.request(reqwest::Method::POST, url, Some(body))?;
         Ok(())
@@ -541,6 +545,20 @@ impl WebApi {
         let url = format!("{API}/playlists/{playlist_id}/tracks");
         self.delete(&url, &serde_json::json!({ "tracks": [{ "uri": track_uri }] }))
             .map_err(clarify_playlist_write_error)
+    }
+
+    /// `DELETE /v1/playlists/{id}/tracks` with `positions` and the playlist's `snapshot_id`: removes
+    /// only the row at `position`, and only if it still holds `track_uri`.
+    pub fn remove_playlist_position(&self, playlist_id: &str, track_uri: &str, position: usize) -> Result<(), String> {
+        let snapshot = self.get_json(&format!("{API}/playlists/{playlist_id}?fields=snapshot_id"))?;
+        let snapshot = snapshot["snapshot_id"].as_str().ok_or("the playlist has no snapshot_id")?;
+        let row = self.get_json(&format!("{API}/playlists/{playlist_id}/items?limit=1&offset={position}"))?;
+        if row["items"][0]["item"]["uri"].as_str() != Some(track_uri) {
+            return Err("the playlist changed: that row is no longer this track".to_string());
+        }
+        let url = format!("{API}/playlists/{playlist_id}/tracks");
+        let body = serde_json::json!({ "tracks": [{ "uri": track_uri, "positions": [position] }], "snapshot_id": snapshot });
+        self.delete(&url, &body).map_err(clarify_playlist_write_error)
     }
 
     /// One page of the current user's saved ("Liked Songs") tracks, plus the

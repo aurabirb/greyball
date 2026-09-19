@@ -175,7 +175,13 @@ impl Source for SpotifySource {
         }
     }
 
-    fn remove_from_playlist(&self, node: &BrowseNode, track_uri: &str) -> Result<()> {
+    fn forget_playlist(&self, node: &BrowseNode) {
+        if let BrowseNode::Path(id) = node {
+            self.playlists.lock().unwrap().remove(id);
+        }
+    }
+
+    fn remove_from_playlist(&self, node: &BrowseNode, track_uri: &str, position: Option<usize>) -> Result<()> {
         match node {
             BrowseNode::Path(id) if id == LIKED_SONGS => {
                 self.api.remove_saved_track(&track_id_from_uri(track_uri)?).map_err(src_err)
@@ -183,7 +189,11 @@ impl Source for SpotifySource {
             BrowseNode::Path(id) if id.starts_with(ALBUM_PREFIX) => {
                 Err(Error::Unsupported("remove_from_playlist: albums are read-only"))
             }
-            BrowseNode::Path(id) => self.api.remove_playlist_track(id, track_uri).map_err(src_err),
+            BrowseNode::Path(id) => match position {
+                Some(at) => self.api.remove_playlist_position(id, track_uri, at),
+                None => self.api.remove_playlist_track(id, track_uri),
+            }
+            .map_err(src_err),
             BrowseNode::Root => Err(Error::Unsupported("remove_from_playlist: not a playlist")),
         }
     }

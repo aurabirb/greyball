@@ -369,13 +369,14 @@ impl MedleyView {
             Event::Key(Key::Right) => self.seek(5000),
             Event::Key(Key::Left) => self.seek(-5000),
             &Event::Char(key) => {
-                let (sel, hotkeys) = self.with_session(|s| {
-                    let sel = self.active_list().and_then(|list| list.selected_track(s));
-                    (sel, s.hotkeys().into_iter().collect())
+                let (sel, open_row, hotkeys) = self.with_session(|s| {
+                    let list = self.active_list();
+                    let sel = list.and_then(|list| list.selected_track(s));
+                    (sel, list.and_then(|list| list.open_row(s)), s.hotkeys().into_iter().collect())
                 });
                 // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
-                match keybindings::hotkey_toggle(key, sel, &hotkeys) {
-                    Some(cmd) => self.run(cmd),
+                match keybindings::hotkey_toggle(key, sel, &hotkeys, open_row) {
+                    Some(cmd) => self.run_confirmed(cmd),
                     None => self.handle_action(keybindings::map(key, sel, &hotkeys)),
                 }
             }

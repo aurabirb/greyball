@@ -143,11 +143,11 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `MedleyView::bind_hotkey` is the one bind path, for a list's direct assign and a Help row's capture
   alike: it asks the same `taken`, binds at once when nothing is overwritten, and otherwise — the key
   is on another playlist, or the target playlist has a different key — opens `input::confirm`, the
-  Yes/No cursive dialog `F` (unlike) also uses (Enter/`y` confirms, Esc/`n` cancels). The dialog is a
+  Yes/No cursive dialog a removal (`run_confirmed`: a playlist key or `l` on a member track) also uses (Enter/`y` confirms, Esc/`n` cancels). The dialog is a
   layer over the shell, so no key reaches a window while it is open, and its closure owns the
   `(target, key)` it named; `commit_bind` runs through `on_root` on a yes. A built-in rebound in Help
   asks only when it takes a playlist's key; a key another built-in answers to stays a refusal. Inside an open playlist a playlist key
-  toggles the selected track's membership as in any list. A filter stays with its window
+  toggles the selected track's membership as in any list; a removal asks first (`Session::removal_prompt`), and from the list showing that playlist unfiltered it removes only the cursor row (`TrackList::open_row`, a position; `PendingRows` dims just that row), elsewhere every occurrence. A filter stays with its window
   across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 
 ## Memos

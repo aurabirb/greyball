@@ -152,8 +152,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track", ""),
     builtin(Section::Tracks, BuiltinAction::Wedge, "wedge the selected track to the front of the queue", ""),
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
-    builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs)", ""),
-    builtin(Section::Tracks, BuiltinAction::Unlike, "unlike the selected track", "Confirms first."),
+    builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs), or unlike it when it is already liked", "Confirms before removing."),
     builtin(Section::Tracks, BuiltinAction::ExportPlaylist, "export the selected or open local playlist as M3U", ""),
     fixed(
         Section::Tracks,

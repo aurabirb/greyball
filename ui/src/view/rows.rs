@@ -1,11 +1,10 @@
-use std::collections::HashSet;
 
 use cursive::{Printer, Rect};
 use cursive::theme::{Color, ColorStyle, Effect, Style};
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{HotkeyMembership, Session, TrackId};
+use core::{HotkeyMembership, PendingRows, Session};
 
 use crate::row::RowItem;
 
@@ -124,7 +123,7 @@ fn render_cell(
 }
 
 /// The one track-row builder every list and docked pane goes through.
-pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &HashSet<TrackId>, offset: usize, playing: Option<usize>) -> Vec<Row> {
+pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &PendingRows, offset: usize, playing: Option<usize>) -> Vec<Row> {
     let visible = &s.cfg.visible_track_attrs;
     let hotkeys = s.hotkey_memberships();
     tracks
@@ -140,7 +139,7 @@ pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &Ha
                 source: render_cell(Column::Source, &t, cached, liked, visible, &hotkeys),
                 duration: render_cell(Column::Duration, &t, cached, liked, visible, &hotkeys),
                 current: playing == Some(offset + i),
-                pending: pending.contains(&t.id),
+                pending: pending.has(t.id, offset + i),
             }
         })
         .collect()

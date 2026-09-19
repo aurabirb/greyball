@@ -29,7 +29,7 @@ use crate::types::{
     LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchHit, SearchQuery, SourceId, Track,
     TrackId, parse_artist_title,
 };
-use crate::view_cache::{RemoteCtx, ViewCache};
+use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
 
 /// How long a skip waits for another before its track actually loads.
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -73,7 +73,6 @@ pub enum BuiltinAction {
     Enqueue,
     Wedge,
     Like,
-    Unlike,
     SwitchPlaylists,
     OpenHelp,
     RevealPlaying,
@@ -114,7 +113,6 @@ impl BuiltinAction {
         (BuiltinAction::Enqueue, Some('q')),
         (BuiltinAction::Wedge, Some('w')),
         (BuiltinAction::Like, Some('l')),
-        (BuiltinAction::Unlike, Some('L')),
         (BuiltinAction::SwitchPlaylists, Some('`')),
         (BuiltinAction::OpenHelp, Some('?')),
         (BuiltinAction::RevealPlaying, Some('0')),
@@ -159,7 +157,6 @@ impl BuiltinAction {
             BuiltinAction::Enqueue => "enqueue",
             BuiltinAction::Wedge => "wedge",
             BuiltinAction::Like => "like",
-            BuiltinAction::Unlike => "unlike",
             BuiltinAction::SwitchPlaylists => "switch-playlists",
             BuiltinAction::OpenHelp => "open-help",
             BuiltinAction::RevealPlaying => "reveal-playing",
@@ -244,23 +241,19 @@ pub enum Command {
         track: TrackId,
         playlist: PlaylistId,
     },
-    /// Playlist-hotkey toggle (backtick-bound key pressed on a selected
-    /// track): adds `track` to `playlist` if absent, else removes every
-    /// occurrence of it. `playlist` may be local or remote — see
-    /// `Session::toggle_playlist_membership`.
+    /// Playlist-hotkey toggle: adds `track` to `playlist` if absent, else removes it: only the
+    /// occurrence at `position` when given, every occurrence otherwise. `playlist` may be local or
+    /// remote — see `Session::toggle_playlist_membership`.
     TogglePlaylistMembership {
         track: TrackId,
         playlist: HotkeyTarget,
+        position: Option<usize>,
     },
     LinkPick(TrackId),
     Unlink(TrackId),
-    /// `f`: idempotent add-only to whichever liked/favorites synthetic
-    /// playlist is discoverable for the track's own source(s) — see
-    /// `Session::liked_targets`. Never removes.
+    /// `l`: toggles the track in the liked/favorites synthetic playlist(s) of its own sources —
+    /// see `Session::liked_targets`.
     Like(TrackId),
-    /// `F`, after the UI's own confirmation dialog: removes from the same
-    /// liked/favorites playlist(s) `Like` would add to.
-    Unlike(TrackId),
     ExportM3u(PlaylistId),
     /// Export to an explicit path.
     ExportM3uTo {
@@ -799,8 +792,8 @@ impl Session {
                 self.save_playlist(&p)?;
                 Ok(Dispatch::Ok)
             }
-            Command::TogglePlaylistMembership { track, playlist } => {
-                self.toggle_playlist_membership(track, playlist)
+            Command::TogglePlaylistMembership { track, playlist, position } => {
+                self.toggle_playlist_membership(track, playlist, position)
             }
             Command::LinkPick(id) => match self.link_pick.take() {
                 None => {
@@ -827,8 +820,7 @@ impl Session {
                 }
                 Ok(Dispatch::Ok)
             }
-            Command::Like(track) => self.set_liked(track, true),
-            Command::Unlike(track) => self.set_liked(track, false),
+            Command::Like(track) => self.set_liked(track),
             Command::ExportM3u(id) => {
                 let name = self.store.get_playlist(id)?.ok_or(Error::NotFound)?.name;
                 self.export_m3u_to(id, PathBuf::from(format!("{name}.m3u8")))
@@ -2350,7 +2342,7 @@ impl Session {
     }
 
     /// A local playlist flips in the store now; a remote one settles on a background thread.
-    fn toggle_playlist_membership(&mut self, track: TrackId, target: HotkeyTarget) -> Result<Dispatch> {
+    fn toggle_playlist_membership(&mut self, track: TrackId, target: HotkeyTarget, position: Option<usize>) -> Result<Dispatch> {
         match target {
             HotkeyTarget::Local(playlist) => {
                 let mut p = self.store.get_playlist(playlist)?.ok_or(Error::NotFound)?;
@@ -2358,19 +2350,64 @@ impl Session {
                 let added = !p.items.contains(&track);
                 if added {
                     p.items.push(track);
+                } else if let Some(row) = position {
+                    if p.items.get(row) != Some(&track) {
+                        return Ok(Dispatch::Refused(format!("{name:?} is no longer at that row")));
+                    }
+                    p.items.remove(row);
                 } else {
-                    // Every occurrence: an import or a hand edit can duplicate a track.
                     p.items.retain(|&t| t != track);
                 }
                 self.save_playlist(&p)?;
                 Ok(Dispatch::MembershipSet { track: name, playlist: p.name, added })
             }
-            HotkeyTarget::Remote(source, node) => Ok(self.toggle_remote_playlist_membership(track, source, node)),
+            HotkeyTarget::Remote(source, node) => Ok(self.toggle_remote_playlist_membership(track, source, node, position)),
             HotkeyTarget::Builtin(_) => Ok(Dispatch::Ok),
         }
     }
 
-    fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode) -> Dispatch {
+    /// How many times `track` is a settled member of `target`.
+    fn occurrences(&self, track: TrackId, target: &HotkeyTarget) -> usize {
+        match target {
+            HotkeyTarget::Local(id) => self.playlist_track_ids(*id).iter().filter(|&&t| t == track).count(),
+            HotkeyTarget::Remote(source, node) => self.view.remote_occurrences(source, node, track),
+            HotkeyTarget::Builtin(_) => 0,
+        }
+    }
+
+    /// The question to ask before running `cmd` when it would remove a track, else `None`.
+    pub fn removal_prompt(&self, cmd: &Command) -> Option<String> {
+        match cmd {
+            Command::TogglePlaylistMembership { track, playlist, position } => {
+                let count = self.occurrences(*track, playlist);
+                let name = self.store.get_track(*track).ok().flatten()?.display_name();
+                let from = match playlist {
+                    HotkeyTarget::Local(id) => self.store.get_playlist(*id).ok().flatten()?.name,
+                    HotkeyTarget::Remote(source, node) => {
+                        self.remote_playlists(source).into_iter().find(|(_, n)| n == node)?.0
+                    }
+                    HotkeyTarget::Builtin(_) => return None,
+                };
+                Some(match (count, position) {
+                    (0, _) => return None,
+                    (_, Some(row)) => format!("Remove {name:?} (row {}) from {from:?}?", row + 1),
+                    (1, None) => format!("Remove {name:?} from {from:?}?"),
+                    (n, None) => format!("Remove all {n} occurrences of {name:?} from {from:?}?"),
+                })
+            }
+            Command::Like(track) => {
+                let t = self.store.get_track(*track).ok().flatten()?;
+                self.is_liked(&t).then(|| format!("Remove {:?} from Liked Songs?", t.display_name()))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_liked(&self, track: &Track) -> bool {
+        self.liked_targets(track).iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
+    }
+
+    fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode, position: Option<usize>) -> Dispatch {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Dispatch::Ok;
         };
@@ -2379,14 +2416,19 @@ impl Session {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: {source} isn't available"));
         };
         if src.is_synthetic(&node) {
-            // A toggle could silently unlike; Liked Songs only changes through Like/Unlike.
-            let msg = format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use like/unlike");
+            // A toggle could silently unlike; Liked Songs only changes through the like key.
+            let msg = format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use the like key");
             return refused("toggle_playlist_membership", msg);
         }
         let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: track isn't on {source}"));
         };
-        if !self.view.set_remote_membership(t, uri, src, node, None, self.remote_ctx()) {
+        // Only a settled member is removed, so an unknown state (still loading) never removes unasked.
+        let change = match self.view.remote_occurrences(&source, &node, track) {
+            0 => Change::Add,
+            _ => Change::Remove(position),
+        };
+        if !self.view.set_remote_membership(t, uri, src, node, change, self.remote_ctx()) {
             return Dispatch::Refused(format!("Still updating {name:?} in that playlist"));
         }
         self.invalidate_hotkey_memberships();
@@ -2396,6 +2438,11 @@ impl Session {
     /// Tracks with an add/remove still in flight on this remote playlist — its rows render as pending.
     pub fn remote_pending_ids(&self, source: &SourceId, node: &BrowseNode) -> Vec<TrackId> {
         self.view.remote_pending_ids(source, node)
+    }
+
+    /// What has a change in flight on this remote playlist, as its rows dim it.
+    pub fn remote_pending_rows(&self, source: &SourceId, node: &BrowseNode) -> PendingRows {
+        self.view.remote_pending_rows(source, node)
     }
 
     /// The hotkeys column's lookup table, one entry per playlist-bound key. Rebuilt only after a
@@ -2466,20 +2513,22 @@ impl Session {
             .collect()
     }
 
-    /// Likes or unlikes `track` on each of its sources' liked list, off the UI thread.
-    fn set_liked(&mut self, track: TrackId, like: bool) -> Result<Dispatch> {
+    /// Likes `track` on each of its sources' liked list, or unlikes it when it is already liked, off the UI thread.
+    fn set_liked(&mut self, track: TrackId) -> Result<Dispatch> {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
         let targets = self.liked_targets(&t);
         let name = t.display_name();
+        let like = !self.is_liked(&t);
         if targets.is_empty() {
             let verb = if like { "like" } else { "unlike" };
             return Ok(refused("set_liked", format!("Can't {verb} {name:?}: no liked-songs source for this track")));
         }
         let mut started = false;
         for (src, node, uri) in targets {
-            started |= self.view.set_remote_membership(t.clone(), uri, src, node, Some(like), self.remote_ctx());
+            let change = if like { Change::Add } else { Change::Remove(None) };
+            started |= self.view.set_remote_membership(t.clone(), uri, src, node, change, self.remote_ctx());
         }
         if !started {
             return Ok(Dispatch::Refused(format!("Still updating {name:?} in Liked Songs")));

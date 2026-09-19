@@ -43,10 +43,6 @@ pub enum Action {
     AddToPlaylistPrompt(TrackId),
     /// UI-local: open the command line with this command's long name and a space typed in.
     Prompt(&'static str),
-    /// UI-local: open the Yes/No "remove from Liked Songs?" confirm dialog
-    /// for the given track (`F`, a track selected) — the view owns the
-    /// dialog; a "yes" answer is what actually dispatches `Command::Unlike`.
-    ConfirmUnlike(TrackId),
     /// UI-local: export the selected or open local playlist as M3U.
     ExportPlaylist,
     /// UI-local: seek by this many ms, then reveal the playing track.
@@ -135,7 +131,6 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::Like => selected
             .map(|id| Action::Command(Command::Like(id)))
             .unwrap_or(Action::None),
-        BuiltinAction::Unlike => selected.map(Action::ConfirmUnlike).unwrap_or(Action::None),
         BuiltinAction::SwitchPlaylists => Action::SwitchPlaylists,
         BuiltinAction::OpenHelp => Action::OpenHelp,
         BuiltinAction::RevealPlaying => Action::RevealPlaying,
@@ -172,14 +167,21 @@ fn builtin_at(hotkeys: &HashMap<char, HotkeyTarget>, ch: char) -> Option<Builtin
     })
 }
 
-/// The membership toggle `ch` means when it is bound to a playlist and a track is selected.
-pub fn hotkey_toggle(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<Command> {
+/// The membership toggle `ch` means when it is bound to a playlist and a track is selected;
+/// `open_row` is the playlist open in the focused list and the selected row of it.
+pub fn hotkey_toggle(
+    ch: char,
+    selected: Option<TrackId>,
+    hotkeys: &HashMap<char, HotkeyTarget>,
+    open_row: Option<(HotkeyTarget, usize)>,
+) -> Option<Command> {
     let track = selected?;
     let playlist = match hotkeys.get(&ch)?.clone() {
         target @ (HotkeyTarget::Local(_) | HotkeyTarget::Remote(_, _)) => target,
         HotkeyTarget::Builtin(_) => return None,
     };
-    Some(Command::TogglePlaylistMembership { track, playlist })
+    let position = open_row.and_then(|(open, row)| (open == playlist).then_some(row));
+    Some(Command::TogglePlaylistMembership { track, playlist, position })
 }
 
 /// The command-line prompt for the command `action` is the key of.

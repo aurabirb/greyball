@@ -8,7 +8,7 @@ use cursive::event::{Event, Key, MouseEvent};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, Command, HotkeyTarget, ListRef, Playlist, PlaylistId, Session, SourceId, TrackId};
+use core::{BrowseNode, Command, HotkeyTarget, ListRef, PendingRows, Playlist, PlaylistId, Session, SourceId, TrackId};
 
 use crate::keybindings;
 use crate::row::RowItem;
@@ -276,6 +276,11 @@ impl TrackList {
         row.is_some()
     }
 
+    /// The open playlist and the cursor row in it, while the list shows it whole (no filter): a row's position there.
+    pub(super) fn open_row(&self, s: &Session) -> Option<(HotkeyTarget, usize)> {
+        self.filtered_ids(s).is_none().then(|| self.open_target().map(|t| (t, self.state.cursor)))?
+    }
+
     pub(super) fn selected_track(&self, s: &Session) -> Option<TrackId> {
         self.visible_track_ids(s).get(self.state.cursor).copied()
     }
@@ -420,10 +425,12 @@ impl TrackList {
 
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
     fn rows(&self, s: &Session, offset: usize, limit: usize) -> Vec<Row> {
-        let pending: HashSet<TrackId> = match &self.open {
-            Open::Remote(sid, _, node) => s.remote_pending_ids(sid, node).into_iter().collect(),
-            _ => HashSet::new(),
+        let pending = match &self.open {
+            Open::Remote(sid, _, node) => s.remote_pending_rows(sid, node),
+            _ => PendingRows::default(),
         };
+        // A row position means nothing in a filtered view.
+        let pending = if self.filtered_ids(s).is_some() { PendingRows { rows: HashSet::new(), ..pending } } else { pending };
         let playing = self.playing_index(s);
         let track_rows = |tracks| tracks_to_rows(s, tracks, &pending, offset, playing);
         if let Some(matched) = self.filtered_ids(s) {

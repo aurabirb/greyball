@@ -57,7 +57,7 @@ impl MedleyView {
             Ok(None) => self.notify(Notice::Status { text: format!("Bound '{key}' to {name}"), refused: false }),
             Err(BindError::BuiltinKey(blocking)) => self.refuse(held(&blocking, self)),
             Err(BindError::SyntheticPlaylist) => {
-                self.refuse(format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead"))
+                self.refuse(format!("Can't bind '{key}': {name} isn't a real playlist — use the like key instead"))
             }
         }
     }

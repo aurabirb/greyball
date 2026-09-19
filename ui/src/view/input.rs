@@ -6,7 +6,7 @@ use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::view::Nameable;
 use cursive::views::{Dialog, OnEventView, ScrollView, TextView};
 
-use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId, TrackId};
+use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId};
 
 use crate::command;
 use crate::keybindings::{self, Action};
@@ -212,18 +212,17 @@ impl MedleyView {
         }
     }
 
-    /// `F` (`Action::ConfirmUnlike`): a Yes/No cursive dialog.
-    fn confirm_unlike(&mut self, id: TrackId) -> EventResult {
-        let name = self
-            .with_session(|s| s.store.get_track(id).ok().flatten())
-            .map(|t| format!("{} - {}", t.display_artist(), t.title))
-            .unwrap_or_else(|| "this track".to_string());
-        confirm("Unlike", format!("Remove {name:?} from Liked Songs?"), "Remove", move |view| view.run(Command::Unlike(id)))
+    /// Runs `cmd`, asking first when it would remove a track from a playlist or Liked Songs.
+    pub(super) fn run_confirmed(&mut self, cmd: Command) -> EventResult {
+        match self.with_session(|s| s.removal_prompt(&cmd)) {
+            Some(question) => confirm("Remove", question, "Remove", move |view| view.run(cmd.clone())),
+            None => self.run(cmd),
+        }
     }
 
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {
         match action {
-            Action::Command(c) => self.run(c),
+            Action::Command(c) => self.run_confirmed(c),
             // A list that can't be filtered locally sends `/` to the Search window's input instead.
             Action::FocusSearch => {
                 let id = self.active_list_id();
@@ -285,7 +284,6 @@ impl MedleyView {
                 self.buffer = format!("{name} ");
                 EventResult::consumed()
             }
-            Action::ConfirmUnlike(id) => self.confirm_unlike(id),
             Action::ExportPlaylist => {
                 let target = self.with_session(|s| self.active_list().and_then(|list| list.selected_hotkey_target(s)));
                 match target {

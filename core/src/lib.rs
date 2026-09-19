@@ -30,6 +30,7 @@ pub use app::{
     BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, ListRef,
     PLUGIN_HEALTH_CHECK_INTERVAL, Session, cache_rendition,
 };
+pub use view_cache::PendingRows;
 pub use catalog::Catalog;
 pub use config::{
     Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
