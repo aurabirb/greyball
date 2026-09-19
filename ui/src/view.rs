@@ -20,13 +20,11 @@ use crate::screen::{PerScreen, Screen};
 
 use filter::LocalFilter;
 use frame::{CachedFrame, FrameKey};
-use help::HelpModal;
-use hotkeys::HotkeyUi;
 use input::{Editing, key_name};
 use log::LogPane;
 use memo::Memo;
+use modal::Modal;
 use panes::PaneLayout;
-use playlist_picker::PlaylistPicker;
 use playlists::PlaylistNav;
 use rows::draw_row_list;
 use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
@@ -34,7 +32,7 @@ use settings::SettingsPane;
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
-use warnings::{WarningsModal, defocuses_warnings, warnings_label};
+use warnings::{defocuses_warnings, warnings_label};
 
 mod filter;
 mod frame;
@@ -44,6 +42,7 @@ mod input;
 mod lists;
 mod log;
 mod memo;
+mod modal;
 mod mouse;
 mod panes;
 mod playlist_picker;
@@ -93,13 +92,11 @@ pub struct MedleyView {
     focus: Focus,
     /// The Vis pane's background worker + last computed frame.
     vis: Arc<crate::vis::Vis>,
-    /// The plugin-warnings modal.
-    warnings: Option<WarningsModal>,
+    modal: Option<Modal>,
     /// (when, screen, row index) of the last left-click on a list row, for double-click detection.
     last_click: Option<(Instant, Screen, usize)>,
-    hotkeys: HotkeyUi,
-    help: Option<HelpModal>,
-    playlist_picker: Option<PlaylistPicker>,
+    /// Last hotkey bind/unbind result, shown until the next keypress.
+    hotkey_feedback: Option<String>,
     marquee: Marquee,
     /// What `follow_scan` last reported to the scan walk — a cache, not view state; see its doc.
     follow_sig: Memo<lists::FollowKey>,
@@ -128,11 +125,9 @@ impl MedleyView {
             settings: SettingsPane::default(),
             focus: Focus::Main,
             vis,
-            warnings: None,
+            modal: None,
             last_click: None,
-            hotkeys: HotkeyUi::default(),
-            help: None,
-            playlist_picker: None,
+            hotkey_feedback: None,
             marquee: Marquee::new(),
             follow_sig: Memo::default(),
             frame_cache: Memo::default(),
@@ -196,23 +191,8 @@ impl MedleyView {
 
 impl View for MedleyView {
     fn draw(&self, printer: &Printer) {
-        if let Some(pane) = self.panes.fullscreen {
-            self.draw_screen_pane(pane, printer);
-            return;
-        }
-        if let Some(modal) = &self.warnings {
-            self.draw_warnings(modal, printer);
-            return;
-        }
-        if self.draw_hotkey_ui(printer) {
-            return;
-        }
-        if let Some(picker) = &self.playlist_picker {
-            picker.draw(printer);
-            return;
-        }
-        if let Some(help) = &self.help {
-            self.draw_help(help, printer);
+        if let Some(modal) = &self.modal {
+            self.draw_modal(modal, printer);
             return;
         }
 
@@ -324,32 +304,22 @@ impl View for MedleyView {
         let list_h = self.list_h();
         let list_screens: Vec<Screen> =
             pane_bodies.iter().filter_map(|&(pane, _, _)| Screen::from_pane(pane)).collect();
-        let want_statuses = self.warnings.is_some();
 
         // One shared lock for everything this layout pass needs from the
         // session, instead of `clamp_focus`/each `relayout_list` taking their own.
-        let (warn_count, statuses, main_len, pane_lens, list_revision) = self.with_session(|s| {
+        let (warn_count, main_len, pane_lens, list_revision) = self.with_session(|s| {
             let warn_count = s.plugin_warning_count();
-            let statuses = want_statuses.then(|| s.plugin_statuses().to_vec());
             let main_len = self.list_len(s, self.screen);
             let pane_lens: Vec<usize> = list_screens.iter().map(|&scr| self.list_len(s, scr)).collect();
             // Feed the scan walk the visible list so it's prioritized over store order.
             if let Some(scan) = &s.scan {
                 self.follow_scan(s, scan, self.active_screen());
             }
-            (warn_count, statuses, main_len, pane_lens, s.list_revision())
+            (warn_count, main_len, pane_lens, s.list_revision())
         });
 
         self.clamp_focus_given(warn_count);
-        self.refresh_help(list_revision, constraint);
-        self.refresh_playlist_picker(list_revision, constraint);
-        if let (Some(modal), Some(statuses)) = (&mut self.warnings, statuses) {
-            modal.relayout(screen_size_changed, constraint, &statuses);
-        }
-        self.hotkeys.relayout(screen_size_changed, constraint);
-        if let Some(picker) = &mut self.playlist_picker {
-            picker.relayout(screen_size_changed, constraint);
-        }
+        self.relayout_modal(screen_size_changed, list_revision);
         self.lists[self.screen].relayout(main_h_changed, main_len, list_h);
         let mut pane_lens = pane_lens.into_iter();
         for (pane, h, changed) in pane_bodies {
@@ -375,27 +345,15 @@ impl View for MedleyView {
             matches!(event, Event::Mouse { event: MouseEvent::Release(_) | MouseEvent::Hold(_), .. });
         if !is_mouse_followup {
             self.queue_feedback = None;
-            self.hotkeys.feedback = None;
+            self.hotkey_feedback = None;
             self.with_session_mut(|s| s.clear_membership_feedback());
         }
 
         if let Some(result) = self.on_edit_event(&event) {
             return result;
         }
-        if let Some(pane) = self.panes.fullscreen {
-            return self.on_fullscreen_pane_event(pane, &event);
-        }
-        if self.warnings.is_some() {
-            return self.on_warnings_event(&event);
-        }
-        if self.playlist_picker.is_some() {
-            return self.on_playlist_picker_event(&event);
-        }
-        if let Some(result) = self.on_hotkey_ui_event(&event) {
-            return result;
-        }
-        if self.help.is_some() {
-            return self.on_help_event(&event);
+        if self.modal.is_some() {
+            return self.on_modal_event(&event);
         }
 
         // The tab bar lives on the fixed top row of the whole screen, never `last_main_rect`.

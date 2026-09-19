@@ -128,11 +128,6 @@ impl Nav {
     }
 }
 
-/// The list area of a fullscreen modal whose rows start at `list_top`; the last two rows stay free for its footer.
-pub(super) fn modal_list_rect(size: Vec2, list_top: usize) -> Rect {
-    Rect::from_size((0, list_top), (size.x, size.y.saturating_sub(list_top).saturating_sub(2)))
-}
-
 /// Rows per `PageUp`/`PageDown`/Shift-J/Shift-K press on a raw-scroll-offset pane.
 pub(super) const PAGE_SCROLL_STEP: usize = 10;
 

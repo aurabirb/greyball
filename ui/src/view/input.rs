@@ -347,7 +347,7 @@ impl MedleyView {
                 .queue_feedback
                 .clone()
                 .or(membership_feedback.map(|m| format!("  {m}")))
-                .or(self.hotkeys.feedback.clone().map(|m| format!("  {m}")))
+                .or(self.hotkey_feedback.clone().map(|m| format!("  {m}")))
                 .unwrap_or_else(|| {
                     // The Playlists screen's own hint replaces the generic one when a row/open playlist can take a hotkey.
                     if self.screen == Screen::Playlists && hotkey_target_selected {

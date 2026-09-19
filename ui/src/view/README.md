@@ -8,18 +8,19 @@
 A component is a plain struct owning only its own UI state — never the session or a sibling.
 
 - State: a `ListState {cursor, offset}` (`scroll.rs`) for anything with a row cursor, a bare scroll
-  offset otherwise (`HelpModal`, `LogPane`). A modal is an `Option<T>` field that is `Some` only while
-  open; opening constructs it, closing drops it. `StatusLine` and `TabBar` hold no state: they are
+  offset otherwise (`HelpModal`, `LogPane`). A modal is a `Modal` variant held in `MedleyView::modal`
+  only while open; opening constructs it, closing drops it. `StatusLine` and `TabBar` hold no state: they are
   built per use from a session snapshot.
-- `draw(&self, printer, data…)`: gets a `Printer` already `windowed` to the component's rect (the
-  whole screen for a modal) and its data as arguments (`&[Playlist]`, `focused`, …).
+- `draw(&self, printer, data…)`: gets a `Printer` already `windowed` to the component's rect (a modal
+  gets the shell's printer plus its `Rect`) and its data as arguments (`&[Playlist]`, `focused`, …).
 - `on_event(&mut self, event, size, data…)` returns an outcome for the owner to act on: `ListEvent`
-  (`Close`/`Activate`/`Clicked`/`Moved`/`Unhandled`) for list modals, `bool` "close" for `HelpModal`.
+  (`Close`/`Activate`/`Clicked`/`Moved`/`Unhandled`) from a `ListState`, `ModalOutcome` from a modal.
   `click(x, width)` on the one-row bars returns `Option<Command>` (`StatusLine`) or
   `Option<TabBarHit>` (`TabBar`). Components never return `EventResult` or dispatch.
 - One layout function per component, called by both draw and hit-test: `StatusLine::layout`,
-  `TabBar::layout`, `WarningsModal::list_rect`, `modal_list_rect(size, list_top)`,
-  `HelpModal::view_h`, `PaneLayout::split`.
+  `TabBar::layout`, `WarningsModal::list_rect`, `modal_body`/`modal_list` (`modal.rs`, from the
+  modal's `Rect`), `PaneLayout::split`. `draw_modal_frame(printer, rect, title, footer)` draws every
+  modal's title bar and footer hint and returns the body printer.
 - `relayout(resized, size, len…)`, called from `MedleyView::required_size` (the one `&mut self` hook
   that knows the screen size): re-follow the cursor on resize, else clamp the offset to the data length.
 - Shared: `ListState` + `Nav` (key/wheel → `(up, step)`), `Marquee` (one scroll clock for the tab bar
@@ -81,8 +82,12 @@ A component is a plain struct owning only its own UI state — never the session
 
 1. Clear one-keypress feedback (not on mouse hold/release).
 2. `on_edit_event`: an active text field (`Editing`) captures everything.
-3. Exclusive layers, first match wins: fullscreen pane → warnings → playlist picker → hotkey capture
-   → hotkey menu → help. `draw` checks in the order fullscreen pane, warnings, hotkeys, picker, help.
+3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
+   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`, `Pane` for a
+   `PaneMode::Screen` pane), so there is no precedence to order — a modal swallows all input, hence
+   nothing can open a second one. `draw_modal`/`on_modal_event`/`relayout_modal` are the only
+   matches over it; a modal's `on_event` returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`,
+   `Setup(row)`, `Bind`/`Unbind`) that `on_modal_event` acts on.
 4. Fixed-row mouse: row 0 → `TabBar::click`; bottom-2 → warnings button; bottom → `StatusLine::click`.
 5. Rect mouse: `handle_mouse` (`panes.main_rect`), then `handle_pane_mouse` per `panes.rects`; a click
    sets `focus`.
@@ -95,7 +100,7 @@ A component is a plain struct owning only its own UI state — never the session
 
 Components do not know each other. Anything crossing a boundary goes through `MedleyView`: it reads
 one component's outcome and mutates another (`ListEvent::Activate` from the picker →
-`run(AddToPlaylist)`; closing a modal → `fallback_focus()`). `MedleyView` hands a component its data
+`run(AddToPlaylist)`; closing a modal moves focus off the warnings button). `MedleyView` hands a component its data
 and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling, never locks the
 session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
 deliberate exception; `HelpModal`'s lines and `PlaylistPicker`'s playlist list are snapshots too, but
@@ -119,11 +124,10 @@ re-follows it into view.
 
 ## Adding a component
 
-1. New file here; a struct with only its own state; `Option<T>` on `MedleyView` if it is a modal.
+1. New file here; a struct with only its own state; a `Modal` variant if it is a modal.
 2. One private layout fn; `draw` and `on_event`/`click` both call it.
 3. `draw(&self, printer, data…)`; `on_event` returning `ListEvent` or a small outcome enum;
    `relayout` if it has a cursor or offset.
-4. In `MedleyView`: a `draw_*`/`on_*_event` pair that fetches the data with one `with_session` and
-   acts on the outcome; slot it into the precedence chains of `draw` and `on_event`; call `relayout`
-   from `required_size`; open it from `handle_action` or `commit_edit`.
-5. Reuse `ListState`, `Nav`, `modal_list_rect`, `text.rs` before writing scroll or width math.
+4. A modal: an arm in each of `draw_modal`, `on_modal_event` and `relayout_modal` that fetches its
+   data with one `with_session`; open it from `handle_action` or `commit_edit` with its data.
+5. Reuse `ListState`, `Nav`, `draw_modal_frame`/`modal_list`, `text.rs` before writing scroll or width math.

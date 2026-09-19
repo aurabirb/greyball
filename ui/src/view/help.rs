@@ -1,6 +1,5 @@
-use cursive::{Printer, Vec2};
-use cursive::event::{Event, EventResult, Key};
-use cursive::theme::ColorStyle;
+use cursive::{Printer, Rect};
+use cursive::event::{Event, Key};
 
 use core::{HotkeyTarget, Session};
 
@@ -8,12 +7,9 @@ use crate::{command, keybindings};
 
 use super::MedleyView;
 use super::memo::Memo;
+use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_body};
 use super::playlists::top_row_name;
 use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset};
-use super::text::pad;
-
-/// Row the help screen's content starts on (row 0 = title).
-const LIST_TOP: usize = 1;
 
 /// The help/shortcuts screen (`?`/`:help`).
 pub(super) struct HelpModal {
@@ -30,41 +26,33 @@ impl HelpModal {
         Self { scroll: 0, lines, built }
     }
 
+    /// Whether `list_revision` moved since the lines were built, remembering it.
+    pub(super) fn stale(&self, list_revision: u64) -> bool {
+        self.built.changed(list_revision)
+    }
+
     /// Replaces the lines in place and re-clamps `scroll`, so a rebuild never jumps to the top.
-    fn refresh(&mut self, lines: Vec<String>, size: Vec2) {
+    pub(super) fn refresh(&mut self, lines: Vec<String>, rect: Rect) {
         self.lines = lines;
-        self.scroll = bound_offset(self.scroll, self.lines.len(), Self::view_h(size));
+        self.scroll = bound_offset(self.scroll, self.lines.len(), modal_body(rect, true).height());
     }
 
-    /// Content rows between the title and the footer.
-    fn view_h(size: Vec2) -> usize {
-        size.y.saturating_sub(1).saturating_sub(LIST_TOP)
-    }
-
-    /// Scrolls on nav keys/wheel; `true` when `event` closes the screen.
-    fn on_event(&mut self, event: &Event, size: Vec2) -> bool {
+    pub(super) fn on_event(&mut self, event: &Event, rect: Rect) -> ModalOutcome {
         if let Some(nav) = Nav::of(event) {
             let (up, step) = nav.step(PAGE_SCROLL_STEP);
             let scroll = if up { self.scroll.saturating_sub(step) } else { self.scroll.saturating_add(step) };
-            self.scroll = bound_offset(scroll, self.lines.len(), Self::view_h(size));
+            self.scroll = bound_offset(scroll, self.lines.len(), modal_body(rect, true).height());
         }
-        *event == Event::Key(Key::Esc)
+        if *event == Event::Key(Key::Esc) { ModalOutcome::Close } else { ModalOutcome::Stay }
     }
 
-    fn draw(&self, printer: &Printer) {
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad("Help / Shortcuts", p.size.x));
-        });
-
-        let h = Self::view_h(printer.size);
-        let scroll = bound_offset(self.scroll, self.lines.len(), h);
-        for (i, line) in self.lines.iter().skip(scroll).take(h).enumerate() {
-            printer.print((0, LIST_TOP + i), line);
+    pub(super) fn draw(&self, printer: &Printer, rect: Rect) {
+        let footer = "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll";
+        let body = draw_modal_frame(printer, rect, Some("Help / Shortcuts"), footer);
+        let scroll = bound_offset(self.scroll, self.lines.len(), body.size.y);
+        for (i, line) in self.lines.iter().skip(scroll).take(body.size.y).enumerate() {
+            body.print((0, i), line);
         }
-
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            p.print((0, p.size.y.saturating_sub(1)), &pad("  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll", p.size.x));
-        });
     }
 }
 
@@ -111,7 +99,7 @@ fn build_help_lines(
 }
 
 impl MedleyView {
-    fn help_lines(&self, s: &Session) -> Vec<String> {
+    pub(super) fn help_lines(&self, s: &Session) -> Vec<String> {
         let plugin_commands = s.plugin_command_help();
         let playlists = s.playlists();
         let rows = self.top_rows(s);
@@ -136,30 +124,6 @@ impl MedleyView {
 
     pub(super) fn open_help(&mut self) {
         let (lines, list_revision) = self.with_session(|s| (self.help_lines(s), s.list_revision()));
-        self.help = Some(HelpModal::new(lines, list_revision));
-    }
-
-    /// Rebuilds Help's content once `list_revision` drifts — called from `required_size`, never per-draw.
-    pub(super) fn refresh_help(&mut self, list_revision: u64, size: Vec2) {
-        if !self.help.as_ref().is_some_and(|h| h.built.changed(list_revision)) {
-            return;
-        }
-        let lines = self.with_session(|s| self.help_lines(s));
-        if let Some(help) = &mut self.help {
-            help.refresh(lines, size);
-        }
-    }
-
-    pub(super) fn draw_help(&self, help: &HelpModal, printer: &Printer) {
-        help.draw(printer);
-    }
-
-    pub(super) fn on_help_event(&mut self, event: &Event) -> EventResult {
-        let size = self.last_screen_size;
-        if self.help.as_mut().is_some_and(|help| help.on_event(event, size)) {
-            self.help = None;
-            self.focus = self.fallback_focus();
-        }
-        EventResult::consumed()
+        self.modal = Some(Modal::Help(HelpModal::new(lines, list_revision)));
     }
 }

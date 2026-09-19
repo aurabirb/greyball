@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use cursive::{Printer, Rect, Vec2};
-use cursive::event::{Event, EventResult, Key};
-use cursive::theme::ColorStyle;
+use cursive::event::EventResult;
 
 use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 
@@ -10,9 +9,8 @@ use crate::command::Pane;
 use crate::screen::Screen;
 
 use super::MedleyView;
-use super::scroll::{Nav, PAGE_SCROLL_STEP};
+use super::modal::{Modal, draw_modal_frame};
 use super::settings::settings_entries;
-use super::text::pad;
 
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
@@ -27,7 +25,7 @@ pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
     (Side::Top, Axis::Horizontal),
 ];
 
-/// Which optional panes are up and where: docked around the main content, or one of them fullscreen.
+/// Which optional panes are docked around the main content, and where.
 pub(super) struct PaneLayout {
     /// Docked panes in stack order, first = nearest the main content.
     pub(super) open: Vec<Pane>,
@@ -35,8 +33,6 @@ pub(super) struct PaneLayout {
     pub(super) cfg: PaneLayoutConfig,
     /// Per-pane override of `cfg.mode`, applied the next time that pane is toggled.
     pub(super) mode_overrides: HashMap<Pane, PaneMode>,
-    /// The pane shown fullscreen in place of the screens; Esc is the only way out.
-    pub(super) fullscreen: Option<Pane>,
     /// The main list's rect as of the last layout pass.
     pub(super) main_rect: Rect,
     /// Each docked pane's rect as of the last layout pass.
@@ -49,7 +45,6 @@ impl PaneLayout {
             open: Vec::new(),
             cfg,
             mode_overrides: HashMap::new(),
-            fullscreen: None,
             main_rect: Rect::from_size((0, 0), (0, 0)),
             rects: Vec::new(),
         }
@@ -86,8 +81,8 @@ impl PaneLayout {
     }
 
     /// The `(width, rows)` `pane`'s content is rendered into right now, fullscreen or docked.
-    pub(super) fn content_dims(&self, pane: Pane, screen: Vec2) -> Option<(usize, usize)> {
-        if self.fullscreen == Some(pane) {
+    pub(super) fn content_dims(&self, pane: Pane, fullscreen: bool, screen: Vec2) -> Option<(usize, usize)> {
+        if fullscreen {
             Some((screen.x, screen.y.saturating_sub(2)))
         } else {
             self.rects.iter().find(|&&(p, _)| p == pane).map(|&(_, rect)| (rect.width(), rect.height().saturating_sub(1)))
@@ -195,10 +190,14 @@ pub(super) fn pane_title(pane: Pane) -> &'static str {
 }
 
 impl MedleyView {
-    /// `Screen`-mode: `pane` fullscreen, title/content on top, an `Esc to close` hint on the bottom row.
-    pub(super) fn draw_screen_pane(&self, pane: Pane, printer: &Printer) {
-        let h = printer.size.y.saturating_sub(1);
-        let content = printer.windowed(Rect::from_size((0, 0), Vec2::new(printer.size.x, h)));
+    /// `Screen`-mode: `pane` over all of `rect` but a footer hint row.
+    pub(super) fn draw_screen_pane(&self, pane: Pane, printer: &Printer, rect: Rect) {
+        let hint = match pane {
+            Pane::Vis => "  [Esc] close",
+            Pane::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
+            _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
+        };
+        let content = draw_modal_frame(printer, rect, None, hint);
         match pane {
             Pane::Vis => self.vis.draw(&content, true),
             Pane::Log => self.log.draw(&content, true),
@@ -208,16 +207,8 @@ impl MedleyView {
                 self.settings.draw(&content, &entries, true);
             }
             // `toggle_pane` never routes these two here.
-            Pane::Queue | Pane::History => unreachable!("Queue/History never become screen_pane"),
+            Pane::Queue | Pane::History => unreachable!("Queue/History never become a fullscreen pane"),
         }
-        let hint = match pane {
-            Pane::Vis => "  [Esc] close",
-            Pane::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
-            _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
-        };
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            p.print((0, h), &pad(hint, p.size.x));
-        });
     }
 
     /// Open/close `pane`, per its own placement mode — `:log`, `:settings`, bare `:vis`, `:queue`, `:history`.
@@ -227,7 +218,7 @@ impl MedleyView {
                 self.screen = screen;
                 self.playlists.leave();
             } else {
-                self.panes.fullscreen = if self.panes.fullscreen == Some(pane) { None } else { Some(pane) };
+                self.modal = Some(Modal::Pane(pane));
             }
         } else if let Some(i) = self.panes.open.iter().position(|&p| p == pane) {
             self.panes.open.remove(i);
@@ -240,7 +231,7 @@ impl MedleyView {
 
     /// Sync cursive's own redraw rate to whether/how fast the Vis pane needs to animate.
     pub(super) fn vis_fps_cb(&self) -> EventResult {
-        let vis_open = self.panes.open.contains(&Pane::Vis) || self.panes.fullscreen == Some(Pane::Vis);
+        let vis_open = self.panes.open.contains(&Pane::Vis) || self.is_fullscreen(Pane::Vis);
         self.vis.set_enabled(vis_open);
         let fps = if vis_open { crate::vis::FPS } else { crate::BASELINE_FPS };
         EventResult::with_cb(move |siv| siv.set_fps(fps))
@@ -251,30 +242,15 @@ impl MedleyView {
         match pane {
             Pane::Settings => self.jump_settings(up, step),
             Pane::Log => {
-                let dims = self.panes.content_dims(pane, self.last_screen_size);
+                let dims = self.panes.content_dims(pane, self.is_fullscreen(pane), self.last_screen_size);
                 self.log.scroll_by(up, step, dims);
             }
             Pane::Vis | Pane::Queue | Pane::History => {}
         }
     }
 
-    /// The fullscreen pane's events: Esc closes it, nav keys scroll it, everything else is swallowed.
-    pub(super) fn on_fullscreen_pane_event(&mut self, pane: Pane, event: &Event) -> EventResult {
-        match (event, Nav::of(event)) {
-            (Event::Key(Key::Esc), _) => {
-                self.panes.fullscreen = None;
-                if pane == Pane::Vis {
-                    self.vis.set_enabled(false);
-                    return EventResult::with_cb(|siv| siv.set_fps(crate::BASELINE_FPS));
-                }
-            }
-            (_, Some(nav @ (Nav::Line(_) | Nav::Page(_)))) => {
-                let (up, step) = nav.step(PAGE_SCROLL_STEP);
-                self.scroll_pane(pane, up, step);
-            }
-            _ => {}
-        }
-        EventResult::consumed()
+    pub(super) fn is_fullscreen(&self, pane: Pane) -> bool {
+        matches!(self.modal, Some(Modal::Pane(p)) if p == pane)
     }
 }
 

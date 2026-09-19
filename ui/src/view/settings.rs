@@ -81,7 +81,7 @@ impl MedleyView {
     pub(super) fn jump_settings(&mut self, up: bool, step: usize) {
         let pane_cfg = self.panes.cfg;
         let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
-        let h = self.panes.content_dims(Pane::Settings, self.last_screen_size).map_or(0, |(_, h)| h);
+        let h = self.panes.content_dims(Pane::Settings, self.is_fullscreen(Pane::Settings), self.last_screen_size).map_or(0, |(_, h)| h);
         self.settings.list.jump(up, step, n, h);
     }
 

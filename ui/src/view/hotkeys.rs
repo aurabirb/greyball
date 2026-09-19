@@ -1,157 +1,127 @@
 use std::collections::HashMap;
 
-use cursive::{Printer, Vec2};
-use cursive::event::{Event, EventResult, Key};
-use cursive::theme::ColorStyle;
+use cursive::{Printer, Rect};
+use cursive::event::{Event, Key};
 
-use core::{BindError, HotkeyTarget};
+use core::{BindError, HotkeyTarget, Session};
 
 use super::MedleyView;
 use super::input::key_name;
+use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
 use super::playlists::top_row_name;
-use super::scroll::{ListEvent, ListState, modal_list_rect};
+use super::scroll::{ListEvent, ListState};
 use super::text::{pad, truncate_ellipsis};
 
-/// Row the Hotkeys menu's list, and the standalone capture prompt, start on.
-const LIST_TOP: usize = 2;
-
-/// Hotkey-binding UI state: the Hotkeys menu, the "press a key" capture, and the last bind result.
+/// The fullscreen Hotkeys menu: every `core::BuiltinAction`, plus the row awaiting a new key, if any.
 #[derive(Default)]
-pub(super) struct HotkeyUi {
-    /// The fullscreen Hotkeys menu's list; `Some` only while the menu is open.
-    pub(super) menu: Option<ListState>,
-    /// Target and display name awaiting a new key — a menu row, or a Playlists row with the menu closed.
-    pub(super) capture: Option<(HotkeyTarget, String)>,
-    /// Last bind/unbind result, shown until the next keypress.
-    pub(super) feedback: Option<String>,
+pub(super) struct HotkeyMenu {
+    list: ListState,
+    capture: Option<(HotkeyTarget, String)>,
 }
 
-/// The Hotkeys menu's rows — every `core::BuiltinAction`.
 fn menu_rows() -> Vec<core::BuiltinAction> {
     core::BuiltinAction::ALL.iter().map(|&(a, _)| a).collect()
 }
 
-impl HotkeyUi {
-    pub(super) fn relayout(&mut self, resized: bool, size: Vec2) {
-        if let Some(list) = &mut self.menu {
-            list.relayout(resized, menu_rows().len(), modal_list_rect(size, LIST_TOP).height());
+/// A keypress while a target awaits its new key.
+pub(super) fn capture_event(event: &Event, target: &HotkeyTarget) -> ModalOutcome {
+    match event {
+        Event::Key(Key::Esc) => ModalOutcome::Close,
+        Event::Key(Key::Backspace) => ModalOutcome::Unbind(target.clone()),
+        ev => {
+            let name = key_name(ev).unwrap_or_default();
+            let mut chars = name.chars();
+            match (chars.next(), chars.next()) {
+                (Some(key), None) => ModalOutcome::Bind(target.clone(), key),
+                _ => ModalOutcome::Stay,
+            }
         }
     }
+}
 
-    /// The fullscreen Hotkeys menu; `keys` is each `menu_rows` entry's bound key, `-` if none.
-    fn draw_menu(&self, list: &ListState, printer: &Printer, keys: &[String]) {
-        let rows = menu_rows();
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad("Hotkeys", p.size.x));
-        });
+/// Standalone "press a key to bind" modal for the Playlists row `name`, currently bound to `current`.
+pub(super) fn draw_capture(printer: &Printer, rect: Rect, name: &str, current: Option<char>) {
+    let hint = match current {
+        Some(k) => format!("  currently '{k}'   [Backspace] clear   [Esc] cancel"),
+        None => "  [Esc] cancel".to_string(),
+    };
+    let body = draw_modal_frame(printer, rect, Some("Set Hotkey"), &hint);
+    body.print((0, 1), &format!("press a key to bind to {name:?}"));
+}
 
-        let name_w = printer.size.x.saturating_sub(3);
-        let lines: Vec<String> = rows
+impl HotkeyMenu {
+    /// Each `menu_rows` entry's bound key, `-` if none.
+    pub(super) fn keys(s: &Session) -> Vec<String> {
+        menu_rows()
+            .into_iter()
+            .map(|a| s.effective_hotkey(&HotkeyTarget::Builtin(a)).map_or("-".to_string(), |k| k.to_string()))
+            .collect()
+    }
+
+    pub(super) fn relayout(&mut self, resized: bool, rect: Rect) {
+        self.list.relayout(resized, menu_rows().len(), modal_list(rect).height());
+    }
+
+    pub(super) fn draw(&self, printer: &Printer, rect: Rect, keys: &[String], feedback: Option<&str>) {
+        let footer = if let Some((_, name)) = &self.capture {
+            format!("  press a key to bind to {name:?}   [Esc] cancel")
+        } else if let Some(msg) = feedback {
+            format!("  {msg}")
+        } else {
+            "  select a row and press Enter   [Backspace] clear   [Esc] close".to_string()
+        };
+        draw_modal_frame(printer, rect, Some("Hotkeys"), &footer);
+        let name_w = rect.width().saturating_sub(3);
+        let lines: Vec<String> = menu_rows()
             .iter()
             .zip(keys)
             .map(|(action, key)| format!("{} {key}", pad(&truncate_ellipsis(action.label(), name_w), name_w)))
             .collect();
-        list.draw(&printer.windowed(modal_list_rect(printer.size, LIST_TOP)), &lines);
-
-        let bottom = printer.size.y.saturating_sub(1);
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            let line = if let Some((_, name)) = &self.capture {
-                format!("  press a key to bind to {name:?}   [Esc] cancel")
-            } else if let Some(msg) = &self.feedback {
-                format!("  {msg}")
-            } else {
-                "  select a row and press Enter   [Backspace] clear   [Esc] close".to_string()
-            };
-            p.print((0, bottom), &pad(&line, p.size.x));
-        });
+        self.list.draw(&printer.windowed(modal_list(rect)), &lines);
     }
 
-    /// Standalone "press a key to bind" modal for the Playlists-screen row `name`, currently bound to `current`.
-    fn draw_capture(printer: &Printer, name: &str, current: Option<char>) {
-        printer.with_color(ColorStyle::title_primary(), |p| {
-            p.print((0, 0), &pad("Set Hotkey", p.size.x));
-        });
-        printer.print((0, LIST_TOP), &format!("press a key to bind to {name:?}"));
-
-        let bottom = printer.size.y.saturating_sub(1);
-        let hint = match current {
-            Some(k) => format!("  currently '{k}'   [Backspace] clear   [Esc] cancel"),
-            None => "  [Esc] cancel".to_string(),
-        };
-        printer.with_color(ColorStyle::highlight_inactive(), |p| {
-            p.print((0, bottom), &pad(&hint, p.size.x));
-        });
+    pub(super) fn on_event(&mut self, event: &Event, rect: Rect) -> ModalOutcome {
+        if let Some((target, _)) = &self.capture {
+            let outcome = capture_event(event, target);
+            if !matches!(outcome, ModalOutcome::Stay) {
+                self.capture = None;
+            }
+            return match outcome {
+                ModalOutcome::Close => ModalOutcome::Stay,
+                outcome => outcome,
+            };
+        }
+        let outcome = self.list.on_event(event, menu_rows().len(), modal_list(rect));
+        let selected = || menu_rows().get(self.list.cursor).copied();
+        match outcome {
+            ListEvent::Close => ModalOutcome::Close,
+            ListEvent::Activate => {
+                self.capture = selected().map(|a| (HotkeyTarget::Builtin(a), a.label().to_string()));
+                ModalOutcome::Stay
+            }
+            ListEvent::Unhandled if *event == Event::Key(Key::Backspace) => {
+                selected().map_or(ModalOutcome::Stay, |a| ModalOutcome::Unbind(HotkeyTarget::Builtin(a)))
+            }
+            ListEvent::Clicked | ListEvent::Moved | ListEvent::Unhandled => ModalOutcome::Stay,
+        }
     }
 }
 
 impl MedleyView {
-    /// Draws whichever hotkey modal is up; `false` if none is.
-    pub(super) fn draw_hotkey_ui(&self, printer: &Printer) -> bool {
-        if let Some(list) = &self.hotkeys.menu {
-            let keys: Vec<String> = self.with_session(|s| {
-                menu_rows()
-                    .into_iter()
-                    .map(|a| s.effective_hotkey(&HotkeyTarget::Builtin(a)).map_or("-".to_string(), |k| k.to_string()))
-                    .collect()
-            });
-            self.hotkeys.draw_menu(list, printer, &keys);
-            true
-        } else if let Some((target, name)) = &self.hotkeys.capture {
-            let current = self.with_session(|s| s.playlist_hotkey(target));
-            HotkeyUi::draw_capture(printer, name, current);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Handles `event` if a hotkey modal is up — the capture prompt first, as it sits on top of the menu.
-    pub(super) fn on_hotkey_ui_event(&mut self, event: &Event) -> Option<EventResult> {
-        if self.hotkeys.capture.is_some() {
-            return Some(match event {
-                Event::Key(Key::Esc) => {
-                    self.hotkeys.capture = None;
-                    EventResult::consumed()
-                }
-                Event::Key(Key::Backspace) => self.clear_captured_hotkey(),
-                ev => match key_name(ev) {
-                    Some(k) if k.chars().count() == 1 => self.bind_captured_key(k.chars().next().unwrap()),
-                    _ => EventResult::consumed(),
-                },
-            });
-        }
-        let size = self.last_screen_size;
-        let list = self.hotkeys.menu.as_mut()?;
-        Some(match list.on_event(event, menu_rows().len(), modal_list_rect(size, LIST_TOP)) {
-            ListEvent::Close => {
-                self.hotkeys.menu = None;
-                self.focus = self.fallback_focus();
-                EventResult::consumed()
-            }
-            ListEvent::Activate => {
-                let action = menu_rows().get(list.cursor).copied();
-                self.hotkeys.capture = action.map(|a| (HotkeyTarget::Builtin(a), a.label().to_string()));
-                EventResult::consumed()
-            }
-            ListEvent::Unhandled if *event == Event::Key(Key::Backspace) => self.clear_selected_hotkey(),
-            ListEvent::Clicked | ListEvent::Moved | ListEvent::Unhandled => EventResult::consumed(),
-        })
-    }
-
     /// The live hotkey remap table, collected into the shape `keybindings::map`/`hotkey_toggle` take.
     pub(super) fn hotkeys_map(&self) -> HashMap<char, HotkeyTarget> {
         self.with_session(|s| s.hotkeys()).into_iter().collect()
     }
 
     pub(super) fn open_hotkey_menu(&mut self) {
-        self.hotkeys = HotkeyUi { menu: Some(ListState::default()), ..HotkeyUi::default() };
+        self.modal = Some(Modal::HotkeyMenu(HotkeyMenu::default()));
         self.with_session_mut(|s| s.clear_membership_feedback());
     }
 
     /// Opens the standalone "press a key" capture modal for a Playlists-screen row.
     pub(super) fn open_hotkey_capture(&mut self, target: HotkeyTarget) {
         let name = self.hotkey_row_name_for(&target);
-        self.hotkeys.capture = Some((target, name));
+        self.modal = Some(Modal::HotkeyCapture(target, name));
     }
 
     /// This row's display name, looked up fresh.
@@ -165,14 +135,11 @@ impl MedleyView {
         }
     }
 
-    /// Binds `key` to the captured target, reports the result as feedback, closes the capture prompt.
-    fn bind_captured_key(&mut self, key: char) -> EventResult {
-        let Some((target, _)) = self.hotkeys.capture.take() else {
-            return EventResult::consumed();
-        };
+    /// Binds `key` to `target` and reports the result as feedback.
+    pub(super) fn bind_hotkey(&mut self, target: HotkeyTarget, key: char) {
         let result = self.with_session_mut(|s| s.bind_hotkey(key, target.clone()));
         let name = self.hotkey_row_name_for(&target);
-        self.hotkeys.feedback = Some(match result {
+        self.hotkey_feedback = Some(match result {
             Ok(Some(stolen_from)) => {
                 let stolen_name = self.hotkey_row_name_for(&stolen_from);
                 format!("Bound '{key}' to {name} (moved from {stolen_name})")
@@ -186,31 +153,11 @@ impl MedleyView {
                 format!("Can't bind '{key}': {name} isn't a real playlist — use like/unlike instead")
             }
         });
-        EventResult::consumed()
     }
 
-    /// Backspace on the selected hotkey-menu row: clears that row's binding, if it has one.
-    fn clear_selected_hotkey(&mut self) -> EventResult {
-        let selected = self.hotkeys.menu.map_or(0, |list| list.cursor);
-        let Some(&action) = menu_rows().get(selected) else {
-            return EventResult::consumed();
-        };
-        self.clear_hotkey(HotkeyTarget::Builtin(action))
-    }
-
-    /// Backspace on the standalone playlist hotkey modal.
-    fn clear_captured_hotkey(&mut self) -> EventResult {
-        let Some((target, _)) = self.hotkeys.capture.take() else {
-            return EventResult::consumed();
-        };
-        self.clear_hotkey(target)
-    }
-
-    /// Shared by `clear_selected_hotkey`/`clear_captured_hotkey`.
-    fn clear_hotkey(&mut self, target: HotkeyTarget) -> EventResult {
+    pub(super) fn clear_hotkey(&mut self, target: HotkeyTarget) {
         let key = self.with_session(|s| s.playlist_hotkey(&target));
         self.with_session_mut(|s| s.unbind_hotkey(&target));
-        self.hotkeys.feedback = key.map(|k| format!("Unbound '{k}'"));
-        EventResult::consumed()
+        self.hotkey_feedback = key.map(|k| format!("Unbound '{k}'"));
     }
 }
