@@ -43,6 +43,12 @@ impl ListState {
         self.follow(view_h);
     }
 
+    /// Moves the window only, leaving the cursor where it is.
+    pub(super) fn scroll(&mut self, up: bool, step: usize, len: usize, view_h: usize) {
+        let offset = if up { self.offset.saturating_sub(step) } else { self.offset + step };
+        self.offset = bound_offset(offset, len, view_h);
+    }
+
     /// Layout-pass upkeep: re-follow the cursor after a resize, else only keep the window in range.
     pub(super) fn relayout(&mut self, resized: bool, len: usize, view_h: usize) {
         if resized {

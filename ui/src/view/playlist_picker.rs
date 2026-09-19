@@ -1,11 +1,10 @@
 use cursive::{Printer, Rect};
 use cursive::event::Event;
 
-use core::{Command, Playlist, TrackId};
+use core::{Command, Playlist, Session, TrackId};
 
-use super::MedleyView;
 use super::memo::Memo;
-use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
+use super::modal::{ModalOutcome, draw_modal_frame, modal_list};
 use super::scroll::{ListEvent, ListState};
 
 /// The "Add to Playlist" picker (`+` with a track selected); exists only while open.
@@ -19,28 +18,24 @@ pub(super) struct PlaylistPicker {
 }
 
 impl PlaylistPicker {
-    fn new(track: TrackId, playlists: Vec<Playlist>, list_revision: u64) -> Self {
+    pub(super) fn new(track: TrackId, s: &Session) -> Self {
         let built = Memo::default();
-        built.changed(list_revision);
-        Self { list: ListState::default(), track, playlists, built }
+        built.changed(s.list_revision());
+        Self { list: ListState::default(), track, playlists: s.playlists(), built }
     }
 
-    pub(super) fn stale(&self, list_revision: u64) -> bool {
-        self.built.changed(list_revision)
-    }
-
-    /// Replaces `playlists`, keeps the cursor on the same playlist, and keeps it in view.
-    pub(super) fn refresh(&mut self, playlists: Vec<Playlist>, rect: Rect) {
-        let selected = self.playlists.get(self.list.cursor).map(|p| p.id);
-        self.playlists = playlists;
-        self.list.cursor = selected
-            .and_then(|id| self.playlists.iter().position(|p| p.id == id))
-            .unwrap_or_else(|| self.list.cursor.min(self.playlists.len().saturating_sub(1)));
-        self.list.follow(modal_list(rect).height());
-    }
-
-    pub(super) fn relayout(&mut self, resized: bool, rect: Rect) {
-        self.list.relayout(resized, self.playlists.len(), modal_list(rect).height());
+    /// Re-reads the playlists once they changed, keeping the cursor on the same playlist and in view.
+    pub(super) fn relayout(&mut self, resized: bool, rect: Rect, s: &Session) {
+        let view_h = modal_list(rect).height();
+        if self.built.changed(s.list_revision()) {
+            let selected = self.playlists.get(self.list.cursor).map(|p| p.id);
+            self.playlists = s.playlists();
+            self.list.cursor = selected
+                .and_then(|id| self.playlists.iter().position(|p| p.id == id))
+                .unwrap_or_else(|| self.list.cursor.min(self.playlists.len().saturating_sub(1)));
+            self.list.follow(view_h);
+        }
+        self.list.relayout(resized, self.playlists.len(), view_h);
     }
 
     pub(super) fn on_event(&mut self, event: &Event, rect: Rect) -> ModalOutcome {
@@ -61,12 +56,5 @@ impl PlaylistPicker {
         }
         let lines: Vec<String> = self.playlists.iter().map(|p| p.name.clone()).collect();
         self.list.draw(&printer.windowed(modal_list(rect)), &lines);
-    }
-}
-
-impl MedleyView {
-    pub(super) fn open_playlist_picker(&mut self, track: TrackId) {
-        let (playlists, list_revision) = self.with_session(|s| (s.playlists(), s.list_revision()));
-        self.modal = Some(Modal::Picker(PlaylistPicker::new(track, playlists, list_revision)));
     }
 }

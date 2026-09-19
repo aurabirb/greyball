@@ -1,4 +1,3 @@
-use std::ops::{Index, IndexMut};
 
 use crate::command::Pane;
 
@@ -59,19 +58,3 @@ impl Screen {
     }
 }
 
-/// One `T` per screen, indexed by `Screen`.
-#[derive(Default)]
-pub(crate) struct PerScreen<T>([T; Screen::ALL.len()]);
-
-impl<T> Index<Screen> for PerScreen<T> {
-    type Output = T;
-    fn index(&self, screen: Screen) -> &T {
-        &self.0[screen as usize]
-    }
-}
-
-impl<T> IndexMut<Screen> for PerScreen<T> {
-    fn index_mut(&mut self, screen: Screen) -> &mut T {
-        &mut self.0[screen as usize]
-    }
-}

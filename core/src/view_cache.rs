@@ -169,6 +169,7 @@ pub(crate) struct ViewCache {
     /// `push_result` so a redraw never re-resolves the whole list against
     /// the store just to render it again.
     results_cache: Vec<Track>,
+    results_query: Option<String>,
 
     /// A source's top-level playlist folders, loaded in the background —
     /// see `ensure_remote_playlists`.
@@ -188,9 +189,16 @@ pub(crate) struct ViewCache {
 }
 
 impl ViewCache {
-    pub fn clear_results(&mut self) {
+    /// Empties the results for a new search; a blank `query` leaves none on record.
+    pub fn begin_search(&mut self, query: &str) {
         self.results.clear();
         self.results_cache.clear();
+        self.results_query = (!query.trim().is_empty()).then(|| query.to_string());
+    }
+
+    /// Text of the last search, so an empty result list can say "no results for X".
+    pub fn results_query(&self) -> Option<&str> {
+        self.results_query.as_deref()
     }
 
     /// All result ids, cheap (no store hits) — for cursor bounds and

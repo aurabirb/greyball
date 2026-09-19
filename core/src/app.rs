@@ -580,7 +580,7 @@ impl Session {
         match cmd {
             Command::Search(text) => {
                 self.touch_lists();
-                self.view.clear_results();
+                self.view.begin_search(&text);
                 self.search.run(SearchQuery::text(text));
                 Ok(Dispatch::Ok)
             }
@@ -1088,6 +1088,10 @@ impl Session {
     /// (already in-memory, but still O(n)) results cache every redraw.
     pub fn results_window(&self, offset: usize, limit: usize) -> Vec<Track> {
         self.view.results_window(offset, limit)
+    }
+
+    pub fn results_query(&self) -> Option<&str> {
+        self.view.results_query()
     }
 
     /// Append `tid` to the search results, deduped.

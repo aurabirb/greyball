@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cursive::{Printer, Rect};
 use cursive::theme::ColorStyle;
 
@@ -6,9 +8,11 @@ use core::{PaneLayoutConfig, ScanMode, Session, TOGGLABLE_SOURCES};
 use crate::command::Pane;
 
 use super::MedleyView;
+use super::memo::Memo;
 use super::panes::pane_title;
 use super::scroll::ListState;
 use super::text::pad;
+use super::window::Ctx;
 
 /// One row of the Settings pane: plain info text, or a togglable bool.
 #[derive(Clone)]
@@ -31,8 +35,8 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
     }
 }
 
-/// Effective config as togglable/info rows, for both the embedded pane and the screen-mode modal.
-pub(super) fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntry> {
+/// Effective config as togglable/info rows.
+fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<SettingsEntry> {
     let cfg = &s.cfg;
     let mut v = vec![
         SettingsEntry::Info(format!("theme:            {}", cfg.theme)),
@@ -59,9 +63,23 @@ pub(super) fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig) -> Vec<S
 #[derive(Default)]
 pub(super) struct SettingsPane {
     list: ListState,
+    entries: Memo<(u64, PaneLayoutConfig), Arc<Vec<SettingsEntry>>>,
 }
 
 impl SettingsPane {
+    /// The rows, rebuilt only when the session or the pane layout changed.
+    pub(super) fn entries(&self, ctx: &Ctx) -> Arc<Vec<SettingsEntry>> {
+        self.entries.get_or_build((ctx.s.revision(), ctx.pane_cfg), || Arc::new(settings_entries(ctx.s, ctx.pane_cfg)))
+    }
+
+    pub(super) fn cursor(&self) -> usize {
+        self.list.cursor
+    }
+
+    pub(super) fn jump(&mut self, up: bool, step: usize, len: usize, view_h: usize) {
+        self.list.jump(up, step, len, view_h);
+    }
+
     pub(super) fn draw(&self, printer: &Printer, entries: &[SettingsEntry], focused: bool) {
         let mut title = pane_title(Pane::Settings).to_string();
         if focused {
@@ -77,17 +95,8 @@ impl SettingsPane {
 }
 
 impl MedleyView {
-    /// Settings pane's row cursor.
-    pub(super) fn jump_settings(&mut self, up: bool, step: usize) {
-        let pane_cfg = self.panes.cfg;
-        let n = self.with_session(|s| settings_entries(s, pane_cfg).len());
-        let h = self.panes.content_dims(Pane::Settings, self.is_fullscreen(Pane::Settings), self.last_screen_size).map_or(0, |(_, h)| h);
-        self.settings.list.jump(up, step, n, h);
-    }
-
-    /// Enter/Space on the Settings pane's selected row.
-    pub(super) fn toggle_selected_setting(&mut self) {
-        let cursor = self.settings.list.cursor;
+    /// Enter/Space on row `cursor` of the Settings window.
+    pub(super) fn toggle_setting(&mut self, cursor: usize) {
         let pane_cfg = self.panes.cfg;
         let Some(entry) = self.with_session(|s| settings_entries(s, pane_cfg).into_iter().nth(cursor)) else {
             return;

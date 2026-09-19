@@ -1,133 +1,144 @@
 # View component model
 
-`MedleyView` (`../view.rs`) is the only cursive `View`. It owns every component and the
-`SessionHandle`; the files here are its components plus `impl MedleyView` blocks grouped by concern.
+`MedleyView` (`../view.rs`) is the only cursive `View` and is only the shell: screen layout (tab bar,
+window rects from `PaneLayout::split`, hint row, status row), focus, the open `Modal`, command dispatch
+(`run`) and the session locks. Everything that shows content is a window instance or a modal; the
+files here are those components plus `impl MedleyView` blocks grouped by concern.
 
-## Component API
+## Windows
 
-A component is a plain struct owning only its own UI state — never the session or a sibling.
+- A `Window` (`window.rs`) is one instance of a component plus the `Rect` the shell last laid it out
+  in — the one rect `draw`, hit-testing and `relayout` share. Its body is a `TrackList`
+  (`track_list.rs`, every list kind: Now Playing, Playlists, Search, History, Queue), the `LogPane`,
+  the `SettingsPane` or `Vis`.
+- `Windows` holds every instance by `WindowId`: `Tab(Screen)` for the five tabs, `Pane(Pane)` for the
+  five dockable panes. The Queue tab and the Queue pane are two instances of one kind, each with its own
+  cursor, scroll window, filter and memos; nothing in a component may assume it is the only instance of
+  its kind, that it is fullscreen-wide, or that it starts at column 0.
+- Placement is where the shell shows an instance, not a property of it: the active tab (`screen`) in
+  the main rect, `PaneLayout::open` panes docked around it, a `PaneMode::Screen` pane fullscreen as
+  `Modal::Pane`. A Queue/History pane in `Screen` mode switches to its tab instead of layering.
+- `Window` API, all of it called by the shell only:
+  - `relayout(rect, s)` from `required_size`: stores the rect; a list clamps its cursor into the list
+    and re-follows it when the height changed.
+  - `frame(ctx) -> WindowFrame`: the window's session-derived draw data, taken under the frame's one
+    lock and memoized inside the component (`ListFrame` rows, Settings entries; Log and Vis are `Live`).
+  - `draw(printer, focused, frame)`: windows the shell's printer to its own rect. The active tab's
+    window is drawn unfocused: only docked windows show the `[title]` focus marker.
+  - `on_event(event, ctx) -> WindowOutcome` (`Ignored`, `Consumed`, `Run(Command)`,
+    `ToggleSetting(row)`): a mouse event outside its rect and any key it has no use for is `Ignored`,
+    so the shell can offer it to the next window. Components never return `EventResult` or dispatch.
+  - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config and
+    `searching`.
+- `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
+  playlist, a remote one), its `/`-filter query and two memos. `reset_for_new_list` is the only way
+  `Open` changes and `set_query` the only way the filter does; both reset the selection and bump
+  `view_gen`, the list-identity part of every key below. Nav keys go through `ListState::on_event`
+  (`Nav::of`); the wheel scrolls the window without the cursor (`ListState::scroll`); Enter or a
+  double-click plays the row as `Command::PlayContext`, or opens the top-level playlist under the
+  cursor; Esc backs out of an open playlist.
 
-- State: a `ListState {cursor, offset}` (`scroll.rs`) for anything with a row cursor, a bare scroll
-  offset otherwise (`HelpModal`, `LogPane`). A modal is a `Modal` variant held in `MedleyView::modal`
-  only while open; opening constructs it, closing drops it. `StatusLine` and `TabBar` hold no state: they are
-  built per use from a session snapshot.
-- `draw(&self, printer, data…)`: gets a `Printer` already `windowed` to the component's rect (a modal
-  gets the shell's printer plus its `Rect`) and its data as arguments (`&[Playlist]`, `focused`, …).
-- `on_event(&mut self, event, size, data…)` returns an outcome for the owner to act on: `ListEvent`
-  (`Close`/`Activate`/`Clicked`/`Moved`/`Unhandled`) from a `ListState`, `ModalOutcome` from a modal.
-  `click(x, width)` on the one-row bars returns `Option<Command>` (`StatusLine`) or
-  `Option<TabBarHit>` (`TabBar`). Components never return `EventResult` or dispatch.
-- One layout function per component, called by both draw and hit-test: `StatusLine::layout`,
-  `TabBar::layout`, `WarningsModal::list_rect`, `modal_body`/`modal_list` (`modal.rs`, from the
-  modal's `Rect`), `PaneLayout::split`. `draw_modal_frame(printer, rect, title, footer)` draws every
-  modal's title bar and footer hint and returns the body printer.
-- `relayout(resized, size, len…)`, called from `MedleyView::required_size` (the one `&mut self` hook
-  that knows the screen size): re-follow the cursor on resize, else clamp the offset to the data length.
-- Shared: `ListState` + `Nav` (key/wheel → `(up, step)`), `Marquee` (one scroll clock for the tab bar
-  and status line), `text.rs`, `draw_row_list` (`rows.rs`) for every track list.
-- `Screen` (`../screen.rs`) names the tab screens and owns every mapping over them (`ALL` in tab and
-  number-key order, `label`, `digit`/`from_digit`, `from_config`, `from_pane`); per-screen state is a
-  `PerScreen<T>` indexed by it (`MedleyView::lists`).
+## Memos
+
+`Memo<K, V>` (`memo.rs`) is the one-entry cache everything keyed here is built on
+(`get_or_build(key, || value)` clones the value out, so values are `Arc`s; `Memo<K>::changed(key)` is
+the value-less "did the key move" gate). Each memo is a field of whatever owns the cached thing, so a
+second window never evicts the first's. Interior mutability in `draw` is limited to these, the `Marquee`
+clock and the Log pane's `WrapCache`. When adding one, walk every `self.`/argument read under the
+build closure against its key.
+
+| memo | key | reads |
+| --- | --- | --- |
+| `TrackList::matches` (ranked filter ids) | list generation, `view_gen` | the whole list, `query`, `open` |
+| `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, pending marks), title, total |
+| `SettingsPane::entries` | `revision`, pane layout config | config, volume, scan mode |
+| `MedleyView::chrome` (`Chrome`) | `revision` | status core, warning count, membership feedback, help key |
+| `MedleyView::follow_sig` | window id, list generation, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
+| `HelpModal::built` / `PlaylistPicker::built` | list generation | what the modal snapshots |
+
+The cursor is in no rows key: the selection highlight is applied at draw time, so moving within the
+visible window rebuilds nothing, and a keypress in one window never rebuilds another's rows. Per-tick
+data (playback position, the bpm tag, the `Marquee` clock, Vis levels, the Log pane) is never memoized
+on `revision` — it is read fresh or kept in its own small cache.
 
 ## App interaction
 
 - Reads: `with_session(|s| …)` locks, extracts owned values, unlocks. The mutex is non-reentrant:
   never nest, never call a locking `MedleyView` method inside the closure — methods that need session
-  data take `s: &Session` instead. The main frame in `draw` (`frame.rs`) builds a `Frame`: a
-  `CachedFrame` (rows, titles, settings entries, warning count, …) memoized on `FrameKey`
-  (`Session::revision` plus every UI input that shapes it — screen, list identity, filter query,
-  offsets/heights, open panes, `want_settings`, cursor, editing state) and shared out of the cache
-  behind an `Arc`, plus this frame's live per-tick data (playback position/duration, the bpm tag) read
-  fresh every time. Per-tick data (playback position, the `Marquee` clock, Vis levels, the Log pane)
-  is deliberately never keyed on `revision` — it's read fresh or kept in its own small cache instead.
-  Anything that changes UI-visible session state and doesn't already go through `dispatch`/`on_event`
-  must bump `revision` itself, or the screen goes stale until the next keypress forces a cache miss.
-  An input event is not itself such a change: `on_event` only bumps `revision` when it actually clears
-  something (`clear_membership_feedback` checks the slot before touching), so a keypress or mouse move
-  that changes nothing else causes no rebuild — off-thread writes (a plugin/scan/player thread) must
-  still send an event, since nothing else will notice their mutation.
-  - `Session` actually keeps two counters (`core/src/app.rs`). `revision` bumps on every UI-visible
-    mutation, including a `TrackUpdated` attribute-only patch (BPM landing, a cache fill, …) and
-    per-`Player` event — the frame stays keyed on it, so a scanned attribute still shows up on a
-    visible row next frame. `list_revision` bumps only when list membership/order/identity or a
-    displayed name actually changes (search results, queue/history, playlist create/add/remove/
-    membership, remote pages landing, hotkey/playlist-name changes) and is left untouched by a plain
-    attribute patch. `LocalFilter::cache`, `MedleyView::follow_sig` (`follow_scan`'s dedupe key) and
-    the Help/playlist-picker snapshots below key on `list_revision` instead of `revision`, so a
-    library scan's flood of `TrackUpdated`s doesn't force a full re-filter/re-follow/rebuild per
-    track — only the frame (and thus the visible rows) redraws.
-  - A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
-    `TrackUpdated`/`Materialized` event, so every `MediaCache` write site (the player's streamed
-    downloads, a scan plugin's own fetch, Spotify's background materialize-to-cache copy) must send
-    one once the write actually lands — a cache fill with no matching event leaves the marker stale
-    until something unrelated bumps `revision`.
-  - `follow_scan` runs from `required_size` (every layout pass), not from `build_cached_frame` — a
-    frame-cache hit must not skip it, since the visible list/cursor it feeds `ScanDriver::follow_view`
-    can change (focus, a docked pane's cursor) without anything `FrameKey` is keyed on changing.
-  - `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
-    `Session::ensure_remote_playlists` from two points, never from the getter or the view: once at
-    startup (`app/src/main.rs`, so Help and playlist hotkeys can name remote playlists on any screen)
-    and on `CoreEvent::PluginStatusChanged` (a source logging in later still gets loaded). A landed
-    fetch, clean or failed, is final for the session unless the source reported a partial page.
+  data take `s: &Session` (or a `Ctx`) instead. Where a window must be mutated under the lock
+  (`send`, `required_size`, `relayout_modal`) the shell locks a clone of the handle so `self` stays
+  free. One lock per frame: `MedleyView::frame` collects every visible window's `WindowFrame`, the
+  `Chrome` and the live `StatusLine`, then `draw` renders without the guard.
+- No effects in `draw` or getters. Effects run on change from `on_event` or `required_size` (the one
+  `&mut self` hook that knows the screen size): `follow_scan` feeds the scan walk the active list —
+  the focused window's, else the active tab's — from every layout pass, deduped by `follow_sig`, so a
+  memo hit in `draw` can never skip it.
+- `Session::revision` bumps on every UI-visible mutation, including an attribute-only `TrackUpdated`
+  patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
+  frame. Anything that changes UI-visible session state outside `dispatch`/`on_event` must bump it, and
+  an off-thread writer must send a `CoreEvent`, since nothing else will notice its mutation. An input
+  event is not itself such a change: `on_event` only bumps `revision` when it actually clears something
+  (`clear_membership_feedback` checks the slot first), so a keypress that changes nothing rebuilds
+  nothing.
+- `Session::list_revision` bumps only when list membership/order/identity or a displayed name changes;
+  it is the "list generation" above, so a library scan's flood of `TrackUpdated`s never re-filters,
+  re-follows or rebuilds Help.
+- A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
+  `TrackUpdated`/`Materialized` event, so every `MediaCache` write site must send one once the write
+  lands.
+- `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
+  `Session::ensure_remote_playlists` from two points, never from the getter or the view: once at
+  startup (`app/src/main.rs`) and on `CoreEvent::PluginStatusChanged`. A landed fetch, clean or failed,
+  is final for the session unless the source reported a partial page.
 - Writes: `run(cmd)` → `Session::dispatch` → `EventResult` (consumed, quit, or a `popup`).
   `with_session_mut` is for settings calls (`bind_hotkey`, `set_source_enabled`). Slow plugin work
   runs on a spawned thread and reports through the `Bus`.
 - Inbound: nothing is pushed into the view. `app/src/main.rs` loops `siv.step()` → `bus.drain()` →
   `Session::on_event` → `siv.refresh()` when dirty; a bus send wakes `step()` through cursive's
   `cb_sink`. The next `draw` re-reads the session. `set_fps(BASELINE_FPS)` is the idle redraw floor
-  (clock, marquee, title flush); `vis_fps_cb` raises it to `vis::FPS` while the Vis pane is open and
-  must never go below the floor. `Event::Refresh` is ignored by `on_event`.
+  (clock, marquee, title flush); `vis_fps_cb` raises it to `vis::FPS` while the Vis window is shown
+  and must never go below the floor. `Event::Refresh` is ignored by `on_event`.
 
 ## Routing in `MedleyView::on_event`
 
 1. Clear one-keypress feedback (not on mouse hold/release).
-2. `on_edit_event`: an active text field (`Editing`) captures everything.
+2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
+   written through to the active list's `set_query` on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
-   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`, `Pane` for a
-   `PaneMode::Screen` pane), so there is no precedence to order — a modal swallows all input, hence
-   nothing can open a second one. `draw_modal`/`on_modal_event`/`relayout_modal` are the only
-   matches over it; a modal's `on_event` returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`,
-   `Setup(row)`, `Bind`/`Unbind`) that `on_modal_event` acts on.
-4. Fixed-row mouse: row 0 → `TabBar::click`; bottom-2 → warnings button; bottom → `StatusLine::click`.
-5. Rect mouse: `handle_mouse` (`panes.main_rect`), then `handle_pane_mouse` per `panes.rects`; a click
-   sets `focus`.
-6. Keys: `Tab` cycles `focus_order()` (`Main`, each docked pane, `Warnings` when any plugin warns);
-   nav keys go to the focused list or pane; everything else goes through `keybindings::map` /
-   `hotkey_toggle` → `handle_action`.
-7. `clamp_scroll()`.
+   `Option<Modal>` (`Warnings`, `Picker`, `HotkeyMenu`, `HotkeyCapture`, `Help`, `Pane`), so there is
+   no precedence to order — a modal swallows all input, hence nothing can open a second one.
+   `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
+   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Bind`/`Unbind`).
+   `Modal::Pane` forwards keys to its window and drops mouse events.
+4. Fixed-row mouse: row 0 → `TabBar::click`; bottom-2 → the warnings modal (anywhere on the row);
+   bottom → `StatusLine::click`.
+5. Any other mouse event: `send` offers it to each visible window; the one it lands in takes focus.
+6. Keys: Enter on the focused warnings button opens the modal, any other key moves focus off it. Then
+   `send` offers the key to the focused window, then the active tab's; what both ignore goes to
+   `on_shell_key` (`Tab` cycles `focus_order()`, seek, `:`, `x`, backtick on a playlist, and
+   `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
+7. `clamp_scroll()` re-follows the cursor in the active tab's and the focused window.
 
-## Between components
+## Modals
 
-Components do not know each other. Anything crossing a boundary goes through `MedleyView`: it reads
-one component's outcome and mutates another (`ListEvent::Activate` from the picker →
-`run(AddToPlaylist)`; closing a modal moves focus off the warnings button). `MedleyView` hands a component its data
-and rect; a component never reaches into `lists`, `panes`, `focus` or a sibling, never locks the
-session in `draw`/`on_event`, never stores session data past one call (`PlaylistPicker::track` is the
-deliberate exception; `HelpModal`'s lines and `PlaylistPicker`'s playlist list are snapshots too, but
-self-heal — see below). Interior mutability in `draw` is limited to clocks and caches: `Marquee`, the
-Log pane's incremental `WrapCache`, and `Memo<K, V>` (`memo.rs`) — the one-entry cache every keyed
-cache here is built on (`get_or_build(key, || value)` clones the value out, so values are `Arc`s;
-`Memo<K>::changed(key)` is the value-less "did the key move" gate). Each memo is a field of whatever
-owns the cached thing, never a global. The memos: `LocalFilter::cache` — keyed on `list_revision`,
-not a source length, so a same-length content swap still recomputes, and holding matched ids rather than `Track`s so a `TrackUpdated` attrs patch can't
-go stale inside it — `MedleyView::follow_sig` — ditto, dedupes `ScanDriver::follow_view` reports — and
-`MedleyView::frame_cache`, the `FrameKey`-memoized `CachedFrame`, keyed on `revision`).
-
-A modal is constructed with its data at the open site (`open_help`, `open_playlist_picker`): cursive
-drains every buffered input event through `on_event` before any layout pass, so type-ahead must never
-meet an empty modal. A modal that snapshots session data (`HelpModal`, `PlaylistPicker`) also carries a
-`built: Memo<u64>` stamp, and `MedleyView::required_size` — never `draw` — refreshes it only when
-`Session::list_revision` moves while it is open (`refresh_help`/`refresh_playlist_picker`), in place:
-`HelpModal::refresh` keeps `scroll` (re-clamped to the new line count) and `PlaylistPicker::refresh`
-re-clamps its cursor onto the same playlist id (or the new length if that playlist is gone) and
-re-follows it into view.
+A modal is constructed with its data at the open site (`HelpModal::new(s)`, `PlaylistPicker::new(id,
+s)`): cursive drains every buffered input event through `on_event` before any layout pass, so
+type-ahead must never meet an empty modal. One that snapshots session data also carries a `built`
+stamp and re-reads in place from `relayout_modal` — never `draw` — only when the stamp moves while it
+is open: Help keeps its scroll, the picker keeps its cursor on the same playlist. `draw_modal_frame(
+printer, rect, title, footer)` draws the title bar and footer hint and returns the body printer;
+`modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`.
 
 ## Adding a component
 
-1. New file here; a struct with only its own state; a `Modal` variant if it is a modal.
-2. One private layout fn; `draw` and `on_event`/`click` both call it.
-3. `draw(&self, printer, data…)`; `on_event` returning `ListEvent` or a small outcome enum;
-   `relayout` if it has a cursor or offset.
-4. A modal: an arm in each of `draw_modal`, `on_modal_event` and `relayout_modal` that fetches its
-   data with one `with_session`; open it from `handle_action` or `commit_edit` with its data.
-5. Reuse `ListState`, `Nav`, `draw_modal_frame`/`modal_list`, `text.rs` before writing scroll or width math.
+1. New file here; a struct with only its own UI state — never the session or a sibling. A
+   `ListState {cursor, offset}` (`scroll.rs`) for anything with a row cursor, a bare offset otherwise.
+2. One layout fn from its `Rect`; `draw` and `on_event` both call it.
+3. A window: a `Body` variant and an arm in each `Window` method. A modal: a `Modal` variant and an
+   arm in each of `draw_modal`, `on_modal_event` and `relayout_modal`, opened with its data from
+   `handle_action`.
+4. Session data arrives as arguments (`Ctx`, `&Session`, a frame); outcomes go back as
+   `WindowOutcome`/`ModalOutcome`. Anything crossing a component boundary goes through the shell.
+5. Reuse `ListState`, `Nav`, `draw_row_list`, `draw_modal_frame`/`modal_list`, `Marquee`, `text.rs`
+   before writing scroll or width math. `Screen` (`../screen.rs`) names the tabs and list kinds and
+   owns every mapping over them.

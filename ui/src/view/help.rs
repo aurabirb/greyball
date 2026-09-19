@@ -5,10 +5,9 @@ use core::{HotkeyTarget, Session};
 
 use crate::{command, keybindings};
 
-use super::MedleyView;
 use super::memo::Memo;
-use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_body};
-use super::playlists::top_row_name;
+use super::modal::{ModalOutcome, draw_modal_frame, modal_body};
+use super::track_list::{top_row_name, top_rows};
 use super::scroll::{Nav, PAGE_SCROLL_STEP, bound_offset};
 
 /// The help/shortcuts screen (`?`/`:help`).
@@ -20,20 +19,17 @@ pub(super) struct HelpModal {
 }
 
 impl HelpModal {
-    fn new(lines: Vec<String>, list_revision: u64) -> Self {
+    pub(super) fn new(s: &Session) -> Self {
         let built = Memo::default();
-        built.changed(list_revision);
-        Self { scroll: 0, lines, built }
+        built.changed(s.list_revision());
+        Self { scroll: 0, lines: help_lines(s), built }
     }
 
-    /// Whether `list_revision` moved since the lines were built, remembering it.
-    pub(super) fn stale(&self, list_revision: u64) -> bool {
-        self.built.changed(list_revision)
-    }
-
-    /// Replaces the lines in place and re-clamps `scroll`, so a rebuild never jumps to the top.
-    pub(super) fn refresh(&mut self, lines: Vec<String>, rect: Rect) {
-        self.lines = lines;
+    /// Rebuilds the lines in place once what they show changed, re-clamping `scroll` rather than jumping to the top.
+    pub(super) fn relayout(&mut self, rect: Rect, s: &Session) {
+        if self.built.changed(s.list_revision()) {
+            self.lines = help_lines(s);
+        }
         self.scroll = bound_offset(self.scroll, self.lines.len(), modal_body(rect, true).height());
     }
 
@@ -98,32 +94,25 @@ fn build_help_lines(
     lines
 }
 
-impl MedleyView {
-    pub(super) fn help_lines(&self, s: &Session) -> Vec<String> {
-        let plugin_commands = s.plugin_command_help();
-        let playlists = s.playlists();
-        let rows = self.top_rows(s);
-        let hotkeys = s.hotkeys();
-        let playlist_hotkeys = hotkeys
-            .iter()
-            .filter_map(|(ch, target)| {
-                rows.iter()
-                    .find(|r| r.target() == *target)
-                    .map(|r| (*ch, top_row_name(r, &playlists)))
-            })
-            .collect::<Vec<_>>();
-        let builtin_remaps = hotkeys
-            .into_iter()
-            .filter_map(|(ch, target)| match target {
-                HotkeyTarget::Builtin(action) => Some((ch, action.label().to_string())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
-    }
-
-    pub(super) fn open_help(&mut self) {
-        let (lines, list_revision) = self.with_session(|s| (self.help_lines(s), s.list_revision()));
-        self.modal = Some(Modal::Help(HelpModal::new(lines, list_revision)));
-    }
+fn help_lines(s: &Session) -> Vec<String> {
+    let plugin_commands = s.plugin_command_help();
+    let playlists = s.playlists();
+    let rows = top_rows(s);
+    let hotkeys = s.hotkeys();
+    let playlist_hotkeys = hotkeys
+        .iter()
+        .filter_map(|(ch, target)| {
+            rows.iter()
+                .find(|r| r.target() == *target)
+                .map(|r| (*ch, top_row_name(r, &playlists)))
+        })
+        .collect::<Vec<_>>();
+    let builtin_remaps = hotkeys
+        .into_iter()
+        .filter_map(|(ch, target)| match target {
+            HotkeyTarget::Builtin(action) => Some((ch, action.label().to_string())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    build_help_lines(&playlist_hotkeys, &builtin_remaps, &plugin_commands)
 }

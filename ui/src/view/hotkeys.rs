@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key};
 
@@ -8,7 +6,7 @@ use core::{BindError, HotkeyTarget, Session};
 use super::MedleyView;
 use super::input::key_name;
 use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
-use super::playlists::top_row_name;
+use super::track_list::{top_row_name, top_rows};
 use super::scroll::{ListEvent, ListState};
 use super::text::{pad, truncate_ellipsis};
 
@@ -108,11 +106,6 @@ impl HotkeyMenu {
 }
 
 impl MedleyView {
-    /// The live hotkey remap table, collected into the shape `keybindings::map`/`hotkey_toggle` take.
-    pub(super) fn hotkeys_map(&self) -> HashMap<char, HotkeyTarget> {
-        self.with_session(|s| s.hotkeys()).into_iter().collect()
-    }
-
     pub(super) fn open_hotkey_menu(&mut self) {
         self.modal = Some(Modal::HotkeyMenu(HotkeyMenu::default()));
         self.with_session_mut(|s| s.clear_membership_feedback());
@@ -130,7 +123,7 @@ impl MedleyView {
             HotkeyTarget::Builtin(action) => action.label().to_string(),
             HotkeyTarget::Local(_) | HotkeyTarget::Remote(..) => self.with_session(|s| {
                 let playlists = s.playlists();
-                self.top_rows(s).into_iter().find(|r| &r.target() == target).map(|r| top_row_name(&r, &playlists))
+                top_rows(s).into_iter().find(|r| &r.target() == target).map(|r| top_row_name(&r, &playlists))
             }).unwrap_or_default(),
         }
     }

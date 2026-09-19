@@ -5,14 +5,19 @@ use cursive::Cursive;
 use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::views::Dialog;
 
-use core::{Command, CoreEvent, Dispatch, Plugin, SourceId, TrackId};
+use core::{Command, CoreEvent, Dispatch, PlaylistId, Plugin, SourceId, TrackId};
 
 use crate::command::{self, Pane};
 use crate::keybindings::Action;
 use crate::screen::Screen;
 
 use super::MedleyView;
+use super::help::HelpModal;
+use super::modal::Modal;
 use super::panes::PANE_LAYOUT_CYCLE;
+use super::playlist_picker::PlaylistPicker;
+use super::track_list::TrackList;
+use super::window::WindowId;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
@@ -60,7 +65,6 @@ impl MedleyView {
         let text = std::mem::take(&mut self.buffer);
         match kind {
             Editing::Search => {
-                self.last_query = if text.trim().is_empty() { None } else { Some(text.clone()) };
                 self.run(Command::Search(text))
             }
             Editing::CommandLine => {
@@ -68,10 +72,9 @@ impl MedleyView {
                     Ok(p) => p,
                     Err(e) => return popup(e),
                 };
-                let open = self.playlists.open;
+                let open = self.windows[self.main_id()].list().and_then(TrackList::open_local);
                 if parsed == command::Parsed::Help {
-                    self.open_help();
-                    return EventResult::consumed();
+                    return self.handle_action(Action::OpenHelp);
                 }
                 // `Screen` mode: fullscreen, one at a time.
                 if let command::Parsed::TogglePane(pane) = parsed {
@@ -83,15 +86,10 @@ impl MedleyView {
                     return self.vis_fps_cb();
                 }
                 if command::Parsed::History == parsed {
-                    self.screen = Screen::History;
-                    self.playlists.leave();
-                    self.filter.query = None;
-                    self.clamp_scroll();
-                    return EventResult::consumed();
+                    return self.handle_action(Action::Screen(Screen::History));
                 }
                 if command::Parsed::Keys == parsed {
-                    self.open_hotkey_menu();
-                    return EventResult::consumed();
+                    return self.handle_action(Action::OpenHotkeyMenu);
                 }
                 if let command::Parsed::SetPaneLayout(patch) = parsed {
                     // `side`/`stack` stay shared layout geometry regardless of `patch.pane`.
@@ -131,7 +129,7 @@ impl MedleyView {
                     };
                 }
                 let cmd = self.with_session(|s| {
-                    let sel = self.selected_track(s, self.active_screen());
+                    let sel = self.active_list().and_then(|list| list.selected_track(s));
                     command::resolve(parsed, s, sel)
                 });
                 match cmd {
@@ -144,7 +142,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Editing::Filter => {
-                self.filter.query = if text.trim().is_empty() { None } else { Some(text) };
+                self.set_filter(Some(text.as_str()).filter(|t| !t.trim().is_empty()));
                 EventResult::consumed()
             }
             Editing::None => EventResult::Ignored,
@@ -216,9 +214,9 @@ impl MedleyView {
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {
         match action {
             Action::Command(c) => self.run(c),
-            // On the Search screen itself, same as switching to the Search tab (focuses the input too).
+            // A list that can't be filtered locally sends `/` to the Search tab's input instead.
             Action::FocusSearch => {
-                if self.screen == Screen::Search {
+                if self.active_list().is_none_or(|list| list.is_search()) {
                     self.handle_action(Action::Screen(Screen::Search))
                 } else {
                     self.editing = Editing::Filter;
@@ -232,18 +230,12 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::Screen(n) => {
-                let was_playlists = self.screen == Screen::Playlists;
-                self.screen = n;
-                // Leaving the Playlists screen for anything else.
-                if n != Screen::Playlists {
-                    self.playlists.leave();
-                } else if !was_playlists && self.playlists.at_top_level() {
-                    // Switching into Playlists fresh: restore the remembered playlist.
-                    let playlists = self.with_session(|s| s.playlists());
-                    self.playlists.restore(&playlists);
+                // A filter doesn't outlive its tab being left.
+                let left = self.main_id();
+                if let Some(list) = self.windows[left].list_mut() {
+                    list.set_query(None);
                 }
-                // A different screen's list — any filter over the old one is meaningless now.
-                self.filter.query = None;
+                self.screen = n;
                 // Switching to Search focuses the input immediately, same as `/`.
                 if n == Screen::Search {
                     self.editing = Editing::Search;
@@ -252,19 +244,16 @@ impl MedleyView {
                 self.clamp_scroll();
                 EventResult::consumed()
             }
-            Action::Activate => self.activate(),
-            // The `Event::Key(Key::Enter)` handler already special-cases this and never forwards it here.
-            Action::PlayFromContext(id) => self.run(Command::Play(id)),
             Action::OpenHotkeyMenu => {
                 self.open_hotkey_menu();
                 EventResult::consumed()
             }
             Action::OpenHelp => {
-                self.open_help();
+                self.modal = Some(Modal::Help(self.with_session(HelpModal::new)));
                 EventResult::consumed()
             }
             Action::AddToPlaylistPrompt(id) => {
-                self.open_playlist_picker(id);
+                self.modal = Some(Modal::Picker(self.with_session(|s| PlaylistPicker::new(id, s))));
                 EventResult::consumed()
             }
             Action::NewPlaylistPrompt => {
@@ -283,10 +272,18 @@ impl MedleyView {
         }
     }
 
+    /// The `/`-filter of the list being filtered: the active one, as focus can't move while typing.
+    fn set_filter(&mut self, query: Option<&str>) {
+        let id = self.active_list_id();
+        if let Some(list) = self.windows[id].list_mut() {
+            list.set_query(query);
+        }
+    }
+
     /// Drops the text being typed; a cancelled filter shows the full list again.
     fn cancel_edit(&mut self) {
         if self.editing == Editing::Filter {
-            self.filter.query = None;
+            self.set_filter(None);
         }
         self.editing = Editing::None;
         self.buffer.clear();
@@ -324,7 +321,8 @@ impl MedleyView {
         };
         // The filter narrows live as you type.
         if edited && self.editing == Editing::Filter {
-            self.reset_filter_selection();
+            let query = self.buffer.clone();
+            self.set_filter(Some(&query));
         }
         Some(EventResult::consumed())
     }
@@ -358,4 +356,41 @@ impl MedleyView {
                 }),
         }
     }
+
+    /// `:open <url-or-path>`'s remote-link case.
+    fn open_playlist_uri(&mut self, uri: String) -> EventResult {
+        let found = self.with_session(|s| {
+            let source = s.source_for_uri(&uri)?;
+            let node = source.browse_uri(&uri)?;
+            Some((source.id(), node))
+        });
+        match found {
+            Some((sid, node)) => {
+                let name = match &node {
+                    core::BrowseNode::Path(id) => id.clone(),
+                    core::BrowseNode::Root => String::new(),
+                };
+                let result = self.handle_action(Action::Screen(Screen::Playlists));
+                if let Some(list) = self.windows[WindowId::Tab(Screen::Playlists)].list_mut() {
+                    list.open_remote(sid, name, node);
+                }
+                result
+            }
+            None => popup(format!("no source can open this as a playlist: {uri:?}")),
+        }
+    }
+
+    /// `:open <url-or-path>`'s argument case.
+    fn open_arg(&mut self, arg: String, open: Option<PlaylistId>) -> EventResult {
+        if self.with_session(|s| s.source_for_uri(&arg).is_some()) {
+            return self.open_playlist_uri(arg);
+        }
+        let lower = arg.to_ascii_lowercase();
+        if lower.ends_with(".m3u") || lower.ends_with(".m3u8") {
+            return self.run(Command::ImportM3u(std::path::PathBuf::from(arg.trim())));
+        }
+        let paths = command::split_paths(&arg);
+        self.run(Command::AddFilesToPlaylist { playlist: open, paths })
+    }
+
 }

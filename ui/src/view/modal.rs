@@ -11,9 +11,9 @@ use super::help::HelpModal;
 use super::hotkeys::{HotkeyMenu, capture_event, draw_capture};
 use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
-use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::text::pad;
 use super::warnings::WarningsModal;
+use super::window::WindowId;
 
 /// The one exclusive layer over the main view; every variant swallows all input while open.
 pub(super) enum Modal {
@@ -82,30 +82,18 @@ impl MedleyView {
         self.vis_fps_cb()
     }
 
-    /// Layout-pass upkeep for the open modal; Help and the picker also re-read their snapshot once `list_revision` moves.
-    pub(super) fn relayout_modal(&mut self, resized: bool, list_revision: u64) {
-        let rect = self.modal_rect();
-        let Some(mut modal) = self.modal.take() else { return };
-        match &mut modal {
-            Modal::Warnings(m) => {
-                let statuses = self.with_session(|s| s.plugin_statuses().to_vec());
-                m.relayout(resized, rect, &statuses);
-            }
-            Modal::Picker(picker) => {
-                if picker.stale(list_revision) {
-                    picker.refresh(self.with_session(|s| s.playlists()), rect);
-                }
-                picker.relayout(resized, rect);
-            }
-            Modal::HotkeyMenu(menu) => menu.relayout(resized, rect),
-            Modal::Help(help) => {
-                if help.stale(list_revision) {
-                    help.refresh(self.with_session(|s| self.help_lines(s)), rect);
-                }
-            }
-            Modal::HotkeyCapture(..) | Modal::Pane(_) => {}
+    /// Layout-pass upkeep for the open modal, under one session lock.
+    pub(super) fn relayout_modal(&mut self, resized: bool) {
+        let (rect, session) = (self.modal_rect(), self.session.clone());
+        let s = session.lock().unwrap();
+        match &mut self.modal {
+            Some(Modal::Warnings(m)) => m.relayout(resized, rect, s.plugin_statuses()),
+            Some(Modal::Picker(picker)) => picker.relayout(resized, rect, &s),
+            Some(Modal::HotkeyMenu(menu)) => menu.relayout(resized, rect),
+            Some(Modal::Help(help)) => help.relayout(rect, &s),
+            Some(Modal::Pane(pane)) => self.windows[WindowId::Pane(*pane)].relayout(modal_body(rect, false), &s),
+            Some(Modal::HotkeyCapture(..)) | None => {}
         }
-        self.modal = Some(modal);
     }
 
     pub(super) fn draw_modal(&self, modal: &Modal, printer: &Printer) {
@@ -135,7 +123,16 @@ impl MedleyView {
                 draw_capture(printer, rect, name, current);
             }
             Modal::Help(help) => help.draw(printer, rect),
-            Modal::Pane(pane) => self.draw_screen_pane(*pane, printer, rect),
+            Modal::Pane(pane) => {
+                let hint = match pane {
+                    Pane::Vis => "  [Esc] close",
+                    Pane::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
+                    _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
+                };
+                draw_modal_frame(printer, rect, None, hint);
+                let window = &self.windows[WindowId::Pane(*pane)];
+                window.draw(printer, true, &self.with_session(|s| window.frame(&self.ctx(s))));
+            }
         }
     }
 
@@ -152,17 +149,19 @@ impl MedleyView {
             Some(Modal::HotkeyMenu(menu)) => menu.on_event(event, rect),
             Some(Modal::HotkeyCapture(target, _)) => capture_event(event, target),
             Some(Modal::Help(help)) => help.on_event(event, rect),
+            // Keys go to the window itself; the mouse never reaches a fullscreen pane.
             Some(Modal::Pane(pane)) => {
-                let pane = *pane;
-                match Nav::of(event) {
-                    _ if *event == Event::Key(Key::Esc) => ModalOutcome::Close,
-                    Some(nav @ (Nav::Line(_) | Nav::Page(_))) => {
-                        let (up, step) = nav.step(PAGE_SCROLL_STEP);
-                        self.scroll_pane(pane, up, step);
-                        ModalOutcome::Stay
+                let id = WindowId::Pane(*pane);
+                return match event {
+                    Event::Key(Key::Esc) => self.close_modal(),
+                    Event::Mouse { .. } => EventResult::consumed(),
+                    _ => {
+                        if let Some((_, outcome)) = self.send(&[id], event) {
+                            self.apply(outcome);
+                        }
+                        EventResult::consumed()
                     }
-                    _ => ModalOutcome::Stay,
-                }
+                };
             }
         };
         let rebound = match outcome {

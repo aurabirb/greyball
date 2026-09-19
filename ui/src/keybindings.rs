@@ -26,13 +26,6 @@ pub enum Action {
     Screen(Screen),
     /// UI-local: open the `:` command line.
     CommandLine,
-    /// UI-local: activate the selected row (open a playlist, etc).
-    Activate,
-    /// Play the selected track as part of whatever list it's currently
-    /// visible in (search results, a playlist, Liked Songs, ...) — the view
-    /// resolves that list into `Command::PlayContext`, since `map` here has
-    /// no access to it.
-    PlayFromContext(TrackId),
     /// UI-local: open the "Hotkeys" modal (backtick, nothing selected
     /// required) — lists every built-in action with its bound key, if any,
     /// and lets the user (re)bind or clear one. The view owns the modal's
@@ -90,12 +83,6 @@ pub fn map(key: &str, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyT
         // remapped — `>`/`<` are punctuation, not commands of their own.
         ">" => return Action::Command(Command::Next),
         "<" => return Action::Command(Command::Previous),
-        "Enter" => {
-            return match selected {
-                Some(id) => Action::PlayFromContext(id),
-                None => Action::Activate,
-            };
-        }
         _ => {}
     }
     let mut chars = key.chars();

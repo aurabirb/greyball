@@ -1,7 +1,6 @@
 //! `MedleyView` — the whole TUI in one snapshot-rendered cursive view.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use cursive::{Printer, Rect, Vec2, View};
 use cursive::direction::Direction;
@@ -11,50 +10,44 @@ use cursive::view::CannotFocus;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, LogBuf, Session};
+use core::{Command, HotkeyTarget, LogBuf, Session};
 
 use crate::{SessionHandle, keybindings};
 use crate::command::Pane;
 use crate::keybindings::Action;
-use crate::screen::{PerScreen, Screen};
+use crate::screen::Screen;
 
-use filter::LocalFilter;
-use frame::{CachedFrame, FrameKey};
+use frame::Chrome;
 use input::{Editing, key_name};
-use log::LogPane;
 use memo::Memo;
 use modal::Modal;
 use panes::PaneLayout;
-use playlists::PlaylistNav;
-use rows::draw_row_list;
-use scroll::{LIST_JUMP_STEP, ListState, PAGE_SCROLL_STEP};
-use settings::SettingsPane;
 use status_line::StatusLine;
 use tab_bar::{TabBar, TabBarHit};
 use text::Marquee;
+use track_list::TrackList;
 use warnings::{defocuses_warnings, warnings_label};
+use window::{Ctx, WindowFrame, WindowId, WindowOutcome, Windows};
 
-mod filter;
 mod frame;
 mod help;
 mod hotkeys;
 mod input;
-mod lists;
 mod log;
 mod memo;
 mod modal;
-mod mouse;
 mod panes;
 mod playlist_picker;
-mod playlists;
 mod rows;
 mod scroll;
 mod settings;
 mod status_line;
 mod tab_bar;
 mod text;
+mod track_list;
 mod transport;
 mod warnings;
+mod window;
 
 pub(crate) use text::pad;
 pub use text::{SCROLL_GAP, marquee_offset, scroll_title};
@@ -72,71 +65,120 @@ enum Focus {
 
 pub struct MedleyView {
     session: SessionHandle,
+    /// The active tab.
     screen: Screen,
-    /// Each screen's cursor and scroll window; a wheel scroll moves only the window, `clamp_scroll` re-follows.
-    lists: PerScreen<ListState>,
+    windows: Windows,
     /// Whole-terminal size as of the last layout pass.
     last_screen_size: Vec2,
     editing: Editing,
     buffer: String,
-    filter: LocalFilter,
     /// Last queue/wedge result.
     queue_feedback: Option<String>,
-    playlists: PlaylistNav,
     panes: PaneLayout,
-    log: LogPane,
-    /// Text of the last committed `Command::Search`, so an empty result list can say "no results for X".
-    last_query: Option<String>,
-    settings: SettingsPane,
-    /// Which pane currently receives nav keys; `Tab` cycles it.
+    /// Which window currently receives nav keys; `Tab` cycles it.
     focus: Focus,
-    /// The Vis pane's background worker + last computed frame.
     vis: Arc<crate::vis::Vis>,
     modal: Option<Modal>,
-    /// (when, screen, row index) of the last left-click on a list row, for double-click detection.
-    last_click: Option<(Instant, Screen, usize)>,
     /// Last hotkey bind/unbind result, shown until the next keypress.
     hotkey_feedback: Option<String>,
     marquee: Marquee,
-    /// What `follow_scan` last reported to the scan walk — a cache, not view state; see its doc.
-    follow_sig: Memo<lists::FollowKey>,
-    /// Revision-keyed memo of `frame()`'s cached part — see `frame.rs`.
-    frame_cache: Memo<FrameKey, Arc<CachedFrame>>,
+    /// What `follow_scan` last reported: window, its list's generation, its `follow_key`.
+    follow_sig: Memo<(WindowId, u64, (u64, usize))>,
+    chrome: Memo<u64, Arc<Chrome>>,
 }
 
 impl MedleyView {
     pub fn new(session: SessionHandle, initial_screen: &str, log: Arc<LogBuf>) -> Self {
-        let screen = Screen::from_config(initial_screen);
         let pane_cfg = session.lock().unwrap().cfg.panes;
         let vis = crate::vis::Vis::spawn(session.clone());
         Self {
             session,
-            screen,
-            lists: PerScreen::default(),
+            screen: Screen::from_config(initial_screen),
+            windows: Windows::new(log, vis.clone()),
             last_screen_size: Vec2::new(0, 0),
             editing: Editing::None,
             buffer: String::new(),
-            filter: LocalFilter::default(),
             queue_feedback: None,
-            playlists: PlaylistNav::default(),
             panes: PaneLayout::new(pane_cfg),
-            log: LogPane::new(log),
-            last_query: None,
-            settings: SettingsPane::default(),
             focus: Focus::Main,
             vis,
             modal: None,
-            last_click: None,
             hotkey_feedback: None,
             marquee: Marquee::new(),
             follow_sig: Memo::default(),
-            frame_cache: Memo::default(),
+            chrome: Memo::default(),
         }
     }
 
-    /// `Main`, then each open pane (in stack order), then the warnings button —
-    /// `warn_count` passed in so a layout pass can share one session lock
-    /// instead of `focus_order` taking its own (see `required_size`).
+    fn main_id(&self) -> WindowId {
+        WindowId::Tab(self.screen)
+    }
+
+    fn focused_id(&self) -> WindowId {
+        match self.focus {
+            Focus::Pane(pane) => WindowId::Pane(pane),
+            Focus::Main | Focus::Warnings => self.main_id(),
+        }
+    }
+
+    /// The active tab's window, then each docked one.
+    fn visible(&self) -> Vec<WindowId> {
+        std::iter::once(self.main_id()).chain(self.panes.open.iter().map(|&p| WindowId::Pane(p))).collect()
+    }
+
+    /// The list selection-based commands act on: the focused window's, else the active tab's.
+    fn active_list_id(&self) -> WindowId {
+        if self.windows[self.focused_id()].list().is_some() { self.focused_id() } else { self.main_id() }
+    }
+
+    fn active_list(&self) -> Option<&TrackList> {
+        self.windows[self.active_list_id()].list()
+    }
+
+    fn ctx<'a>(&self, s: &'a Session) -> Ctx<'a> {
+        Ctx { s, pane_cfg: self.panes.cfg, searching: self.editing == Editing::Search }
+    }
+
+    /// Offers `event` to each of `ids` under one session lock; the first window not ignoring it, and its outcome.
+    fn send(&mut self, ids: &[WindowId], event: &Event) -> Option<(WindowId, WindowOutcome)> {
+        let (session, pane_cfg, searching) = (self.session.clone(), self.panes.cfg, self.editing == Editing::Search);
+        let guard = session.lock().unwrap();
+        let ctx = Ctx { s: &guard, pane_cfg, searching };
+        ids.iter().find_map(|&id| match self.windows[id].on_event(event, &ctx) {
+            WindowOutcome::Ignored => None,
+            outcome => Some((id, outcome)),
+        })
+    }
+
+    fn apply(&mut self, outcome: WindowOutcome) -> EventResult {
+        match outcome {
+            WindowOutcome::Ignored => EventResult::Ignored,
+            WindowOutcome::Consumed => EventResult::consumed(),
+            WindowOutcome::Run(cmd) => self.run(cmd),
+            WindowOutcome::ToggleSetting(row) => {
+                self.toggle_setting(row);
+                EventResult::consumed()
+            }
+        }
+    }
+
+    /// Keep the active tab's and the focused window's scroll windows around their cursors.
+    fn clamp_scroll(&mut self) {
+        for id in [self.main_id(), self.focused_id()] {
+            self.windows[id].follow();
+        }
+    }
+
+    /// Feeds the scan walk the active list, re-reporting only when the list or the cursor in it changed.
+    fn follow_scan(&self, s: &Session) {
+        let (Some(scan), id) = (&s.scan, self.active_list_id()) else { return };
+        let Some(list) = self.windows[id].list() else { return };
+        if self.follow_sig.changed((id, list.list_gen(s), list.follow_key())) {
+            scan.follow_view(list.visible_track_ids(s), list.cursor());
+        }
+    }
+
+    /// `Main`, each docked pane in stack order, then the warnings button; `warn_count` comes from the caller's lock.
     fn focus_order_given(&self, warn_count: usize) -> Vec<Focus> {
         // `panes.open` only ever holds docked panes (see `toggle_pane`).
         let mut order = if self.panes.open.is_empty() {
@@ -172,9 +214,43 @@ impl MedleyView {
         self.clamp_focus_given(self.warn_count());
     }
 
-    /// Where focus should land when it can no longer stay on the warnings button.
-    fn fallback_focus(&self) -> Focus {
-        Focus::Main
+    /// Keys no window took.
+    fn on_shell_key(&mut self, event: &Event) -> EventResult {
+        match event {
+            Event::Key(Key::Tab) => {
+                self.cycle_focus();
+                EventResult::consumed()
+            }
+            Event::Key(Key::Right) => self.run(Command::Seek(5000)),
+            Event::Key(Key::Left) => self.run(Command::Seek(-5000)),
+            Event::Char(':') => self.handle_action(Action::CommandLine),
+            Event::Char('x') => match self.with_session(|s| self.hotkey_target(s)) {
+                Some(HotkeyTarget::Local(id)) => self.run(Command::ExportM3u(id)),
+                _ => EventResult::Ignored,
+            },
+            ev => {
+                let Some(key) = key_name(ev) else { return EventResult::Ignored };
+                let (sel, target, hotkeys) = self.with_session(|s| {
+                    let sel = self.active_list().and_then(|list| list.selected_track(s));
+                    (sel, self.hotkey_target(s), s.hotkeys().into_iter().collect())
+                });
+                // With a playlist selected or open, backtick binds that playlist instead of opening the menu.
+                if let ("`", Some(target)) = (key.as_str(), target) {
+                    self.open_hotkey_capture(target);
+                    return EventResult::consumed();
+                }
+                // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
+                match keybindings::hotkey_toggle(&key, sel, &hotkeys) {
+                    Some(cmd) => self.run(cmd),
+                    None => self.handle_action(keybindings::map(&key, sel, &hotkeys)),
+                }
+            }
+        }
+    }
+
+    /// The playlist the focused window, else the active tab's, has selected or open.
+    fn hotkey_target(&self, s: &Session) -> Option<HotkeyTarget> {
+        [self.focused_id(), self.main_id()].iter().find_map(|&id| self.windows[id].list()?.selected_hotkey_target(s))
     }
 
     // `session` is a non-reentrant `Mutex`: always lock via `with_session`, never twice in one statement.
@@ -196,82 +272,43 @@ impl View for MedleyView {
             return;
         }
 
-        let (main_rect, panes) = self.panes.split(printer.size);
-
-        // Resolved before the list so `rows` is only ever asked for the visible window.
-        let list_h = self.list_h();
-        let sel = self.lists[self.screen].cursor;
-        // Persisted, not recomputed from `sel` — see `lists`.
-        let offset = self.lists[self.screen].offset;
-
-        // A docked Queue/History pane needs the same triple the main content does, for its own rect/screen/cursor.
-        let list_panes: Vec<(Pane, Rect, Screen, usize, usize)> = panes
-            .iter()
-            .filter_map(|&(pane, rect)| {
-                let screen = Screen::from_pane(pane)?;
-                let pane_h = rect.height().saturating_sub(1);
-                Some((pane, rect, screen, self.lists[screen].offset, pane_h))
-            })
-            .collect();
-
-        // One lock for the whole frame: pull every session-derived value out here, then render without the guard.
-        let want_settings = panes.iter().any(|(p, _)| *p == Pane::Settings);
-        let frame = self.frame(list_h, offset, &list_panes, want_settings);
-        let cached = &frame.cached;
-
-        let mut list_pane_frames = cached.panes.iter();
-        for &(pane, rect) in &panes {
-            let focused = self.focus == Focus::Pane(pane);
-            if pane == Pane::Vis {
-                self.vis.draw(&printer.windowed(rect), focused);
-                continue;
-            }
-            if let Some(screen) = Screen::from_pane(pane) {
-                // Built from this same `panes` list filtered the same way — always in lockstep.
-                let pf = list_pane_frames.next().expect("a list pane always has a PaneFrame");
-                // `[...]` is the focus marker every pane title uses.
-                let title = if focused { format!("[{}]", pf.title) } else { pf.title.clone() };
-                draw_row_list(
-                    &printer.windowed(rect),
-                    &title,
-                    &pf.rows,
-                    self.lists[screen].offset,
-                    self.lists[screen].cursor,
-                    pf.total,
-                );
-                continue;
-            }
-            if pane == Pane::Settings {
-                self.settings.draw(&printer.windowed(rect), &cached.settings, focused);
-                continue;
-            }
-            self.log.draw(&printer.windowed(rect), focused);
+        // One lock for the whole frame: every session-derived value comes out here, then rendering runs without it.
+        let visible = self.visible();
+        let frame = self.frame(&visible);
+        for (&id, window_frame) in visible.iter().zip(&frame.windows) {
+            // The active tab's window carries no focus marker.
+            let marked = matches!(id, WindowId::Pane(pane) if self.focus == Focus::Pane(pane));
+            self.windows[id].draw(printer, marked, window_frame);
         }
-        if !panes.is_empty() {
-            self.panes.draw_separator(printer, main_rect);
+        if visible.len() > 1 {
+            self.panes.draw_separator(printer, self.windows[self.main_id()].rect());
         }
 
-        // Row 0 of the whole screen.
+        let chrome = &frame.chrome;
         let marquee_offset = self.marquee.offset(&frame.status.now_playing);
         TabBar { active: self.screen, state: &frame.status.state }
             .draw(printer, &frame.status.now_playing, marquee_offset);
-        draw_row_list(&printer.windowed(main_rect), &cached.main_title, &cached.rows, offset, sel, cached.total);
 
         // command / hint line (row above the status line).
+        let main = match &frame.windows[0] {
+            WindowFrame::List(list) => Some(list),
+            _ => None,
+        };
         let bottom = printer.size.y.saturating_sub(2);
-        let line = self.hint_line(cached.membership_feedback.clone(), cached.hotkey_target_selected, cached.help_key);
+        let hotkey_target = main.is_some_and(|list| list.hotkey_target);
+        let line = self.hint_line(chrome.membership_feedback.clone(), hotkey_target, chrome.help_key);
         printer.print((0, bottom), &pad(&line, printer.size.x));
 
         // Cursor position in the main list / its length, right-aligned before the warnings button.
-        let warn_w = if cached.warn_count > 0 {
-            warnings_label(cached.warn_count).chars().count().min(printer.size.x)
+        let warn_w = if chrome.warn_count > 0 {
+            warnings_label(chrome.warn_count).chars().count().min(printer.size.x)
         } else {
             0
         };
-        if cached.total > 0 {
-            let more = if cached.list_loading { "+" } else { "" };
-            let unit = self.row_unit(self.screen, cached.total);
-            let readout = format!("{}/{}{more} {unit}", sel.min(cached.total - 1) + 1, cached.total);
+        let cursor = self.windows[self.main_id()].list().map_or(0, TrackList::cursor);
+        if let Some(list) = main.filter(|list| list.total > 0) {
+            let more = if list.loading { "+" } else { "" };
+            let readout = format!("{}/{}{more} {}", cursor.min(list.total - 1) + 1, list.total, list.unit);
             let x = printer.size.x.saturating_sub(warn_w + readout.width() + 1);
             if x >= line.width() + 2 {
                 printer.print((x, bottom), &readout);
@@ -282,8 +319,8 @@ impl View for MedleyView {
         frame.status.draw(&printer.windowed(Rect::from_size((0, y), (printer.size.x, 1))), marquee_offset);
 
         // Warnings button — right-aligned on the hint line, drawn last so it overwrites that tail.
-        if cached.warn_count > 0 {
-            let label = warnings_label(cached.warn_count);
+        if chrome.warn_count > 0 {
+            let label = warnings_label(chrome.warn_count);
             let label_w = label.chars().count().min(printer.size.x);
             let bx = printer.size.x - label_w;
             let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
@@ -298,36 +335,25 @@ impl View for MedleyView {
 
     fn required_size(&mut self, constraint: Vec2) -> Vec2 {
         // The one layout hook that gets `&mut self` with the resolved screen size.
-        let screen_size_changed = constraint != self.last_screen_size;
+        let resized = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
-        let (main_h_changed, pane_bodies) = self.panes.relayout(constraint);
-        let list_h = self.list_h();
-        let list_screens: Vec<Screen> =
-            pane_bodies.iter().filter_map(|&(pane, _, _)| Screen::from_pane(pane)).collect();
+        let (main_rect, pane_rects) = self.panes.split(constraint);
+        let rects = std::iter::once((self.main_id(), main_rect))
+            .chain(pane_rects.into_iter().map(|(pane, rect)| (WindowId::Pane(pane), rect)));
 
-        // One shared lock for everything this layout pass needs from the
-        // session, instead of `clamp_focus`/each `relayout_list` taking their own.
-        let (warn_count, main_len, pane_lens, list_revision) = self.with_session(|s| {
-            let warn_count = s.plugin_warning_count();
-            let main_len = self.list_len(s, self.screen);
-            let pane_lens: Vec<usize> = list_screens.iter().map(|&scr| self.list_len(s, scr)).collect();
-            // Feed the scan walk the visible list so it's prioritized over store order.
-            if let Some(scan) = &s.scan {
-                self.follow_scan(s, scan, self.active_screen());
+        // One shared lock for everything this layout pass needs from the session.
+        let session = self.session.clone();
+        let warn_count = {
+            let s = session.lock().unwrap();
+            for (id, rect) in rects {
+                self.windows[id].relayout(rect, &s);
             }
-            (warn_count, main_len, pane_lens, s.list_revision())
-        });
-
+            // Effects run here on change, never from `draw`: a memo hit there must not skip them.
+            self.follow_scan(&s);
+            s.plugin_warning_count()
+        };
         self.clamp_focus_given(warn_count);
-        self.relayout_modal(screen_size_changed, list_revision);
-        self.lists[self.screen].relayout(main_h_changed, main_len, list_h);
-        let mut pane_lens = pane_lens.into_iter();
-        for (pane, h, changed) in pane_bodies {
-            if let Some(screen) = Screen::from_pane(pane) {
-                let len = pane_lens.next().expect("one length per list pane, built from the same list");
-                self.lists[screen].relayout(changed, len, h);
-            }
-        }
+        self.relayout_modal(resized);
         constraint
     }
 
@@ -356,194 +382,61 @@ impl View for MedleyView {
             return self.on_modal_event(&event);
         }
 
-        // The tab bar lives on the fixed top row of the whole screen, never `last_main_rect`.
+        // Fixed rows of the whole screen: the tab bar on top, the hint row and the status line at the bottom.
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(local) = position.checked_sub(offset)
-            && local.y == 0
             && local.x < self.last_screen_size.x
         {
-            let state = self.with_session(|s| s.player_status().state);
-            let hit = TabBar { active: self.screen, state: &state }.click(local.x, self.last_screen_size.x);
-            if let Some(TabBarHit::Transport(button)) = hit {
-                return self.run(button.command());
+            let size = self.last_screen_size;
+            if local.y == 0 {
+                let state = self.with_session(|s| s.player_status().state);
+                let hit = TabBar { active: self.screen, state: &state }.click(local.x, size.x);
+                if let Some(TabBarHit::Transport(button)) = hit {
+                    return self.run(button.command());
+                }
+                self.focus = Focus::Main;
+                return match hit {
+                    Some(TabBarHit::Tab(target)) => self.handle_action(Action::Screen(target)),
+                    _ => EventResult::consumed(),
+                };
+            }
+            if local.y == size.y.saturating_sub(2) && self.warn_count() > 0 {
+                self.open_warnings();
+                return EventResult::consumed();
+            }
+            if local.y == size.y.saturating_sub(1) {
+                let status = self.with_session(StatusLine::snapshot);
+                return match status.click(local.x, size.x) {
+                    Some(cmd) => self.run(cmd),
+                    None => EventResult::consumed(),
+                };
+            }
+        }
+
+        // A mouse event goes to whichever visible window it lands in, which takes focus; wheel scrolls stay put.
+        if matches!(event, Event::Mouse { .. }) {
+            let visible = self.visible();
+            let Some((id, outcome)) = self.send(&visible, &event) else { return EventResult::Ignored };
+            self.focus = match id {
+                WindowId::Pane(pane) => Focus::Pane(pane),
+                WindowId::Tab(_) => Focus::Main,
+            };
+            return self.apply(outcome);
+        }
+
+        if self.focus == Focus::Warnings {
+            if !defocuses_warnings(&event) {
+                self.open_warnings();
+                return EventResult::consumed();
             }
             self.focus = Focus::Main;
-            return match hit {
-                Some(TabBarHit::Tab(target)) => self.handle_action(Action::Screen(target)),
-                _ => EventResult::consumed(),
-            };
         }
 
-        // The warnings button lives on the fixed bottom-2 row of the whole screen, never `last_main_rect`.
-        if self.warn_count() > 0
-            && let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
-            && let Some(local) = position.checked_sub(offset)
-            && local.x < self.last_screen_size.x
-            && local.y == self.last_screen_size.y.saturating_sub(2)
-        {
-            self.open_warnings();
-            return EventResult::consumed();
-        }
-
-        // The bottom status line's transport cluster, scrubber, and bpm/shuffle tags.
-        if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
-            && let Some(local) = position.checked_sub(offset)
-            && local.x < self.last_screen_size.x
-            && local.y == self.last_screen_size.y.saturating_sub(1)
-        {
-            let status = self.with_session(StatusLine::snapshot);
-            return match status.click(local.x, self.last_screen_size.x) {
-                Some(cmd) => self.run(cmd),
-                None => EventResult::consumed(),
-            };
-        }
-
-        // Mouse: routed separately from the keyboard path below entirely, and returned early.
-        if let Event::Mouse { offset, position, event: mev } = event {
-            if let Some(result) = self.handle_mouse(offset, position, mev) {
-                return result;
-            }
-            for (pane, rect) in self.panes.rects.clone() {
-                if let Some(result) = self.handle_pane_mouse(pane, rect, offset, position, mev) {
-                    return result;
-                }
-            }
-        }
-
-        // Any key other than Enter defocuses the warnings button, then is handled as if `fallback_focus()` had focus.
-        if self.focus == Focus::Warnings && defocuses_warnings(&event) {
-            self.focus = self.fallback_focus();
-        }
-
-        // One lock: taking the session guard twice in one statement deadlocks.
-        let len = self.with_session(|s| self.list_len(s, self.screen));
-
-        let result = match event {
-            Event::Key(Key::Tab) => {
-                self.cycle_focus();
-                EventResult::consumed()
-            }
-            Event::Key(Key::Up) | Event::Char('k') if self.focus == Focus::Main => {
-                let c = &mut self.lists[self.screen].cursor;
-                *c = c.saturating_sub(1);
-                EventResult::consumed()
-            }
-            Event::Key(Key::Down) | Event::Char('j') if self.focus == Focus::Main => {
-                let s = self.screen;
-                self.lists[s].cursor = self.lists[s].cursor.saturating_add(1);
-                self.clamp_cursor(len);
-                EventResult::consumed()
-            }
-            Event::Key(Key::Right) => self.run(Command::Seek(5000)),
-            Event::Key(Key::Left) => self.run(Command::Seek(-5000)),
-            // Shift-J/Shift-K jump the main tracklist or a focused list-pane, or page-scroll a focused non-list pane.
-            Event::Char('K') if self.focus != Focus::Warnings => match self.focus {
-                Focus::Pane(pane) if Screen::from_pane(pane).is_none() => {
-                    self.scroll_pane(pane, true, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                _ => self.jump_list(true, LIST_JUMP_STEP),
-            },
-            Event::Char('J') if self.focus != Focus::Warnings => match self.focus {
-                Focus::Pane(pane) if Screen::from_pane(pane).is_none() => {
-                    self.scroll_pane(pane, false, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                _ => self.jump_list(false, LIST_JUMP_STEP),
-            },
-            Event::Key(Key::Esc)
-                if self.screen == Screen::Playlists
-                    && !self.playlists.at_top_level() =>
-            {
-                self.playlists.back_out();
-                self.lists[Screen::Playlists].cursor = 0;
-                self.filter.query = None; // going back — the filtered list no longer applies
-                EventResult::consumed()
-            }
-            // Nav keys past this point only apply while a pane is focused.
-            Event::Key(Key::Up) | Event::Char('k') => {
-                if let Focus::Pane(pane) = self.focus {
-                    match Screen::from_pane(pane) {
-                        Some(screen) => {
-                            let c = &mut self.lists[screen].cursor;
-                            *c = c.saturating_sub(1);
-                        }
-                        None => self.scroll_pane(pane, true, 1),
-                    }
-                }
-                EventResult::consumed()
-            }
-            Event::Key(Key::Down) | Event::Char('j') => {
-                if let Focus::Pane(pane) = self.focus {
-                    match Screen::from_pane(pane) {
-                        Some(screen) => self.bump_pane_cursor(screen, 1),
-                        None => self.scroll_pane(pane, false, 1),
-                    }
-                }
-                EventResult::consumed()
-            }
-            // PageUp/PageDown: same split as Shift-J/Shift-K above, also reaching `Focus::Main`.
-            Event::Key(Key::PageUp) => match self.focus {
-                Focus::Pane(pane) if Screen::from_pane(pane).is_none() => {
-                    self.scroll_pane(pane, true, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                _ => self.jump_list(true, LIST_JUMP_STEP),
-            },
-            Event::Key(Key::PageDown) => match self.focus {
-                Focus::Pane(pane) if Screen::from_pane(pane).is_none() => {
-                    self.scroll_pane(pane, false, PAGE_SCROLL_STEP);
-                    EventResult::consumed()
-                }
-                _ => self.jump_list(false, LIST_JUMP_STEP),
-            },
-            Event::Key(Key::Enter) if self.focus == Focus::Warnings => {
-                self.open_warnings();
-                EventResult::consumed()
-            }
-            Event::Key(Key::Enter) | Event::Char(' ') if self.focus == Focus::Pane(Pane::Settings) => {
-                self.toggle_selected_setting();
-                EventResult::consumed()
-            }
-            Event::Char(':') => self.handle_action(Action::CommandLine),
-            Event::Char('x') => {
-                match self.with_session(|s| self.selected_playlist(s)) {
-                    Some(id) => self.run(Command::ExportM3u(id)),
-                    None => EventResult::Ignored,
-                }
-            }
-            // With a playlist selected on the Playlists screen, backtick binds that playlist instead of opening the menu.
-            Event::Char('`') if self.with_session(|s| self.selected_hotkey_target(s)).is_some() => {
-                if let Some(target) = self.with_session(|s| self.selected_hotkey_target(s)) {
-                    self.open_hotkey_capture(target);
-                }
-                EventResult::consumed()
-            }
-            Event::Key(Key::Enter) => {
-                let active = self.active_screen();
-                let sel = self.with_session(|s| self.selected_track(s, active));
-                match keybindings::map("Enter", sel, &self.hotkeys_map()) {
-                    Action::PlayFromContext(_) => {
-                        self.play_track_at(active, self.lists[active].cursor)
-                    }
-                    action => self.handle_action(action),
-                }
-            }
-            ev => match key_name(&ev) {
-                Some(k) => {
-                    let active = self.active_screen();
-                    let sel = self.with_session(|s| self.selected_track(s, active));
-                    // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
-                    let hotkeys = self.hotkeys_map();
-                    match keybindings::hotkey_toggle(&k, sel, &hotkeys) {
-                        Some(cmd) => self.run(cmd),
-                        None => self.handle_action(keybindings::map(&k, sel, &hotkeys)),
-                    }
-                }
-                None => EventResult::Ignored,
-            },
+        // A key goes to the focused window, then the active tab's, then the shell.
+        let result = match self.send(&[self.focused_id(), self.main_id()], &event) {
+            Some((_, outcome)) => self.apply(outcome),
+            None => self.on_shell_key(&event),
         };
-        // Cheap and covers every arm above uniformly, including ones reached via `handle_action`/keybindings.
         self.clamp_scroll();
         result
     }

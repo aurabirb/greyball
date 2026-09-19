@@ -6,11 +6,11 @@ use cursive::event::EventResult;
 use core::{Axis, PaneLayoutConfig, PaneMode, Side};
 
 use crate::command::Pane;
+use crate::keybindings::Action;
 use crate::screen::Screen;
 
 use super::MedleyView;
-use super::modal::{Modal, draw_modal_frame};
-use super::settings::settings_entries;
+use super::modal::Modal;
 
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
@@ -33,10 +33,6 @@ pub(super) struct PaneLayout {
     pub(super) cfg: PaneLayoutConfig,
     /// Per-pane override of `cfg.mode`, applied the next time that pane is toggled.
     pub(super) mode_overrides: HashMap<Pane, PaneMode>,
-    /// The main list's rect as of the last layout pass.
-    pub(super) main_rect: Rect,
-    /// Each docked pane's rect as of the last layout pass.
-    pub(super) rects: Vec<(Pane, Rect)>,
 }
 
 impl PaneLayout {
@@ -45,8 +41,6 @@ impl PaneLayout {
             open: Vec::new(),
             cfg,
             mode_overrides: HashMap::new(),
-            main_rect: Rect::from_size((0, 0), (0, 0)),
-            rects: Vec::new(),
         }
     }
 
@@ -57,36 +51,6 @@ impl PaneLayout {
     /// The main content rect and each docked pane's rect on a `size` screen.
     pub(super) fn split(&self, size: Vec2) -> (Rect, Vec<(Pane, Rect)>) {
         split(size, &self.open, self.cfg)
-    }
-
-    /// Recomputes the rects: `(main height changed, per docked pane (pane, body height, it changed))`.
-    pub(super) fn relayout(&mut self, size: Vec2) -> (bool, Vec<(Pane, usize, bool)>) {
-        let (main_rect, rects) = self.split(size);
-        let main_h_changed = main_rect.height() != self.main_rect.height();
-        let bodies = rects
-            .iter()
-            .map(|&(pane, rect)| {
-                let h = rect.height().saturating_sub(1);
-                (pane, h, self.body_h(pane) != Some(h))
-            })
-            .collect();
-        self.main_rect = main_rect;
-        self.rects = rects;
-        (main_h_changed, bodies)
-    }
-
-    /// Rows a docked `pane` has under its title row, as of the last layout pass.
-    pub(super) fn body_h(&self, pane: Pane) -> Option<usize> {
-        self.rects.iter().find(|&&(p, _)| p == pane).map(|&(_, rect)| rect.height().saturating_sub(1))
-    }
-
-    /// The `(width, rows)` `pane`'s content is rendered into right now, fullscreen or docked.
-    pub(super) fn content_dims(&self, pane: Pane, fullscreen: bool, screen: Vec2) -> Option<(usize, usize)> {
-        if fullscreen {
-            Some((screen.x, screen.y.saturating_sub(2)))
-        } else {
-            self.rects.iter().find(|&&(p, _)| p == pane).map(|&(_, rect)| (rect.width(), rect.height().saturating_sub(1)))
-        }
     }
 }
 
@@ -190,33 +154,11 @@ pub(super) fn pane_title(pane: Pane) -> &'static str {
 }
 
 impl MedleyView {
-    /// `Screen`-mode: `pane` over all of `rect` but a footer hint row.
-    pub(super) fn draw_screen_pane(&self, pane: Pane, printer: &Printer, rect: Rect) {
-        let hint = match pane {
-            Pane::Vis => "  [Esc] close",
-            Pane::Settings => "  [Esc] close   [↑/↓ j/k] move   [Enter/Space] toggle",
-            _ => "  [Esc] close   [↑/↓ j/k PgUp/PgDn J/K] scroll",
-        };
-        let content = draw_modal_frame(printer, rect, None, hint);
-        match pane {
-            Pane::Vis => self.vis.draw(&content, true),
-            Pane::Log => self.log.draw(&content, true),
-            Pane::Settings => {
-                let pane_cfg = self.panes.cfg;
-                let entries = self.with_session(|s| settings_entries(s, pane_cfg));
-                self.settings.draw(&content, &entries, true);
-            }
-            // `toggle_pane` never routes these two here.
-            Pane::Queue | Pane::History => unreachable!("Queue/History never become a fullscreen pane"),
-        }
-    }
-
     /// Open/close `pane`, per its own placement mode — `:log`, `:settings`, bare `:vis`, `:queue`, `:history`.
     pub(super) fn toggle_pane(&mut self, pane: Pane) {
         if self.panes.mode(pane) == PaneMode::Screen {
             if let Some(screen) = Screen::from_pane(pane) {
-                self.screen = screen;
-                self.playlists.leave();
+                self.handle_action(Action::Screen(screen));
             } else {
                 self.modal = Some(Modal::Pane(pane));
             }
@@ -226,7 +168,6 @@ impl MedleyView {
             self.panes.open.push(pane);
         }
         self.clamp_focus();
-        self.clamp_scroll(); // covers the screen-switch branch above; a no-op otherwise
     }
 
     /// Sync cursive's own redraw rate to whether/how fast the Vis pane needs to animate.
@@ -235,18 +176,6 @@ impl MedleyView {
         self.vis.set_enabled(vis_open);
         let fps = if vis_open { crate::vis::FPS } else { crate::BASELINE_FPS };
         EventResult::with_cb(move |siv| siv.set_fps(fps))
-    }
-
-    /// Scrolls a non-list pane: Settings moves its row cursor, Log its view; Vis is live.
-    pub(super) fn scroll_pane(&mut self, pane: Pane, up: bool, step: usize) {
-        match pane {
-            Pane::Settings => self.jump_settings(up, step),
-            Pane::Log => {
-                let dims = self.panes.content_dims(pane, self.is_fullscreen(pane), self.last_screen_size);
-                self.log.scroll_by(up, step, dims);
-            }
-            Pane::Vis | Pane::Queue | Pane::History => {}
-        }
     }
 
     pub(super) fn is_fullscreen(&self, pane: Pane) -> bool {
