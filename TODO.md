@@ -301,6 +301,13 @@
   `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
   status lines from scratch. The window-resize handler needs exactly this too (see the stale
   rightmost-column bug), so share one function between the two.
+- [ ] Add a visualizer FPS limit setting to the Settings UI. The Vis frame rate is the fixed
+  constant `FPS = 30` in `ui/src/vis.rs` (used by the worker's sleep, ~line 109, and by
+  `sync_vis_fps` in `ui/src/view.rs`, which sets the cursive refresh rate while a Vis window is
+  shown). Make it a persisted setting (config alongside the other settings, adjustable in the
+  Settings window like the others, not config-file-only), read by both places so it applies
+  immediately without a restart, with a sensible range (e.g. 5–60) and 30 as the default.
+  `BASELINE_FPS` (idle floor, `ui/src/lib.rs`) is not part of this.
 - [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
