@@ -198,7 +198,7 @@ fn save_state(
     source_overrides: &HashMap<&'static str, bool>,
 ) {
     let _ = std::fs::create_dir_all(data_dir());
-    let mut text = format!("volume = {volume}\n");
+    let mut text = format!("volume = {volume:?}\n");
     if let Some(scan_mode) = scan_mode {
         text.push_str(&format!("scan_mode = \"{}\"\n", scan_mode_to_str(scan_mode)));
     }
