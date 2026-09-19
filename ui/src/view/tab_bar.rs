@@ -104,7 +104,7 @@ impl TabBar<'_> {
         let content_w = total_w.saturating_sub(1);
         let buttons_w = transport_layout(0, &self.status.state).last().map_or(0, |&(_, s, w)| s + w);
         let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
-        let collapsed = full_w + TRANSPORT_GAP + buttons_w > content_w;
+        let collapsed = full_w + TRANSPORT_GAP + buttons_w + WAVE_MIN + TRANSPORT_GAP + TITLE_MIN > content_w;
 
         let all_tabs = self.tab_layout(collapsed);
         let tabs_end = all_tabs.last().map_or(0, |&(_, start, w)| start + w);
