@@ -293,9 +293,13 @@ impl MedleyView {
         }
     }
 
-    /// Every shown window, bottom first, then the warnings button; `warn_count` comes from the caller's lock.
+    /// Every shown window — the tab, the docked, the floats by id — then the warnings button; `warn_count` is the caller's.
     fn focus_order_given(&self, warn_count: usize) -> Vec<Focus> {
-        let mut order: Vec<Focus> = self.visible().into_iter().map(Focus::Window).collect();
+        let mut shown = self.visible();
+        // Focusing a float raises it, so z-order would make `Tab` skip the one just covered.
+        let floats = shown.iter().position(|&id| self.windows.placement(id) == Placement::Floating).unwrap_or(shown.len());
+        shown[floats..].sort();
+        let mut order: Vec<Focus> = shown.into_iter().map(Focus::Window).collect();
         if warn_count > 0 {
             order.push(Focus::Warnings);
         }
