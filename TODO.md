@@ -52,6 +52,13 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
+  (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
+  tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
+  can be projected forward from the playback position) — have the analyzer produce it, and prefer
+  receiving it as events from the live analysis (the stream engine lets it run while the track
+  downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
+  and stays quiet when no tempo is known.
 - [ ] Move the buffering / download indicator into the status bar, next to the analyzer tag (`[b]`,
   `bpm_status_tag`/`SCAN_TAG_W`, `ui/src/view/status_line.rs`), as a single character replacing the
   `[buffering N%] ` text prefix (`status_line.rs` ~126-130, and the copies in `tab_bar.rs`/`frame.rs`).
