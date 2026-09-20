@@ -52,6 +52,13 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Move the buffering / download indicator into the status bar, next to the analyzer tag (`[b]`,
+  `bpm_status_tag`/`SCAN_TAG_W`, `ui/src/view/status_line.rs`), as a single character replacing the
+  `[buffering N%] ` text prefix (`status_line.rs` ~126-130, and the copies in `tab_bar.rs`/`frame.rs`).
+  Idle: draw a blank cell. Buffering (`PlayerStatus.buffering`, no percent): an animated braille
+  spinner. Downloading with a known percent (`download_pct`): one character from the waveform's block
+  glyphs (`GLYPHS`, `ui/src/view/tab_bar.rs`: `▁…█`) chosen by the percent. The spinner frame must come
+  from the frame clock or the player tick without redrawing on a timer that wakes the UI when idle.
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
