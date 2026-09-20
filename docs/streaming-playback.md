@@ -228,7 +228,7 @@ show a "downloading" mark from `engine.status`.
 - `tick`: `Buffering` when the reader is stalled (or `ranges` ahead of the decode position fall
   under `LOW_WATER`): pause with a "buffering" state and resume at the start threshold; `Failed`
   -> `LoadFailed`/`BackgroundFailure`, not `Finished`.
-- Stop drops the claim at once (grace); a Load of another key keeps the old sink and claim playing until the new track's `finish_load` swaps them out (gapless skip), and `tick` is idle meanwhile. Same key reuses the handle.
+- Stop drops the claim at once (grace); a Load of another key keeps the old sink and claim playing until the new track's `finish_load` swaps them out (gapless skip), and `tick` keeps reporting the previous track meanwhile (its `Progress` carries its own rendition, so the Session drops it). Same key reuses the handle.
 - A read may still block on the audio thread; the start threshold, low-water pause and retries make
   that rare. A decode-ahead ring buffer thread is deliberately deferred.
 

@@ -82,6 +82,8 @@ impl Player for NullPlayer {
                 let pos = len * n / 3;
                 inner.lock().unwrap().position_ms = pos;
                 bus.send(CoreEvent::Player(PlayerEvent::Progress {
+                    source: source.clone(),
+                    uri: uri.clone(),
                     position_ms: pos,
                     duration_ms: len,
                 }));
@@ -123,12 +125,15 @@ impl Player for NullPlayer {
     }
 
     fn seek(&self, position_ms: u32) {
-        let duration_ms = {
+        let (source, uri, duration_ms) = {
             let mut s = self.inner.lock().unwrap();
             s.position_ms = position_ms;
-            s.duration_ms
+            let (Some(source), Some(uri)) = (s.source.clone(), s.uri.clone()) else { return };
+            (source, uri, s.duration_ms)
         };
         self.bus.send(CoreEvent::Player(PlayerEvent::Progress {
+            source,
+            uri,
             position_ms,
             duration_ms,
         }));

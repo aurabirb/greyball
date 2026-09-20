@@ -20,10 +20,7 @@
   starts. Decide what the readout shows if the new track fails to load. The player's snapshot already
   describes the playing track until the swap; the Session side (`Loading`/`Playing` handlers set
   `shown.now_playing` and call `set_status`, `self.progress`, the queue pointer, `core/src/app.rs`)
-  still switches at once. Hazard: the previous track's `Progress` events (no track identity) and the
-  `Loading` handler's `set_status` reach `update_progress`, whose `learn_duration` can store the previous
-  track's duration on the newly selected track when its catalog duration is 0 — give `Progress` a
-  `source`/`uri` like `Finished` and guard `update_progress`/`set_status` by identity.
+  still switches at once; the previous track's position/length no longer reach `self.progress` (`Progress` is identity-guarded), so the bar sits at 0 / the new track's catalog length until the swap.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
@@ -58,6 +55,11 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Change the Now Playing window's docked hint from `[M] docked` to `[=]`, matching the Now Playing
+  marker: today the hint row shows the layout key as `[M] cycle layout` only while docked
+  (`hint(&[c.layout_key], "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) and
+  the mode flash names the placement (`Placement::word`, `ui/src/screen.rs`; `panes.rs` ~349-355). Find where
+  `[M] docked` is drawn and what `[=]` is on the Now Playing window, and render the same `[=]` there.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid

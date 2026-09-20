@@ -811,7 +811,10 @@ impl Session {
                     let cur = p.status();
                     let target = (cur.position_ms as i64 + delta).max(0) as u32;
                     p.seek(target);
-                    self.set_status(p.status(), None);
+                    let status = p.status();
+                    let (position_ms, duration_ms) = (status.position_ms, status.duration_ms);
+                    self.set_status(status, None);
+                    self.update_progress(position_ms, duration_ms);
                 }
                 Ok(Dispatch::Ok)
             }
@@ -1133,11 +1136,11 @@ impl Session {
                 }
                 Ok(true)
             }
-            PlayerEvent::Progress {
-                position_ms,
-                duration_ms,
-            } => {
-                self.update_progress(*position_ms, *duration_ms);
+            PlayerEvent::Progress { source, uri, position_ms, duration_ms } => {
+                // A tick from the previous track, still playing until the new load swaps in, is not the shown track's.
+                if self.now_playing_rendition.as_ref().is_some_and(|(s, u, _)| s == source && u == uri) {
+                    self.update_progress(*position_ms, *duration_ms);
+                }
                 Ok(true)
             }
             PlayerEvent::Paused => {
@@ -1175,7 +1178,6 @@ impl Session {
                 Ok(false)
             }
             PlayerEvent::LoadFailed { source, uri } => {
-                self.shown.write().player_state = PlayerState::Stopped;
                 // Only the track the queue still considers current is worth a
                 // fallback retry — a stale failure for whatever played before
                 // the user already moved on must not hijack playback.
@@ -1202,7 +1204,7 @@ impl Session {
                                 "player: load failed for \"{}\" ({source}) — trying local-cache fallback",
                                 t.title
                             );
-                            if !self.play_from_cache(&t, true) {
+                            if !self.play_from_cache(&t, true, Some(uri)) {
                                 self.warn(source.as_str(), &format!("playback failed for {:?} ({uri})", t.title));
                                 self.load_failures += 1;
                                 // One dead source or network would otherwise walk the whole queue.
@@ -1906,12 +1908,12 @@ impl Session {
             Resolution::Ready(r) => {
                 if let Some(p) = self.pick_player(&r) {
                     self.start_playback(&track, &r, p, record);
-                } else if !self.play_from_cache(&track, record) {
+                } else if !self.play_from_cache(&track, record, None) {
                     self.warn(r.source.as_str(), &format!("can't play {:?}: no player registered", track.title));
                 }
             }
             Resolution::Gap { reason } => {
-                if !self.play_from_cache(&track, record) {
+                if !self.play_from_cache(&track, record, None) {
                     self.warn("playback", &format!("can't play {:?}: {reason}", track.title));
                 }
             }
@@ -1968,10 +1970,10 @@ impl Session {
 
     /// Playback fallback: plays `track`'s `MediaCache` entry through the `"local"` source
     /// (see `cache_rendition`); `false` when nothing is cached or no player takes it.
-    fn play_from_cache(&mut self, track: &Track, record: bool) -> bool {
+    fn play_from_cache(&mut self, track: &Track, record: bool, failed_uri: Option<&str>) -> bool {
         let Some(r) = cache_rendition(&self.media_cache, track) else { return false };
         // The cache entry that just failed to load must not be retried forever.
-        if self.failed_playback_sources.contains(&r.source) {
+        if failed_uri == Some(r.uri.as_str()) {
             return false;
         }
         let Some(p) = self.pick_player(&r) else { return false };
@@ -2001,7 +2003,7 @@ impl Session {
     ///    desync from what's actually queued.
     /// 3. `PlaybackContext` — the list the current track was played from
     ///    (search results, a playlist, Liked Songs) continues.
-    /// 4. Nothing left either way: stop.
+    /// 4. Nothing left either way: a natural end stops, a manual `Next` keeps the current track playing.
     fn advance(&mut self, manual: bool) {
         let repeat = self.queue.get_repeat();
         if repeat == RepeatSetting::RepeatTrack {
@@ -2019,7 +2021,11 @@ impl Session {
         if self.play_next_in_context() {
             return;
         }
-        self.stop_playback();
+        if manual {
+            log::debug!("player: Next with nothing left to play, keeping the current track");
+        } else {
+            self.stop_playback();
+        }
     }
 
     /// Nothing left to play: silence the player (it may still be on the previous track) and clear `current`.
@@ -2148,10 +2154,10 @@ impl Session {
         self.players.values().find(|p| p.accepts(r)).cloned()
     }
 
-    /// `state` overrides a player whose own status lags the event that reported it.
+    /// `state` overrides a player whose own status lags the event that reported it. Progress is left
+    /// alone: until a load swaps in, the player's position and length belong to the previous track.
     fn set_status(&mut self, status: PlayerStatus, state: Option<PlayerState>) {
         self.shown.write().player_state = state.unwrap_or(status.state);
-        self.update_progress(status.position_ms, status.duration_ms);
     }
 
     /// The player's own duration, else the current track's (a decoder that couldn't tell reports 0).

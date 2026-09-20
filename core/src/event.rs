@@ -74,7 +74,7 @@ pub enum PlayerEvent {
     Playing { source: SourceId, uri: String },
     Paused,
     Stopped,
-    Progress { position_ms: u32, duration_ms: u32 },
+    Progress { source: SourceId, uri: String, position_ms: u32, duration_ms: u32 },
     Finished { source: SourceId, uri: String },
     /// `uri` is close to its end — time to `Player::preload` what follows it.
     PreloadHint { source: SourceId, uri: String },

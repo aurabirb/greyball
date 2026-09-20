@@ -233,9 +233,9 @@ struct Audio {
     /// the counter makes it explicit.
     generation: Arc<AtomicU64>,
     finished_sent: bool,
-    /// A load is in flight (sink and snapshot stay on the previous track until the swap); the flag
-    /// records a pause made meanwhile, which the new track then starts in.
-    pending: Option<bool>,
+    /// The newest load in flight (sink and snapshot stay on the previous track until the swap) and
+    /// whether the user paused meanwhile, which the new track then starts in.
+    pending: Option<(SourceId, String, bool)>,
 }
 
 fn worker(
@@ -296,16 +296,19 @@ fn worker(
                         audio.generation.load(Ordering::SeqCst)
                     );
                 } else {
-                    let paused = start_paused || audio.pending.take() == Some(true);
+                    let paused = start_paused || audio.pending.as_ref().is_some_and(|p| p.2);
                     let outcome = result
                         .and_then(|loaded| finish_load(&mut audio, &inner, &bus, &source, &uri, loaded, paused, position_ms));
                     if let Err(e) = outcome {
-                        // The previous track plays on (the app decides what replaces it); with none, the load's own status goes.
+                        // The previous track plays on (the app decides what replaces it, and a pause made meanwhile stays
+                        // for it); with none, the load's own status goes.
                         log::error!("rodio: load failed: {e}");
-                        if audio.sink.is_none() {
-                            release(&mut audio, &inner);
-                        } else {
+                        if let Some(live) = &audio.live {
                             log::debug!("player: the previous track plays on after the failed load");
+                            inner.lock().unwrap_or_else(|e| e.into_inner()).stream = Some(live.handle.clone());
+                        } else {
+                            audio.pending = None;
+                            release(&mut audio, &inner);
                         }
                         bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));
                     }
@@ -346,11 +349,10 @@ fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
         return;
     }
     let pos = sink.get_pos().as_millis() as u32;
-    if audio.pending.is_some() {
-        log::debug!("player: previous track at {pos} ms while a load is pending");
-    }
     inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = pos;
     bus.send(CoreEvent::Player(PlayerEvent::Progress {
+        source: source.clone(),
+        uri: uri.clone(),
         position_ms: pos,
         duration_ms: audio.duration_ms,
     }));
@@ -395,7 +397,9 @@ fn release(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>) {
     audio.live = None;
     audio.buffering = false;
     let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
-    *s = Snapshot { volume: s.volume, ..Snapshot::default() };
+    // A load in flight keeps its stream shown.
+    let stream = s.stream.take().filter(|_| audio.pending.is_some());
+    *s = Snapshot { volume: s.volume, stream, ..Snapshot::default() };
 }
 
 /// Handles `Cmd::Load`: does the bookkeeping that has to happen right away
@@ -420,11 +424,14 @@ fn start_load(
     let generation = audio.generation.fetch_add(1, Ordering::SeqCst) + 1;
     // The previous sink and stream keep playing, and the snapshot keeps describing them, until
     // `finish_load` swaps them out (gapless skip); with nothing playing the load itself is the status.
-    audio.pending = Some(false);
-    if audio.sink.is_none() {
+    let (source, uri) = (r.source.clone(), r.uri.clone());
+    let paused_meanwhile = audio.pending.as_ref().is_some_and(|p| p.2);
+    audio.pending = Some((source.clone(), uri.clone(), paused_meanwhile));
+    if let Some(sink) = &audio.sink {
+        log::debug!("player: previous track keeps playing at {} ms while gen {generation} loads", sink.get_pos().as_millis());
+    } else {
         set_state(inner, PlayerState::Playing, position_ms);
     }
-    let (source, uri) = (r.source.clone(), r.uri.clone());
     log::debug!("player: load gen {generation} [{source}] {uri}");
     bus.send(CoreEvent::Player(PlayerEvent::Loading {
         source: source.clone(),
@@ -476,9 +483,9 @@ fn open_and_decode(
 ) -> core::Result<LoadedTrack> {
     let (handle, claim) = engine.open(r, Intent::Play)?;
     {
-        // Shown while nothing else plays; a playing track keeps its own stream in the snapshot until the swap.
+        // The newest load's stream is the one shown while it loads.
         let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
-        if current() && s.stream.is_none() {
+        if current() {
             s.stream = Some(handle.clone());
         }
     }
@@ -542,6 +549,7 @@ fn finish_load(
     audio.duration_ms = loaded.duration_ms;
     audio.playing = Some((source.clone(), uri.to_string()));
     audio.finished_sent = false;
+    audio.pending = None;
     log::debug!("player: playback started [{source}] {uri} ({} ms)", loaded.duration_ms);
     // Dropping the previous track's sink stops it.
     let sink = audio.sink.insert(sink);
@@ -597,13 +605,26 @@ fn seek(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, tap: &Arc<AudioTap>, ms
 }
 
 fn toggle(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
-    let Some(sink) = &audio.sink else { return };
+    let Some(sink) = &audio.sink else {
+        // First load: no sink yet, the pause is recorded for the swap.
+        if let Some((source, uri, paused)) = &mut audio.pending {
+            *paused = !*paused;
+            if *paused {
+                set_state(inner, PlayerState::Paused, 0);
+                bus.send(CoreEvent::Player(PlayerEvent::Paused));
+            } else {
+                set_state(inner, PlayerState::Playing, 0);
+                bus.send(CoreEvent::Player(PlayerEvent::Playing { source: source.clone(), uri: uri.clone() }));
+            }
+        }
+        return;
+    };
     let Some((source, uri)) = audio.playing.clone() else {
         return;
     };
     let resume = sink.is_paused() && !audio.buffering;
-    if let Some(paused) = &mut audio.pending {
-        *paused = !resume;
+    if let Some(p) = &mut audio.pending {
+        p.2 = !resume;
     }
     if resume {
         sink.play();
