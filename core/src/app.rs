@@ -272,6 +272,8 @@ pub enum Command {
     Like(TrackId),
     /// Ask the track's sources for a shareable web URL.
     CopyLink(TrackId),
+    /// Import a pasted web URL into `playlist`, or the queue when `None`.
+    AddUrl { url: String, playlist: Option<PlaylistId> },
     ExportM3u(PlaylistId),
     /// Export to an explicit path.
     ExportM3uTo {
@@ -895,6 +897,17 @@ impl Session {
                 });
                 Ok(Dispatch::Done("resolving link...".into()))
             }
+            Command::AddUrl { url, playlist } => {
+                let Some(source) = self.source_for_uri(&url).cloned() else {
+                    return Ok(Dispatch::Refused(format!("No source recognizes {url:?}")));
+                };
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let result = Self::import_url(source.as_ref(), &url).map_err(|e| e.to_string());
+                    bus.send(CoreEvent::UrlResolved { playlist, result });
+                });
+                Ok(Dispatch::Done("resolving link...".into()))
+            }
             Command::ExportM3u(id) => {
                 let name = self.store.get_playlist(id)?.ok_or(Error::NotFound)?.name;
                 self.export_m3u_to(id, PathBuf::from(format!("{name}.m3u8")))
@@ -973,6 +986,14 @@ impl Session {
             }
             CoreEvent::BackgroundFailure { context, message } => {
                 self.warn(context, message);
+                Ok(true)
+            }
+            CoreEvent::UrlResolved { playlist, result } => {
+                let msg = match result {
+                    Ok(tracks) => self.add_resolved_tracks(*playlist, tracks).unwrap_or_else(|e| e.to_string()),
+                    Err(msg) => msg.clone(),
+                };
+                self.bus.send(CoreEvent::Flash(msg));
                 Ok(true)
             }
             CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
@@ -2556,6 +2577,36 @@ impl Session {
                 }))
             }
         }
+    }
+
+    fn add_resolved_tracks(&mut self, playlist: Option<PlaylistId>, tracks: &[Track]) -> Result<String> {
+        let mut pl = playlist
+            .map(|id| self.store.get_playlist(id)?.ok_or(Error::NotFound))
+            .transpose()?;
+        let (mut added, mut skipped) = (0usize, 0usize);
+        for track in tracks {
+            let tid = self.catalog.ingest(track.clone())?;
+            match &mut pl {
+                Some(pl) if pl.items.contains(&tid) => {
+                    skipped += 1;
+                    continue;
+                }
+                Some(pl) => pl.items.push(tid),
+                None => self.queue.append(tid),
+            }
+            added += 1;
+        }
+        let (verb, target) = match &pl {
+            Some(pl) => ("added", format!(" to \"{}\"", pl.name)),
+            None => ("queued", String::new()),
+        };
+        if let Some(pl) = &pl
+            && added > 0
+        {
+            self.save_playlist(pl)?;
+        }
+        let skipped = if skipped > 0 { format!(" ({skipped} already there)") } else { String::new() };
+        Ok(format!("{verb} {added} track(s){target}{skipped}"))
     }
 
     /// A local playlist flips in the store now; a remote one settles on a background thread.
