@@ -803,6 +803,7 @@ impl Session {
             Command::ToggleShuffle => {
                 let on = !self.queue.get_shuffle();
                 self.queue.set_shuffle(on);
+                self.touch();
                 Ok(Dispatch::ShuffleSet(on))
             }
             Command::Previous => {
