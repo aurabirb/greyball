@@ -122,6 +122,24 @@ pub fn scroll_title(full: &str, width: usize, offset: usize) -> String {
     window.into_iter().collect()
 }
 
+/// The last `width` display columns of `full`, with a leading `…` when the head is cut.
+pub fn tail_fit(full: &str, width: usize) -> String {
+    if full.width() <= width {
+        return full.to_string();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 1;
+    for c in full.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        kept.push(c);
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
+}
+
 /// The active tab and the active kind-bar segment; everything else stays unstyled.
 pub(super) fn active_style() -> ColorStyle {
     ColorStyle::new(Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red))

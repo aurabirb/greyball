@@ -285,11 +285,15 @@ impl MedleyView {
             Action::ToggleWindow(name) => {
                 let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
                 self.toggle_window(id);
+                if self.visible().contains(&id) {
+                    self.edit_search(id);
+                }
                 EventResult::consumed()
             }
             Action::ShowWindow(name) => {
                 let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
                 self.show(id);
+                self.edit_search(id);
                 EventResult::consumed()
             }
             Action::CommandLine => {

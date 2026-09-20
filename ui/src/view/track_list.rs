@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
 
+use unicode_width::UnicodeWidthStr;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
@@ -16,7 +17,7 @@ use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
-use super::text::scroll_title;
+use super::text::{scroll_title, tail_fit};
 use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
@@ -555,7 +556,7 @@ impl TrackList {
     /// The title row: `<name>`, optionally followed by `  (<hint>)`; the search text being typed while it is.
     fn title(&self, s: &Session, total: usize) -> String {
         if let Some(input) = &self.input {
-            return format!("/{input}  (Esc to cancel)");
+            return format!("/{input}");
         }
         if let Some(query) = self.query.as_deref().filter(|_| self.filterable()) {
             let plural = if total == 1 { "" } else { "es" };
@@ -738,8 +739,11 @@ impl TrackList {
         let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
-        if let Some(start) = kind_bar::start(&bar) {
-            title = scroll_title(&title, start.saturating_sub(main_col_start(content_w) + 1), 0);
+        let room = kind_bar::start(&bar).map_or(content_w, |start| start.saturating_sub(1)).saturating_sub(main_col_start(content_w));
+        if let Some(input) = &self.input {
+            title = typed_title(input, room);
+        } else if kind_bar::start(&bar).is_some() {
+            title = scroll_title(&title, room, 0);
         }
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state.offset, self.state.cursor, frame.total);
         kind_bar::draw(printer, &bar, self.kinds);
@@ -857,4 +861,13 @@ impl TrackList {
             _ => WindowOutcome::Ignored,
         }
     }
+}
+
+const HINT: &str = "  (Esc to cancel)";
+
+/// The query being typed with a block cursor, its end kept in view; the hint only when everything fits.
+fn typed_title(input: &str, room: usize) -> String {
+    let typed = format!("/{input}█");
+    let hinted = format!("{typed}{HINT}");
+    if hinted.width() <= room { hinted } else { tail_fit(&typed, room) }
 }
