@@ -330,46 +330,50 @@ impl MediaCache {
 
     /// Drops index entries whose cache file no longer exists; never deletes files.
     pub fn prune_orphans(&self) {
-        let missing: Vec<String> = self
-            .index_cache
-            .read()
-            .unwrap()
-            .iter()
-            .filter_map(|(key, filename)| {
-                let (source, _) = key.split_once('\0')?;
-                let path = self.dir.join(sanitize(source)).join(filename);
-                (!path.exists()).then(|| key.clone())
-            })
-            .collect();
-        if missing.is_empty() {
-            return;
-        }
+        let entries: Vec<(String, String)> =
+            self.index_cache.read().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-        let committed = (|| -> Result<(), Box<dyn std::error::Error>> {
-            let w = self.index.begin_write()?;
-            {
-                let mut t = w.open_table(INDEX)?;
-                for key in &missing {
-                    t.remove(key.as_str())?;
-                }
+        let mut dropped = 0usize;
+        for chunk in entries.chunks(1000) {
+            let missing: Vec<&String> = chunk
+                .iter()
+                .filter_map(|(key, filename)| {
+                    let (source, _) = key.split_once('\0')?;
+                    (!self.dir.join(sanitize(source)).join(filename).exists()).then_some(key)
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
             }
-            w.commit()?;
-            Ok(())
-        })();
-        if let Err(e) = committed {
-            log::warn!("media_cache: prune failed: {e}");
-            return;
-        }
 
-        let mut cache = self.index_cache.write().unwrap();
-        for key in &missing {
-            cache.remove(key);
+            let committed = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let w = self.index.begin_write()?;
+                {
+                    let mut t = w.open_table(INDEX)?;
+                    for key in &missing {
+                        t.remove(key.as_str())?;
+                    }
+                }
+                w.commit()?;
+                Ok(())
+            })();
+            if let Err(e) = committed {
+                log::warn!("media_cache: prune failed: {e}");
+                continue;
+            }
+
+            let mut cache = self.index_cache.write().unwrap();
+            for key in &missing {
+                cache.remove(*key);
+            }
+            dropped += missing.len();
         }
-        log::info!(
-            "media_cache: dropped {} index entr{} whose files are missing",
-            missing.len(),
-            if missing.len() == 1 { "y" } else { "ies" }
-        );
+        if dropped > 0 {
+            log::info!(
+                "media_cache: dropped {dropped} index entr{} whose files are missing",
+                if dropped == 1 { "y" } else { "ies" }
+            );
+        }
     }
 }
 
