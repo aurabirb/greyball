@@ -183,10 +183,12 @@ Design: `docs/collections.md`.
 
 ### Queue
 Design: `docs/collections.md`.
-- [ ] Queue entries become `Entry::{Track, Remote}` so a remote album/playlist can be enqueued as one
-  entry with a cursor; add the enqueue action.
-- [ ] The Queue window ends with a derived pseudo-track row showing the context that plays after the
-  last entry.
+- [ ] `Command::EnqueueCollection(HotkeyTarget)` for a Search row, a Playlists row or an opened
+  collection: local playlists append their tracks at once; a remote one runs a pending job that
+  appends tracks as pages land (event-driven, never blocking, with a timeout that flashes a notice).
+  The queue stays tracks-only.
+- [ ] The Queue window shows non-selectable info rows after the tracks: `loading <name> …` per pending
+  job and a derived `Continues: <context> — <next track>` row.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually

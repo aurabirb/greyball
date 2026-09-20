@@ -27,12 +27,13 @@ Scenarios to build and check against:
    working while music plays.
 4. Playing a track from a playlist, then queueing an album: the album plays in full after the current
    track, then the playlist resumes.
-5. Queueing a remote album that is still paging in (a long list): playback reaches its tail without
-   waiting for the whole list.
-6. With an empty queue, the last Queue row reads "Continues: <playlist> — <next track>"; queueing a
-   collection changes that row to the context that resumes after it.
-7. Shuffle and repeat-track on with a queued album: the album still plays in order and the queue
-   never shows or plays a collection as a track.
+5. Queueing a remote album that is still paging in (a long list): the UI never blocks, a `loading …`
+   row shows in the Queue, tracks appear as pages land, and a failing or stalled load flashes a
+   notice and clears the row.
+6. The last Queue row reads "Continues: <playlist> — <next track>" while the playing context has
+   tracks left.
+7. Shuffle and repeat-track on with a queued album: the queued tracks still play in order, and single
+   tracks of the album can be removed from the queue.
 8. A second search issued while the first is streaming shows only the second one's results.
 
 ## Vocabulary
@@ -100,24 +101,26 @@ read with `Session::remote_albums(source)`; `remote_playlists_gen` covers both l
 
 ### 4. Queue
 
-`Queue.queue: VecDeque<TrackId>` becomes `VecDeque<Entry>`:
+The queue stays `VecDeque<TrackId>`: tracks only, no new entry type. Enqueuing a collection resolves
+it to tracks and appends them.
 
-```rust
-enum Entry { Track(TrackId), Remote(SourceId, BrowseNode) }
-```
+- One command, `Command::EnqueueCollection(HotkeyTarget)`, serves a Search row, a Playlists row
+  (album or playlist) and an opened collection. A local playlist appends its tracks at once.
+- A remote collection may still be paging in (`remote_playlist_track_ids(source, node)`). The
+  session holds a pending-enqueue job for it, driven by the existing playlists-changed event (no
+  polling, nothing blocks the UI): as pages land, the newly loaded tracks are appended in order. The
+  job finishes when the list settles, and is dropped with a flashed notice when it errors or hits a
+  timeout. The tracks it appends are ordinary queue tracks (removable, reorderable, persisted like
+  any other).
+- A job appends when tracks are loaded, so tracks queued meanwhile land before its later tracks; this
+  is accepted and not worked around with placeholder entries.
+- Very long lists are capped or confirmed above a size the implementer proposes.
+- The Queue window shows non-selectable info rows after the tracks: `loading <name> …` per pending
+  job and, last, the derived continuation row.
+- Shuffle, `RepeatTrack`, `advance`, `upcoming_track` and queue persistence are unchanged.
 
-- Enqueuing a local playlist expands to `Entry::Track`s immediately (fully loaded).
-- A remote collection stays one `Entry::Remote` with a cursor: `Session::advance` takes its next
-  track from `remote_playlist_track_ids(source, node)` (which may still be paging in) and pops the
-  entry when exhausted. Expanding at enqueue time would break for a not-yet-loaded list, and pushing
-  into `PlaybackContext` would let later queued tracks jump ahead of it.
-- Queue persistence (a `Playlist` of `TrackId`s under a reserved id) gets a new on-disk shape; the
-  old saved queue is dropped, no shim.
-- Shuffle and `RepeatTrack` are unaffected: the queue only ever yields tracks.
-
-MVP pseudo-track: `queue_window` appends a derived, never-stored final row
-`Continues: <context name> — <next track>` while the playback context has tracks left; when the
-queue's last entry is a collection, the row shows the context that resumes after it.
+MVP pseudo-row: `Continues: <context name> — <next track>`, derived from `PlaybackContext` while it
+has tracks left, never stored, not selectable.
 
 ## Rendering metadata with minimal UI change
 
@@ -127,8 +130,7 @@ queue's last entry is a collection, the row shows the context that resumes after
   source (`"Album · 2019 · 12 tracks"`); the list window's existing title line shows it. The
   release label comes from `release_label(tracks.len())` once the list is loaded. Nothing else in
   the UI reads it.
-- Queue row of an `Entry::Remote`: name from the cached `BrowsePage.title`; the pseudo-track row is
-  a plain row.
+- Queue info rows (pending job, continuation): plain rows, not selectable.
 
 ## Constraints
 
@@ -142,7 +144,7 @@ to break one, report it back instead of working around it.
 - **No type carrying meaningless fields.** Don't overload `SearchHit`/`Track` with `duration_ms`,
   `isrc`, `quality` or `album` set to placeholders for a collection. Each thing has one meaning, so
   each consumer needs no `kind` check.
-- **Few new types.** The only new type is `Entry`. Before adding another, look for an existing
+- **Few new types.** No new type is planned. Before adding one, look for an existing
   shape (`BrowseNode`, `(String, BrowseNode)`, `TopRow::Remote`, `BrowsePage`) that carries it. A
   `CollectionHit`, `SearchItem`, `Folder` or `CollectionRef` was considered and rejected as
   duplicating the tuple that `folders` and `TopRow::Remote` already are.
@@ -158,14 +160,14 @@ to break one, report it back instead of working around it.
   fit: remote playlists are cached by `ViewCache` under `(source, node)` and listed by their source,
   and search-result collections stored as `Playlist`s would leak into the user's own playlists list.
 - **Reuse the remote track cache untouched.** `remote_playlist_track_ids(source, node)`, its paging
-  and its freshness logic serve search-opened albums and queue cursors alike. Don't add a second
+  and its freshness logic serve search-opened albums and pending enqueues alike. Don't add a second
   cache or copy tracks out of it.
-- **The queue yields tracks only.** `Entry::Remote` is drained through a cursor at the front, so
-  shuffle, `RepeatTrack`, history and the player never see a collection. Don't expand a remote
-  collection at enqueue time (the list may not have loaded) and don't push it into
-  `PlaybackContext` (later queued tracks would play before it finishes).
-- **The pseudo-track row is derived, never stored.** It is built in `queue_window` from
-  `PlaybackContext`; it is not an `Entry`, is not persisted, and can't be removed or reordered.
+- **The queue holds tracks only.** No collection or placeholder entry ever sits in `Queue`, so
+  shuffle, `RepeatTrack`, history, persistence and the player never see one. A remote collection is
+  resolved to tracks by a pending job that appends as pages load; never block the UI on it and
+  always give the job a timeout that flashes a notice.
+- **Queue info rows are derived, never stored.** The continuation row and the `loading …` rows are
+  built for display, are not selectable, and are never persisted or removable.
 - **UI changes stay in the touched windows.** Search, the Playlists window and the Queue window
   change; nothing else does. Search shares `Open::Remote` with Playlists for an opened collection.
   Collection rows render through the existing `TopRow::Remote` / `plain_row` path and metadata
@@ -182,4 +184,4 @@ to break one, report it back instead of working around it.
 2. Search generation tags on events. (done)
 3. `search_collections` + kind bar + prefix rows. (done)
 4. Playlists-window kind filter + saved-albums listing. (done)
-5. `Entry` queue + enqueue action + pseudo-track row.
+5. `EnqueueCollection` with the pending-enqueue job + Queue info rows (loading, continuation).
