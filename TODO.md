@@ -34,11 +34,6 @@
   and wide-glyph titles on screen.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
-- [ ] The scan driver runs one analysis at a time: a waveform pass over a long set being downloaded holds the scan thread until the stream is `Done`, so another track's BPM waits behind it. Run priority (now-playing) analyses on their own thread.
-- [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
-  CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
-  e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
-  slow interval) on an actual triggering event instead of polling for one.
 - [ ] Soulseek: play before slskd finishes the transfer. `SoulseekSource::open` waits for the whole download
   and returns `Media::Path`. slskd writes the partial file under `<folder>/incomplete/<user>/<remote dirs>/`;
   following it with a `Media::Stream` producer needs its exact incomplete file name and resume behavior
@@ -157,10 +152,6 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Audits / cleanup tasks
-- [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
-  inhibits *future and queued* track analysis/download, or only pauses whatever's in flight right now
-  — i.e. does newly-added/queued work still get analyzed/downloaded while paused, or does it correctly
-  stay queued until resumed?
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
 - [ ] Run an agent to collect and remove any placeholders of any kind. Write it in the memory to never write placeholders of any kind. Check the 
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for

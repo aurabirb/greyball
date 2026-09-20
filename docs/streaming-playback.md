@@ -237,6 +237,13 @@ show a "downloading" mark from `engine.status`.
   The driver keeps each walk `Fetch` claim until `Done` (one download at a time, a failed fetch backs its
   source off so a run of bad tracks cannot recycle Spotify's session); only `Play` announces a cache hit as
   `Stream{Done}`, so scanning cached files raises no events.
+- Two driver threads: the walk (background, `Fetch`) and the now-playing worker (`prioritize`, `Peek`
+  only), so the playing track's BPM never waits behind a long background waveform pass. A newer
+  `prioritize` preempts the worker through the plugin's `wanted` callback; a `Downloading` status is
+  the in-flight marker that keeps both threads off the same (plugin, track). The walk is event-driven:
+  it keeps an in-memory candidate set (tracks some plugin still `needs()`), patched from
+  `track_changed` (`TrackUpdated`), and sleeps on a condvar until a track, view, mode, plugin or stream
+  event or the next cooldown/backoff/`min_interval` expiry, never polling the store.
 - Analyzers consume the contiguous prefix (`StreamInfo.prefix`) as it grows. After a scrub jump the
   file has islands beyond the gap; an in-order analyzer simply waits at the gap until the backfill
   closes it. Analyzing arbitrary chunks as they land (out of order) is out of scope: a decoder needs
