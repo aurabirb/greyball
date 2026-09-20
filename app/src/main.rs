@@ -558,7 +558,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let media_cache = Arc::new(MediaCache::new(cfg.media_cache_dir.clone(), store.clone()));
     {
         let media_cache = media_cache.clone();
-        std::thread::spawn(move || media_cache.prune_orphans());
+        std::thread::spawn(move || {
+            media_cache.prune_orphans();
+            media_cache.log_file_stats();
+        });
     }
     let rodio = Arc::new(RodioPlayer::new(media.clone(), bus.clone(), media_cache.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();

@@ -34,7 +34,7 @@
 //! nested inside it). The filename is a readability nicety for anyone
 //! `ls`-ing the cache dir; the redb index is the actual source of truth
 //! mapping it back to `(source, uri)`, and every lookup here still goes
-//! through `(source, uri)`, never the filename.
+//! through `(source, uri)`, never the filename. Extra `<name>*.redb` files beside the index are merged at startup.
 //!
 //! Resolving a display name needs a `Track`, which `MediaCache` doesn't
 //! otherwise have — it takes a `Store` handle solely to look one up
@@ -46,6 +46,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -189,6 +190,7 @@ impl MediaCache {
             w.open_table(INDEX).expect("media cache index: open_table");
             w.commit().expect("media cache index: commit");
         }
+        let index = ingest_extra_indexes(index, &dir, &index_path);
         let index_cache = {
             let r = index.begin_read().expect("media cache index: begin_read");
             let t = r.open_table(INDEX).expect("media cache index: open_table");
@@ -328,6 +330,27 @@ impl MediaCache {
         Ok(dest)
     }
 
+    /// Logs how many files the cache dir holds versus how many index entries exist.
+    pub fn log_file_stats(&self) {
+        let mut files = 0usize;
+        let mut pending = vec![self.dir.clone()];
+        while let Some(d) = pending.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for entry in rd.filter_map(|e| e.ok()) {
+                match entry.file_type() {
+                    Ok(t) if t.is_dir() => pending.push(entry.path()),
+                    Ok(_) => files += 1,
+                    Err(_) => {}
+                }
+            }
+        }
+        let indexed = self.index_cache.read().unwrap().len();
+        log::info!(
+            "media_cache: {files} files in cache dir, {indexed} in index ({} without a record)",
+            files.saturating_sub(indexed)
+        );
+    }
+
     /// Drops index entries whose cache file no longer exists; never deletes files.
     pub fn prune_orphans(&self) {
         let entries: Vec<(String, String)> =
@@ -375,6 +398,106 @@ impl MediaCache {
             );
         }
     }
+}
+
+/// Merges sibling `<cache dir name>*.redb` files into the live index (existing keys win), then deletes them.
+fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Database {
+    let (Some(parent), Some(stem), Some(live_name)) = (index_path.parent(), dir.file_name(), index_path.file_name())
+    else {
+        return index;
+    };
+    let stem = stem.to_string_lossy().into_owned();
+    let Ok(read_dir) = std::fs::read_dir(parent) else { return index };
+    let extras: Vec<PathBuf> = read_dir
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let n = name.to_string_lossy();
+            name != live_name && n.starts_with(&stem) && n.ends_with(".redb") && e.path().is_file()
+        })
+        .map(|e| e.path())
+        .collect();
+    if extras.is_empty() {
+        return index;
+    }
+
+    let mut bak = index_path.as_os_str().to_owned();
+    bak.push(".bak");
+    let bak = PathBuf::from(bak);
+    if let Err(e) = std::fs::copy(index_path, &bak) {
+        log::warn!("media_cache: index backup {} failed, skipping ingest: {e}", bak.display());
+        return index;
+    }
+
+    for extra in extras {
+        let incoming = match (|| -> Result<Database, Box<dyn std::error::Error>> {
+            let db = Database::open(&extra)?;
+            db.begin_read()?.open_table(INDEX)?;
+            Ok(db)
+        })() {
+            Ok(db) => db,
+            Err(e) => {
+                log::warn!("media_cache: {} is not a usable index, left in place: {e}", extra.display());
+                continue;
+            }
+        };
+        match merge_index(&incoming, &index) {
+            Ok((inserted, skipped)) => {
+                drop(incoming);
+                match std::fs::remove_file(&extra) {
+                    Ok(()) => log::info!(
+                        "media_cache: ingested {}: inserted {inserted}, skipped {skipped}",
+                        extra.display()
+                    ),
+                    Err(e) => log::warn!("media_cache: ingested {} but could not delete it: {e}", extra.display()),
+                }
+            }
+            Err(e) => {
+                log::warn!("media_cache: ingest of {} failed, restoring backup: {e}", extra.display());
+                drop(incoming);
+                drop(index);
+                std::fs::copy(&bak, index_path)
+                    .unwrap_or_else(|e| panic!("media cache index restore {}: {e}", bak.display()));
+                let restored = Database::create(index_path)
+                    .unwrap_or_else(|e| panic!("media cache index {}: {e}", index_path.display()));
+                return restored;
+            }
+        }
+    }
+    index
+}
+
+fn merge_index(from: &Database, to: &Database) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    let read = from.begin_read()?;
+    let src = read.open_table(INDEX)?;
+    let (mut inserted, mut skipped) = (0, 0);
+    let mut last: Option<String> = None;
+    loop {
+        let chunk: Vec<(String, String)> = match &last {
+            Some(k) => src.range::<&str>((Bound::Excluded(k.as_str()), Bound::Unbounded))?,
+            None => src.range::<&str>(..)?,
+        }
+        .take(1000)
+        .map(|row| row.map(|(k, v)| (k.value().to_string(), v.value().to_string())))
+        .collect::<Result<_, _>>()?;
+        let Some((k, _)) = chunk.last() else { break };
+        last = Some(k.clone());
+
+        let w = to.begin_write()?;
+        {
+            let mut t = w.open_table(INDEX)?;
+            for (k, v) in &chunk {
+                if t.get(k.as_str())?.is_some() {
+                    skipped += 1;
+                } else {
+                    t.insert(k.as_str(), v.as_str())?;
+                    inserted += 1;
+                }
+            }
+        }
+        w.commit()?;
+    }
+    Ok((inserted, skipped))
 }
 
 fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
