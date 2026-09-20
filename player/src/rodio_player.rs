@@ -378,6 +378,8 @@ fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
             }
             _ => bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri })),
         }
+        drop_stream(audio, inner);
+        audio.sink = None;
     }
 }
 
@@ -410,8 +412,9 @@ fn start_load(
     position_ms: u32,
 ) {
     let generation = audio.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    // The previous (drained) sink stays in place until `finish_load`; its emptiness says nothing about this load.
+    // The previous sink stays in place until `finish_load`; its emptiness says nothing about this load.
     audio.finished_sent = true;
+    drop_stream(audio, inner);
     let (source, uri) = (r.source.clone(), r.uri.clone());
     log::debug!("player: load gen {generation} [{source}] {uri}");
     audio.playing = Some((source.clone(), uri.clone()));
@@ -423,8 +426,6 @@ fn start_load(
         s.position_ms = position_ms;
         s.duration_ms = 0;
         s.state = PlayerState::Playing;
-        s.stream = None;
-        s.buffering = false;
     }
     bus.send(CoreEvent::Player(PlayerEvent::Loading {
         source: source.clone(),

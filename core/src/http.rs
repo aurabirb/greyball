@@ -76,11 +76,9 @@ impl RangeReader {
         let client = opts.client.clone().unwrap_or_else(|| client().clone());
         let mut this = Self { client, url: url.to_string(), opts, pos: 0, len: None, mode: Mode::Ranged { chunk: Vec::new(), chunk_start: 0 } };
         let client = this.client.clone();
-        let resp = this.send(&client, Some(0))?;
+        let resp = this.send(&client, Some((0, 0)))?;
         if resp.status().as_u16() == 206 {
             this.len = total_from_content_range(&resp);
-            let bytes = resp.bytes().map_err(io::Error::other)?.to_vec();
-            this.mode = Mode::Ranged { chunk: bytes, chunk_start: 0 };
         } else {
             // The ranged client's total timeout would cut a long unranged body short.
             drop(resp);
@@ -91,11 +89,11 @@ impl RangeReader {
         Ok(this)
     }
 
-    fn send(&mut self, client: &Client, range_start: Option<u64>) -> io::Result<Response> {
+    fn send(&mut self, client: &Client, range: Option<(u64, u64)>) -> io::Result<Response> {
         for attempt in 0..2 {
             let mut req = client.get(&self.url);
-            if let Some(start) = range_start {
-                req = req.header(RANGE, format!("bytes={start}-{}", start + CHUNK - 1));
+            if let Some((start, end)) = range {
+                req = req.header(RANGE, format!("bytes={start}-{end}"));
             }
             for (k, v) in &self.opts.headers {
                 req = req.header(k.as_str(), v.as_str());
@@ -120,7 +118,7 @@ impl RangeReader {
     fn fill_chunk(&mut self) -> io::Result<()> {
         let pos = self.pos;
         let client = self.client.clone();
-        let resp = self.send(&client, Some(pos))?;
+        let resp = self.send(&client, Some((pos, pos + CHUNK - 1)))?;
         match resp.status().as_u16() {
             206 => {
                 let bytes = resp.bytes().map_err(io::Error::other)?.to_vec();
