@@ -384,14 +384,8 @@ pub fn refresh_and_persist(cache_dir: &Path) -> Option<String> {
     Some(access_token)
 }
 
-/// Try every stored Web API credential pair other than the currently active
-/// one, refreshing as needed, and promote the first usable one to active —
-/// `webapi.rs`'s `403` fallback: a client id can be denied a specific
-/// endpoint outright, and a fresh/refreshed token under that *same* client
-/// id would `403` again, so recovering needs a different credential pair. Never touches (deletes/overwrites) the pair that just
-/// 403'd, or any other pair it doesn't end up using — it may work again
-/// later (e.g. after a rate-limit window passes). Returns the new access
-/// token, or `None` if nothing else stored works either.
+/// Promotes the first usable other stored pair to active and returns its token;
+/// never deletes or overwrites the pair that was just refused.
 pub fn fallback_webapi_token(cache_dir: &Path) -> Option<String> {
     let mut store = load_token_store(cache_dir);
     let current = store.active.clone().unwrap_or_else(|| DEFAULT_ACCOUNT.to_string());

@@ -2,9 +2,8 @@
 //! playlist browsing, which is all `Source` needs. medley avoids the
 //! `rspotify` dep and calls the REST endpoints directly with the OAuth
 //! bearer token from [`crate::auth`]. A `401` triggers an in-place token
-//! refresh (`crate::auth::refresh_and_persist`) and retry; a `403` (the client
-//! id refused outright, not just an expired token) instead switches to another stored credential pair
-//! (`crate::auth::fallback_webapi_token`) and retries under that.
+//! refresh (`crate::auth::refresh_and_persist`) and retry; a `403` instead
+//! switches to another stored pair (`crate::auth::fallback_webapi_token`).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -24,8 +23,7 @@ const API_JITTER_MAX_MS: u64 = 400;
 /// Backoff for a `429` with no usable `Retry-After`, and the per-attempt step
 /// added on repeated `429`s.
 const API_BACKOFF_STEP: Duration = Duration::from_secs(3);
-/// Ceiling on a `429`'s `Retry-After` — a Development-mode app that trips
-/// its *daily* quota gets one of several hours, and `RateGate` is shared by
+/// Ceiling on a `429`'s `Retry-After` — a tripped *daily* quota gets one of several hours, and `RateGate` is shared by
 /// every caller, so honoring that literally would stall the whole source.
 /// Capped: wait out at most this, then fail instead of hanging.
 const API_MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -396,20 +394,8 @@ impl WebApi {
         Ok(())
     }
 
-    /// Track search. Two things caused the "Invalid limit" 400, found by
-    /// curling `/v1/search` directly with this app's own bearer token:
-    ///
-    /// 1. `market=from_token` was deprecated in Spotify's Nov 2024 API
-    ///    changes; sending it 400s with that exact misleading message
-    ///    regardless of `limit`. Dropped — a user access token's account
-    ///    country already takes priority over `market` per the docs, so
-    ///    nothing is lost by omitting it.
-    /// 2. Even with `market` gone, `limit` still 400s above 10 — confirmed
-    ///    by curl bisection (1/5/10 → 200, 11/12/15/20/50 → 400) against
-    ///    a Development-mode app, which isn't approved for Spotify's Extended
-    ///    Quota Mode. The publicly documented max of 50 only applies to
-    ///    quota-extended apps. Clamped to the confirmed ceiling instead of
-    ///    the documented one.
+    /// Track search. No `market=from_token` (deprecated; it 400s "Invalid limit").
+    /// `limit` above 10 also 400s, so it is clamped to the search page size cap.
     const MAX_LIMIT: usize = 10;
 
     pub fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Track>, String> {
@@ -485,7 +471,7 @@ impl WebApi {
     /// including ones the caller owns) — Spotify has moved this under
     /// `/items` (the `href` `/v1/me/playlists` itself returns for a
     /// playlist's contents points there now, too). Even via `/items`, a
-    /// Development-mode app (see `auth.rs`) still 403s on playlists it
+    /// Web API still 403s on playlists the user
     /// doesn't own (followed/other-user playlists) — confirmed live, and not
     /// fixable via this REST client; only Spotify approving the app for
     /// Extended Quota Mode lifts that here. On that specific 403 this falls
