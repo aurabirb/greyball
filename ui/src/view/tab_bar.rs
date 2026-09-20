@@ -1,5 +1,5 @@
 use cursive::Printer;
-use cursive::theme::{ColorStyle, Effect};
+use cursive::theme::{BaseColor, Color, ColorStyle, Effect};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -150,8 +150,14 @@ impl TabBar<'_> {
                 printer.print((start, 0), &text);
             }
         }
-        for ((_, label), &(_, start, _)) in transport_labels(&self.status.state).iter().zip(&layout.transport) {
-            printer.print((start, 0), label);
+        for ((button, label), &(_, start, _)) in transport_labels(&self.status.state).iter().zip(&layout.transport) {
+            match button {
+                Transport::Shuffle if self.status.shuffle => {
+                    printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| p.print((start, 0), label));
+                }
+                Transport::Shuffle => printer.with_effect(Effect::Dim, |p| p.print((start, 0), label)),
+                _ => printer.print((start, 0), label),
+            }
         }
         let (start, text) = self.title(&layout);
         if let Some((wave_start, wave_w)) = layout.wave {
