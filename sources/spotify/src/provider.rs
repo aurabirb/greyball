@@ -3,7 +3,7 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use core::{Error, Media, MediaProvider, Rendition, Result, SourceId};
 use librespot_audio::{AudioDecrypt, AudioFile};
@@ -21,8 +21,6 @@ const OGG_FORMATS: [AudioFileFormat; 3] =
 
 const RETRY_PAUSE: Duration = Duration::from_millis(200);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a mid-download reopen waits for a live session before giving up.
-const REOPEN_WAIT: Duration = Duration::from_secs(30);
 
 pub struct SpotifyMediaProvider {
     slot: Arc<Slot>,
@@ -41,7 +39,7 @@ impl MediaProvider for SpotifyMediaProvider {
 
     fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media> {
         let inner = open_with_retry(&self.slot, &r.uri, wanted)?;
-        Ok(Media::from_reader(Reopening { slot: self.slot.clone(), uri: r.uri.clone(), size: inner.len, inner: Some(inner), pos: 0 }))
+        Ok(Media::from_reader(inner))
     }
 }
 
@@ -195,59 +193,6 @@ impl Seek for Subfile {
             SeekFrom::Current(n) => self.stream.stream_position()?.saturating_sub(SPOTIFY_OGG_HEADER_END).saturating_add_signed(n),
         };
         self.stream.seek(SeekFrom::Start(target + SPOTIFY_OGG_HEADER_END))?;
-        Ok(target)
-    }
-}
-
-/// A `Subfile` that reopens itself after a read error (a stalled or dead fetch), so the engine's
-/// retry continues from the same offset.
-struct Reopening {
-    slot: Arc<Slot>,
-    uri: String,
-    size: u64,
-    inner: Option<Subfile>,
-    pos: u64,
-}
-
-impl Reopening {
-    fn inner(&mut self) -> io::Result<&mut Subfile> {
-        if self.inner.is_none() {
-            log::debug!("spotify: reopening {} at {}", self.uri, self.pos);
-            let started = Instant::now();
-            let mut audio = open_with_retry(&self.slot, &self.uri, &|| started.elapsed() < REOPEN_WAIT)
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            audio.seek(SeekFrom::Start(self.pos))?;
-            self.inner = Some(audio);
-        }
-        Ok(self.inner.as_mut().expect("just opened"))
-    }
-}
-
-impl Read for Reopening {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner()?.read(buf);
-        match read {
-            Ok(n) => self.pos += n as u64,
-            Err(_) => self.inner = None,
-        }
-        read
-    }
-}
-
-impl Seek for Reopening {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let target = match pos {
-            SeekFrom::Start(p) => p,
-            SeekFrom::End(n) => self.size.saturating_sub(SPOTIFY_OGG_HEADER_END).saturating_add_signed(n),
-            SeekFrom::Current(n) => self.pos.saturating_add_signed(n),
-        };
-        if let Some(inner) = self.inner.as_mut()
-            && let Err(e) = inner.seek(SeekFrom::Start(target))
-        {
-            self.inner = None;
-            return Err(e);
-        }
-        self.pos = target;
         Ok(target)
     }
 }

@@ -300,8 +300,8 @@ impl SoundcloudSource {
         let client = self.client.clone();
         let urls: Vec<url::Url> = playlist.init.into_iter().chain(playlist.segments).collect();
         Ok(Media::Stream(Box::new(move |mut w| {
-            let mut offset = 0u64;
-            for (i, url) in urls.iter().enumerate() {
+            let (start, mut offset) = w.checkpoint();
+            for (i, url) in urls.iter().enumerate().skip(start) {
                 let bytes = match core::stream_retry(&w, "hls fetch", || fetch_segment(&client, url)) {
                     Ok(b) => b,
                     Err(e) => return w.fail(format!("hls fetch {url}: {e}")),
@@ -310,6 +310,7 @@ impl SoundcloudSource {
                     return;
                 }
                 offset += bytes.len() as u64;
+                w.set_checkpoint(i + 1, offset);
                 w.set_progress((i + 1) as f32 / urls.len() as f32);
             }
             w.finish();

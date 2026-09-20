@@ -174,7 +174,10 @@ pub enum Intent { Play, Fetch, Peek }   // Play: grace period after release; Fet
   writes the redb index, so never from the UI or audio thread). One `Fetching -> Committing`
   transition under the `Shared` lock makes cancel-vs-commit race-free. A startup sweep removes stray
   temp files left by a crash.
-- Failed chunk/segment: retry 3 times with backoff, then `fail`.
+- Failed chunk/segment: retry 3 times with backoff, then `fail`. A failed run of a started download is
+  re-run by `produce` (fresh `provider.open`, state `Buffering` meanwhile, exponential backoff) while a claim
+  exists; the sparse file keeps its ranges so only gaps are refetched, and a `Media::Stream` producer
+  continues from `StreamWriter::checkpoint`. The stream fails after `RESUMES` restarts without new bytes.
 
 ### What callers see
 - `StreamInfo` (above) is a cheap snapshot: state, ranges, length, jumpable. Progress is read live
@@ -258,8 +261,7 @@ show a "downloading" mark from `engine.status`.
   at the best bitrate (320 needs Premium; fall back down), never the drain-on-drop reader.
 - It waits for a live session instead of returning `Unsupported`; `MediaProvider::open(r, wanted)` gets a
   `wanted` callback (false once the stream has no claim left) that a waiting provider polls.
-- The returned reader reopens the `AudioFile` after a read error (a stalled or dead fetch), so the engine's
-  retry continues at the same offset; `Link`'s connection lives on its own thread, published as a `Slot`.
+- A read error on the `AudioFile` ends the run; the engine's resume calls `open` again. `Link`'s connection lives on its own thread, published as a `Slot`.
 - The plugin keeps the connection: `Link` (session, backoff, `generation`, `died_streak`,
   `SESSION_HEALTHY_AFTER`, the runtime `Handle`) is unchanged and is the provider's session source.
 - Carry-over checklist (do not lose these behaviors):
@@ -269,11 +271,7 @@ show a "downloading" mark from `engine.status`.
     reported as `LoadFailed` -> retryable provider error while `link.generation` moved.
   - Wedged session: 2 consecutive load failures -> `session.shutdown()` recycle -> the provider
     reports open failures to `Link`.
-  - Player death / resume (`Loaded::resume`: reload the same track at the current position, keeping
-    paused state) -> generic "resume after failure": the engine reopens the key (the same tempfile
-    keeps its ranges, the producer refills gaps), the player rebuilds the decoder at its position.
-    Write this as its own TODO item after the implementation; it also fixes network drops for
-    every source.
+  - Player death / resume (`Loaded::resume`) -> the engine's generic resume (see above).
   - The playing track surviving an AP death (audio comes from the CDN; verify `AudioFile` reads
     continue after the session dies, e.g. via the local proxy used before).
   - Preload (`Cmd::Preload`, `TimeToPreloadNextTrack` -> `PlayerEvent::PreloadHint`, gapless):

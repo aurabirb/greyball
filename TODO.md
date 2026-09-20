@@ -42,9 +42,6 @@
   starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
   reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
   whether librespot's fetch loop or the CDN causes it, and consider cutting a released Spotify fetch at once.
-- [ ] Resume after failure: when a stream fails mid-track (network drop), reopen the key (the same temp
-  file keeps its ranges, the producer refills the gaps) and rebuild the decoder at the current position
-  instead of `LoadFailed`; also covers Spotify's `Loaded::resume`.
 - [ ] Gapless playback as a generic preload: `StreamEngine::open(next, Intent::Play)` shortly before the
   current track ends; `RodioPlayer` keeps `Player::preload`.
 - [ ] A "downloading" mark on rows from the engine's stream status.

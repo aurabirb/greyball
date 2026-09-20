@@ -24,6 +24,10 @@ const GRACE: Duration = Duration::from_secs(8);
 /// A reader stalled this long marks the stream as buffering.
 const STALL_BEFORE_BUFFERING: Duration = Duration::from_millis(250);
 const RETRIES: u32 = 3;
+/// Consecutive producer restarts without new bytes before a started stream is given up on.
+const RESUMES: u32 = 6;
+const RESUME_BACKOFF: Duration = Duration::from_secs(2);
+const RESUME_BACKOFF_MAX: Duration = Duration::from_secs(16);
 const FILL_CHUNK: usize = 64 * 1024;
 const WAIT_SLICE: Duration = Duration::from_millis(200);
 
@@ -94,6 +98,10 @@ struct State {
     /// A producer without a byte length (HLS) reports its own fraction.
     progress: Option<f32>,
     play_pos: u64,
+    /// Why the last producer run ended without finishing; `produce` decides whether to resume.
+    failure: Option<String>,
+    /// Where a resumed `Media::Stream` producer continues: (unit index, write offset).
+    checkpoint: (usize, u64),
 }
 
 struct Shared {
@@ -132,6 +140,11 @@ impl Shared {
         true
     }
 
+    /// Whether the stream is still wanted; also applies the `GRACE` release.
+    fn alive(&self) -> bool {
+        self.check(&mut self.lock()).is_ok()
+    }
+
     /// Cancels an active stream whose last claim is older than `GRACE`.
     fn check(&self, st: &mut State) -> std::result::Result<(), Stopped> {
         if st.phase.is_active() && st.claims == 0 && st.released.is_some_and(|t| t.elapsed() >= GRACE) {
@@ -142,7 +155,7 @@ impl Shared {
 
     fn info(&self) -> StreamInfo {
         let st = self.lock();
-        let downloaded: u64 = st.ranges.iter().map(|r| r.end - r.start).sum();
+        let downloaded = downloaded(&st.ranges);
         let percent = match st.len {
             Some(0) => None,
             Some(l) => Some((downloaded * 100 / l).min(100) as u8),
@@ -180,6 +193,8 @@ impl Shared {
             released: None,
             progress: None,
             play_pos: 0,
+            failure: None,
+            checkpoint: (0, 0),
         };
         let shared = Arc::new(Self { key, state: Mutex::new(st), cond: Condvar::new(), bus, cache });
         if announce {
@@ -192,6 +207,10 @@ impl Shared {
 /// The ranges of a fully present file of `len` bytes.
 fn whole(len: u64) -> Vec<Range<u64>> {
     if len == 0 { Vec::new() } else { std::iter::once(0..len).collect() }
+}
+
+fn downloaded(ranges: &[Range<u64>]) -> u64 {
+    ranges.iter().map(|r| r.end - r.start).sum()
 }
 
 fn prefix(ranges: &[Range<u64>]) -> u64 {
@@ -298,8 +317,16 @@ impl StreamWriter {
 
     /// Whether the stream is still wanted; also applies the `GRACE` release.
     pub fn alive(&self) -> bool {
-        let mut st = self.shared.lock();
-        self.shared.check(&mut st).is_ok()
+        self.shared.alive()
+    }
+
+    /// Saved by a `Media::Stream` producer so a resumed run continues there (default `(0, 0)`).
+    pub fn checkpoint(&self) -> (usize, u64) {
+        self.shared.lock().checkpoint
+    }
+
+    pub fn set_checkpoint(&self, index: usize, offset: u64) {
+        self.shared.lock().checkpoint = (index, offset);
     }
 
     /// The first missing span at or after `from` (needs `set_len`).
@@ -320,7 +347,7 @@ impl StreamWriter {
             let len = st.len.unwrap_or(end);
             let complete = if len == 0 { st.ranges.is_empty() } else { st.ranges.len() == 1 && st.ranges[0] == (0..len) };
             if !complete {
-                let why = format!("incomplete: {} of {len} bytes", st.ranges.iter().map(|r| r.end - r.start).sum::<u64>());
+                let why = format!("incomplete: {} of {len} bytes", downloaded(&st.ranges));
                 self.shared.set_phase(&mut st, StreamState::Failed(why));
                 return;
             }
@@ -340,9 +367,10 @@ impl StreamWriter {
         self.shared.set_phase(&mut st, StreamState::Done);
     }
 
+    /// This run of the producer ended early; a started download is resumed, else the stream fails.
     pub fn fail(mut self, why: String) {
         self.done = true;
-        self.fail_now(why);
+        self.shared.lock().failure = Some(why);
     }
 
     fn fail_now(&self, why: String) {
@@ -354,8 +382,14 @@ impl StreamWriter {
 impl Drop for StreamWriter {
     fn drop(&mut self) {
         if !self.done {
-            self.fail_now("producer ended early".into());
+            self.shared.lock().failure = Some("producer ended early".into());
         }
+    }
+}
+
+fn sleep_while_alive(shared: &Shared, until: Instant) {
+    while Instant::now() < until && shared.alive() {
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -370,9 +404,7 @@ pub fn retry<T>(writer: &StreamWriter, what: &str, mut f: impl FnMut() -> io::Re
                 attempt += 1;
                 log::debug!("stream: {what} failed (retry {attempt}/{RETRIES}): {e}");
                 let until = Instant::now() + Duration::from_millis(500 << (attempt - 1));
-                while Instant::now() < until && writer.alive() {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
+                sleep_while_alive(&writer.shared, until);
             }
         }
     }
@@ -620,6 +652,8 @@ impl StreamEngine {
             released: None,
             progress: None,
             play_pos: 0,
+            failure: None,
+            checkpoint: (0, 0),
         };
         let shared = Arc::new(Shared { key: key.clone(), state: Mutex::new(state), cond: Condvar::new(), bus: self.bus.clone(), cache: self.cache.clone() });
         {
@@ -677,28 +711,66 @@ fn attach(shared: Arc<Shared>, intent: Intent) -> Option<(StreamHandle, Claim)> 
     Some((StreamHandle { shared, intent }, claim))
 }
 
-/// The stream thread: asks the provider, then runs whatever it returned.
+/// The stream thread: runs the provider, and while the download had started and is still wanted, re-runs
+/// it after a failure with backoff; the sparse file keeps its ranges, so only the gaps are refetched.
 fn produce(shared: &Arc<Shared>, provider: &dyn MediaProvider, r: &Rendition) {
-    let writer = StreamWriter { shared: shared.clone(), done: false };
-    if !writer.alive() {
-        return;
+    let (mut failures, mut have) = (0, 0);
+    loop {
+        let writer = StreamWriter { shared: shared.clone(), done: false };
+        if !writer.alive() {
+            return;
+        }
+        let resumable = run_once(shared, provider, r, writer);
+        let mut st = shared.lock();
+        if st.phase.is_terminal() {
+            return;
+        }
+        let why = st.failure.take().unwrap_or_default();
+        let got = downloaded(&st.ranges);
+        if got > have {
+            (have, failures) = (got, 0);
+        }
+        failures += 1;
+        if !resumable || have == 0 || failures > RESUMES {
+            shared.set_phase(&mut st, StreamState::Failed(why));
+            return;
+        }
+        let wait = (RESUME_BACKOFF * 2u32.pow(failures - 1)).min(RESUME_BACKOFF_MAX);
+        log::debug!("stream {} {}: {why}; resuming in {wait:?} ({failures}/{RESUMES}, {have} bytes on disk)", shared.key.0, shared.key.1);
+        shared.set_phase(&mut st, StreamState::Buffering);
+        drop(st);
+        sleep_while_alive(shared, Instant::now() + wait);
     }
+}
+
+/// One run: asks the provider, then runs what it returned. False when the media can't be resumed.
+fn run_once(shared: &Arc<Shared>, provider: &dyn MediaProvider, r: &Rendition, writer: StreamWriter) -> bool {
     let media = match provider.open(r, &|| writer.alive()) {
         Ok(m) => m,
-        Err(e) => return writer.fail(format!("open: {e}")),
+        Err(e) => {
+            writer.fail(format!("open: {e}"));
+            return true;
+        }
     };
-    if !matches!(media, Media::Path(_)) {
-        let mut st = shared.lock();
-        shared.set_phase(&mut st, StreamState::Fetching);
-    }
+    let fetching = || shared.set_phase(&mut shared.lock(), StreamState::Fetching);
     match media {
-        Media::Path(p) => adopt_local(shared, writer, p),
+        Media::Path(p) => {
+            adopt_local(shared, writer, p);
+            return false;
+        }
         Media::Url(url) => match RangeReader::open(&url, HttpOptions::default()) {
-            Ok(reader) => fill_from_seekable(reader, writer),
+            Ok(reader) => {
+                fetching();
+                fill_from_seekable(reader, writer);
+            }
             Err(e) => writer.fail(format!("open {url}: {e}")),
         },
-        Media::Stream(run) => run(writer),
+        Media::Stream(run) => {
+            fetching();
+            run(writer);
+        }
     }
+    true
 }
 
 /// A provider handed over a finished local file: read it in place, link it into the cache, done.
