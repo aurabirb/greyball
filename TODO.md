@@ -13,16 +13,16 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-- [ ] (Low priority) The Search window doesn't behave the same when docked (or floating) as it does
-  as a tab. Reproduce and list the differences first — candidates from the code: `/` and `:search`
-  reach it through `show(id)` + the shell's search text field (`Editing::Search`,
-  `ui/src/view/input.rs`), which was written for "Search is the active tab": where the query input
-  is drawn and which window gets focus after Enter; results arriving while the docked window isn't
-  focused; the `searching` flag in `Ctx`/the list frame key and the loading mark; Enter/`q`/playlist
-  hotkeys acting on `active_list()` rather than the docked Search list; the leading-digit handling
-  in the search field; Esc clearing results vs. closing; a second Search instance not existing, so
-  `/` from another list jumps to the docked one. Make the window the unit: everything Search does
-  as a tab it does in any placement, through the same `TrackList` paths.
+- [ ] Make each Search window independent (the `search` tab and the `results` companion can be docked
+  side by side): the query and the results are per window — a search run from one window never
+  replaces the other's; the query input is drawn in that window's own title row, not in the command
+  bar/corner; `Editing::Search(WindowId)` so `commit_edit` resets the window that searched (not
+  `windows.named("search")`), `searching` and the "Esc to cancel" hint apply only to the window being
+  edited, and `FocusSearch` prefers an already-shown Search window. Results move from `Session`/
+  `ViewCache` single-set state to a result set per search id owned by the window (events already
+  carry the search generation; evict a set when its window starts a new search or closes). A leading
+  `/` typed into the query buffer is stripped. Reuse the shared `TrackList` paths; no Search-only
+  copies of window code.
 - [ ] Show the approximate position of the now-playing track on the scrollbar: a small marker in
   the scrollbar gutter (`draw_scrollbar`, `ui/src/view/scroll.rs`) at the proportional row
   `playing_row * list_h / total`, drawn only in a list that contains the playing track (the row from
@@ -85,20 +85,6 @@
 - [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
   ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
   clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
-- [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
-  `BAR_WIDTH` (24, `ui/src/view/status_line.rs`). Today `StatusLine::layout` reserves the fixed bar and
-  hands every spare column to the title field (`name_w`), which `pad`s a short title with
-  blanks — those blank columns are the "available space on the left". New split: the title field
-  gets only what the title needs (its display width, capped by what's left), and the scrubber takes
-  the rest, up to a max of 80 columns; the right-hand block (`{totaltime}  {bpm} {shuffle}`) stays
-  pinned where it is, so the bar's right edge doesn't move. No minimum width: the bar shrinks all the
-  way to 0 as the terminal narrows (drop the constant rather than keeping it as a floor). When the
-  width is too small to fit everything, the total time (and its separating space) disappears first,
-  before the bar or title are squeezed further. Decide the bar width and whether the total time is
-  shown inside `status_line_layout` and return them from it, so `draw` (`progress_bar(.., bar_w)`,
-  the `format!` of the row) and `on_event`'s scrubber hit-test/seek math (`frac = (x - start) /
-  width`) read the same numbers — both call sites currently pass `bar: STATUS_BAR_WIDTH` and
-  `totaltime.width()` in; guard the seek math against a 0-width bar.
 - [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
   progressively for a track still downloading — the playing track's bytes already land in a growing
   file (`StreamingReader`/`open_streaming_url`, `player/src/rodio_player.rs`), so decode what has
@@ -132,9 +118,6 @@
   `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
   status lines from scratch. The window-resize handler needs exactly this too (see the stale
   rightmost-column bug), so share one function between the two.
-- [ ] Wire `[soundcloud] hls` (prefer higher-bitrate HLS over 128kbps progressive) up in the Settings
-  UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
-  just not yet exposed there.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
