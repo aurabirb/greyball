@@ -161,7 +161,7 @@ Every Search window (the `search` tab, the `results` companion) is independent: 
 
 ## Kind bar
 
-`kind_bar.rs` draws and hit-tests the title row's kind bar. A static `[f] change filter` label (the `CycleKindFilter` key) sits left of the bar when it fits beside the title without squeezing it. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
+`kind_bar.rs` draws and hit-tests the title row's kind bar. A static `[f] filter` label (the `CycleKindFilter` key) sits left of the bar when it fits beside the title without squeezing it. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
 
 ## Queue info rows
 
