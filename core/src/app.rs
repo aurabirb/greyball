@@ -36,6 +36,21 @@ use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
 /// How long a skip waits for another before its track actually loads.
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(200);
 
+/// How long a remote collection may take to load before its pending enqueue is dropped.
+const ENQUEUE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The most tracks one collection appends to the queue.
+const ENQUEUE_CAP: usize = 500;
+
+/// A remote collection being appended to the queue as its pages land.
+struct PendingEnqueue {
+    source: SourceId,
+    node: BrowseNode,
+    name: String,
+    appended: usize,
+    deadline: Instant,
+}
+
 /// Build the synthetic playback-fallback `Rendition` for `track`, if any of
 /// its real renditions already has a `MediaCache` entry — routed through the
 /// `"local"` source, which already reads straight off disk with no
@@ -234,6 +249,8 @@ pub enum Command {
         name: Option<String>,
     },
     Enqueue(TrackId),
+    /// Append a playlist or album (a local or remote `HotkeyTarget`, never a built-in) with its display name.
+    EnqueueCollection(HotkeyTarget, String),
     /// Insert at the front of the queue instead of the back — plays next,
     /// ahead of anything already `Enqueue`d.
     Wedge(TrackId),
@@ -528,6 +545,8 @@ pub struct Session {
 
     /// Bumped by `set_context_tracks`, the one way the Now Playing list's membership changes.
     context_gen: u64,
+
+    pending_enqueues: Vec<PendingEnqueue>,
 }
 
 impl Session {
@@ -626,6 +645,7 @@ impl Session {
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
             context_gen: 0,
+            pending_enqueues: Vec::new(),
         };
         session.refresh_plugin_health();
         session
@@ -721,6 +741,24 @@ impl Session {
                 self.queue.append(id);
                 Ok(Dispatch::Queued(self.queue.len()))
             }
+            Command::EnqueueCollection(target, name) => match target {
+                HotkeyTarget::Local(id) => {
+                    let ids = self.playlist_track_ids(id);
+                    Ok(Dispatch::Done(self.enqueue_collection(&name, &ids)))
+                }
+                HotkeyTarget::Remote(source, node) => {
+                    self.view.ensure_remote_playlist_loading(&source, &node, self.remote_ctx());
+                    self.pending_enqueues.push(PendingEnqueue { source, node, name: name.clone(), appended: 0, deadline: Instant::now() + ENQUEUE_TIMEOUT });
+                    let bus = self.bus.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(ENQUEUE_TIMEOUT);
+                        bus.send(CoreEvent::QueueChanged);
+                    });
+                    let notes = self.advance_enqueues();
+                    Ok(Dispatch::Done(if notes.is_empty() { format!("loading {name} …") } else { notes.join("; ") }))
+                }
+                HotkeyTarget::Builtin(_) => Ok(Dispatch::Refused("not a playlist or album".into())),
+            },
             Command::Wedge(id) => {
                 self.queue.play_next(id);
                 Ok(Dispatch::Wedged(self.queue.len()))
@@ -908,11 +946,14 @@ impl Session {
             CoreEvent::PlaylistsChanged => {
                 self.invalidate_hotkey_memberships();
                 self.ensure_liked_lists();
+                self.notify_enqueues();
                 Ok(true)
             }
             CoreEvent::QueueChanged => {
+                self.notify_enqueues();
                 Ok(true)
             }
+            CoreEvent::Flash(_) => Ok(false),
             CoreEvent::SearchDone { search, .. } => Ok(*search == self.search_generation),
             CoreEvent::PlayRequested(id) => {
                 self.play_track(*id, true);
@@ -1300,6 +1341,73 @@ impl Session {
         self.load_tracks(&window)
     }
 
+    /// Appends up to `ENQUEUE_CAP` of `ids`; the message says what was queued.
+    fn enqueue_collection(&self, name: &str, ids: &[TrackId]) -> String {
+        if ids.is_empty() {
+            return format!("nothing to queue from {name}");
+        }
+        let n = ids.len().min(ENQUEUE_CAP);
+        self.queue.append_many(&ids[..n]);
+        let capped = if n < ids.len() { format!(", first {ENQUEUE_CAP} only") } else { String::new() };
+        format!("queued {name} ({n} tracks{capped})")
+    }
+
+    /// Appends what each pending enqueue's list has loaded since; the messages of the ones that ended.
+    fn advance_enqueues(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+        let now = Instant::now();
+        for mut job in std::mem::take(&mut self.pending_enqueues) {
+            let ids = self.remote_playlist_track_ids(&job.source, &job.node);
+            let take = ids.len().min(ENQUEUE_CAP);
+            if take > job.appended {
+                self.queue.append_many(&ids[job.appended..take]);
+                job.appended = take;
+            }
+            let queued = job.appended;
+            let name = &job.name;
+            if take == ENQUEUE_CAP && ids.len() > ENQUEUE_CAP {
+                notes.push(format!("queued {name} ({queued} tracks, first {ENQUEUE_CAP} only)"));
+            } else if self.view.remote_playlist_errored(&job.source, &job.node) {
+                notes.push(format!("could not load {name} ({queued} tracks queued)"));
+            } else if !self.remote_playlist_loading(&job.source, &job.node) {
+                notes.push(if queued == 0 { format!("nothing to queue from {name}") } else { format!("queued {name} ({queued} tracks)") });
+            } else if now >= job.deadline {
+                notes.push(format!("timed out loading {name} ({queued} tracks queued)"));
+            } else {
+                self.view.ensure_remote_playlist_loading(&job.source, &job.node, self.remote_ctx());
+                self.pending_enqueues.push(job);
+            }
+        }
+        self.touch();
+        notes
+    }
+
+    fn notify_enqueues(&mut self) {
+        if self.pending_enqueues.is_empty() {
+            return;
+        }
+        for note in self.advance_enqueues() {
+            self.bus.send(CoreEvent::Flash(note));
+        }
+    }
+
+    /// The Queue window's non-selectable rows after its tracks: pending loads, then what plays after the queue.
+    pub fn queue_info_rows(&self) -> Vec<String> {
+        let mut rows: Vec<String> = self.pending_enqueues.iter().map(|job| format!("loading {} …", job.name)).collect();
+        if let Some(ctx) = self.shown.context.as_ref() {
+            let next = if self.queue.get_shuffle() { ctx.shuffle_bag.last().copied() } else { Some(ctx.index + 1) }
+                .and_then(|i| ctx.tracks.get(i))
+                .and_then(|&id| self.store.get_track(id).ok().flatten());
+            let name = ctx.name.as_deref().unwrap_or("playing list");
+            match next {
+                Some(t) => rows.push(format!("Continues: {name} — {}", t.display_name())),
+                None if self.queue.get_shuffle() && !ctx.tracks.is_empty() => rows.push(format!("Continues: {name}")),
+                None => {}
+            }
+        }
+        rows
+    }
+
     /// All history ids, most-recently-played first, cheap (no store hits) —
     /// for cursor bounds on the `:hist` screen.
     pub fn history_ids(&self) -> Vec<TrackId> {
@@ -1577,6 +1685,11 @@ impl Session {
     /// Is more of this remote playlist still landing? (see `ViewCache::remote_playlist_loading`)
     pub fn remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode) -> bool {
         self.view.remote_playlist_loading(source, node)
+    }
+
+    /// Did loading this remote playlist stop on a failed page?
+    pub fn remote_playlist_errored(&self, source: &SourceId, node: &BrowseNode) -> bool {
+        self.view.remote_playlist_errored(source, node)
     }
 
     /// A window of a remote playlist's ingested tracks (`offset..offset+limit`)

@@ -16,6 +16,8 @@ pub enum CoreEvent {
     SearchDone { search: u64, source: SourceId },
     TrackUpdated(TrackId),
     QueueChanged,
+    /// A message for the front-end to flash: what a background job came to.
+    Flash(String),
     /// Playlists were added / replaced (e.g. by an M3U import). The front-end
     /// refreshes its Playlists screen.
     PlaylistsChanged,

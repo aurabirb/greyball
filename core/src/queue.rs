@@ -223,6 +223,11 @@ impl Queue {
         self.queue_changed();
     }
 
+    pub fn append_many(&self, tracks: &[TrackId]) {
+        self.queue.write().unwrap().extend(tracks.iter().copied());
+        self.queue_changed();
+    }
+
     /// Insert `track` at the very front of the queue — it plays immediately
     /// after whatever's currently playing, ahead of everything already
     /// queued. Replaces the old `insert_after_current`: with no index into

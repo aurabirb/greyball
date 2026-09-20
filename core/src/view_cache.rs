@@ -631,6 +631,11 @@ impl ViewCache {
         self.remote_playlist_cached(source, node, |e| e.partial).unwrap_or(true)
     }
 
+    /// Did the walk of `(source, node)` freeze on a failed page?
+    pub fn remote_playlist_errored(&self, source: &SourceId, node: &BrowseNode) -> bool {
+        self.remote_playlist_cached(source, node, |e| e.errored && !e.partial).unwrap_or(false)
+    }
+
     /// Shared by the `remote_playlist_*` accessors above: look up the cache
     /// entry for `(source, node)` and, if present, run `f` over it.
     fn remote_playlist_cached<T>(
