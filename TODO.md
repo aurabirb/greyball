@@ -27,7 +27,7 @@
   `draw` owns should be written edge to edge each frame (or the view cleared first); (2) width
   disagreement with the terminal — `pad`/`truncate`/`five_col` measure with `unicode-width`, and a
   glyph macOS Terminal/iTerm renders wider or narrower than that (emoji, variation selectors, CJK,
-  ambiguous-width box/transport glyphs like `━╍⏸ϟ⚠`) pushes a line into or short of the last column,
+  ambiguous-width box/transport glyphs like `━╍⏸ϟ♥♡⚠`) pushes a line into or short of the last column,
   leaving leftovers cursive's diffing never rewrites; (3) resize handling — `Event::WindowResize`
   should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`MedleyView::placed`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list

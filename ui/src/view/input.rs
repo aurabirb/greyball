@@ -282,6 +282,10 @@ impl MedleyView {
             }
             Action::Seek(ms) => self.seek(ms),
             Action::RevealPlaying => self.reveal_playing(true),
+            Action::LikePlaying => match self.with_session(|s| s.now_playing_id()) {
+                Some(id) => self.run_confirmed(Command::Like(id)),
+                None => self.notify(Notice::nothing_playing()),
+            },
             Action::ToggleWindow(name) => {
                 let Some(id) = self.windows.named(name) else { return EventResult::Ignored };
                 self.toggle_window(id);

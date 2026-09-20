@@ -576,7 +576,7 @@ impl MedleyView {
                 let hit = TabBar { tabs: &self.tab_names(), active: self.active_tab(), status: &status, marquee_offset }
                     .click(local.x, size.x);
                 if let Some(TabBarHit::Transport(button)) = hit {
-                    return self.run(button.command());
+                    return self.handle_action(button.action());
                 }
                 if let Some(TabBarHit::Seek(cmd)) = hit {
                     return self.run(cmd);

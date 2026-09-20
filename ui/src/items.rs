@@ -144,6 +144,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s (→)", ""),
     builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s (←)", ""),
     builtin(Section::Player, BuiltinAction::ToggleShuffle, "toggle queue shuffle", ""),
+    builtin(Section::Player, BuiltinAction::LikePlaying, "like the playing track, or unlike it (asks first)", ""),
     builtin(Section::Player, BuiltinAction::ToggleVis, "toggle the visualizer pane", ""),
     builtin(Section::Player, BuiltinAction::RevealPlaying, "select the playing track (seeking does too)", ""),
     fixed(

@@ -55,6 +55,8 @@ pub enum Action {
     ShowWindow(&'static str),
     /// UI-local: put the cursor on the playing track in the active list.
     RevealPlaying,
+    /// UI-local: like or unlike the playing track.
+    LikePlaying,
     /// Nothing bound.
     None,
 }
@@ -138,6 +140,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collecti
         BuiltinAction::SwitchPlaylists => Action::SwitchPlaylists,
         BuiltinAction::OpenHelp => Action::OpenHelp,
         BuiltinAction::RevealPlaying => Action::RevealPlaying,
+        BuiltinAction::LikePlaying => Action::LikePlaying,
         BuiltinAction::ToggleLog => Action::ToggleWindow("log"),
         BuiltinAction::ToggleSettings => Action::ToggleWindow("settings"),
         BuiltinAction::ToggleVis => Action::ToggleWindow("vis"),

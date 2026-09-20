@@ -99,7 +99,7 @@ impl TabBar<'_> {
     fn layout(&self, total_w: usize) -> Layout {
         // The last column stays clear, matching the list's scrollbar gutter below.
         let content_w = total_w.saturating_sub(1);
-        let buttons_w = transport_layout(0, &self.status.state).last().map_or(0, |&(_, s, w)| s + w);
+        let buttons_w = transport_layout(0, &self.status.state, self.status.liked).last().map_or(0, |&(_, s, w)| s + w);
         let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
         let collapsed = full_w + TRANSPORT_GAP + buttons_w + WAVE_MIN + TRANSPORT_GAP + TITLE_MIN > content_w;
 
@@ -112,7 +112,7 @@ impl TabBar<'_> {
             .collect();
 
         let transport_start = tabs_end + TRANSPORT_GAP;
-        let transport = transport_layout(transport_start, &self.status.state);
+        let transport = transport_layout(transport_start, &self.status.state, self.status.liked);
         let transport_end = transport.last().map_or(transport_start, |&(_, s, w)| s + w);
         let (transport, detail_start) = if transport_end <= content_w {
             (transport, transport_end + TRANSPORT_GAP)
@@ -150,12 +150,22 @@ impl TabBar<'_> {
                 printer.print((start, 0), &text);
             }
         }
-        for ((button, label), &(_, start, _)) in transport_labels(&self.status.state).iter().zip(&layout.transport) {
+        for ((button, label), &(_, start, _)) in transport_labels(&self.status.state, self.status.liked).iter().zip(&layout.transport) {
             match button {
                 Transport::Shuffle if self.status.shuffle => {
                     printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| p.print((start, 0), label));
                 }
                 Transport::Shuffle => printer.with_effect(Effect::Dim, |p| p.print((start, 0), label)),
+                Transport::Like => match self.status.liked {
+                    Some(pending) => printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| {
+                        if pending {
+                            p.with_effect(Effect::Italic, |p| p.print((start, 0), label));
+                        } else {
+                            p.print((start, 0), label);
+                        }
+                    }),
+                    None => printer.with_effect(Effect::Dim, |p| p.print((start, 0), label)),
+                },
                 _ => printer.print((start, 0), label),
             }
         }
