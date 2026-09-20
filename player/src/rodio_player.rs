@@ -582,6 +582,7 @@ fn finish_load(
 
     audio._temp = loaded.temp;
     audio.duration_ms = loaded.duration_ms;
+    log::debug!("player: playback started [{source}] {uri} ({} ms)", loaded.duration_ms);
     audio.sink = Some(sink);
     audio.finished_sent = false;
 

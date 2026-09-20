@@ -264,8 +264,8 @@ impl SlskdClient {
         if !status.is_success() {
             return Err(format!("batch status failed ({status}): {text}"));
         }
-        let batch: BatchResponse = serde_json::from_str(&text).map_err(|e| format!("batch status: bad response: {e}"))?;
-        Ok(batch.batch.and_then(|b| b.transfers.into_iter().next()))
+        let batch: BatchBody = serde_json::from_str(&text).map_err(|e| format!("batch status: bad response: {e}"))?;
+        Ok(batch.transfers.into_iter().next())
     }
 
     fn cancel_active(&self, username: &str, filename: &str) -> ClientResult<()> {
@@ -334,8 +334,6 @@ pub struct SearchFile {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchResponse {
-    #[serde(default)]
-    batch: Option<BatchBody>,
     #[serde(default)]
     failures: Vec<BatchFailure>,
 }
