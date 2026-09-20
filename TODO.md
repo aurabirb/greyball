@@ -55,6 +55,9 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Fetch the remote branch `worktree-copy-shared-link` (`git fetch origin worktree-copy-shared-link`)
+  and merge it into `main`: review it against the "copy shared link" shortcut item below first (it likely
+  implements it — delete that item if so), resolve conflicts, then run the build/clippy gates and push.
 - [ ] Change the Now Playing window's docked hint from `[M] docked` to `[=]`, matching the Now Playing
   marker: today the hint row shows the layout key as `[M] cycle layout` only while docked
   (`hint(&[c.layout_key], "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) and
