@@ -322,7 +322,7 @@ impl TrackList {
     }
 
     pub(super) fn is_search(&self) -> bool {
-        self.kind == ListKind::Search
+        self.kind == ListKind::Search && matches!(self.open, Open::TopLevel)
     }
 
     /// Whether the `/`-filter narrows this list.
@@ -330,7 +330,7 @@ impl TrackList {
         match self.kind {
             ListKind::NowPlaying | ListKind::Queue | ListKind::History => true,
             ListKind::Playlists => !matches!(self.open, Open::TopLevel),
-            ListKind::Search => false,
+            ListKind::Search => !matches!(self.open, Open::TopLevel),
         }
     }
 

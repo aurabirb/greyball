@@ -72,6 +72,9 @@ impl MedleyView {
         let text = std::mem::take(&mut self.buffer);
         match kind {
             Editing::Search => {
+                if let Some(list) = self.windows.named("search").and_then(|id| self.windows[id].list_mut()) {
+                    list.show_top(None);
+                }
                 self.run(Command::Search(text))
             }
             Editing::CommandLine => {
