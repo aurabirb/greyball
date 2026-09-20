@@ -5,24 +5,26 @@ use core::BuiltinAction;
 /// Help sections, in display order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
-    Commands,
-    Movement,
     Player,
+    Hotkeys,
     Tracks,
     Windows,
+    Movement,
+    Commands,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] =
-        [Section::Commands, Section::Movement, Section::Player, Section::Tracks, Section::Windows];
+    pub const ALL: [Section; 6] =
+        [Section::Player, Section::Hotkeys, Section::Tracks, Section::Windows, Section::Movement, Section::Commands];
 
     pub fn title(self) -> &'static str {
         match self {
-            Section::Commands => "Commands",
-            Section::Movement => "Movement",
             Section::Player => "Player",
+            Section::Hotkeys => "Custom playlist hotkeys",
             Section::Tracks => "Tracks and playlists",
             Section::Windows => "Windows",
+            Section::Movement => "Movement",
+            Section::Commands => "Commands",
         }
     }
 }
@@ -96,7 +98,7 @@ const fn fixed(section: Section, keys: &'static str, summary: &'static str, deta
 
 pub const ITEMS: &[Item] = &[
     command(Cmd::Search, BuiltinAction::PromptSearch, &["search", "s"], "<query>", "search all sources for tracks", ""),
-    command(Cmd::NewPlaylist, BuiltinAction::AddToPlaylistOrNew, &["newplaylist", "np"], "<name>", "create a new playlist", "With a track selected the key picks a playlist to add it to instead."),
+    command(Cmd::NewPlaylist, BuiltinAction::AddToPlaylistOrNew, &["newplaylist", "np"], "<name>", "create a new playlist", ""),
     command(Cmd::AddToPlaylist, BuiltinAction::PromptAddToPlaylist, &["add-to-playlist", "add"], "<playlist>", "add the selected track to a playlist by name", ""),
     command(
         Cmd::Open,
@@ -104,12 +106,12 @@ pub const ITEMS: &[Item] = &[
         &["open", "o"],
         "[<url-or-path>]",
         "open a playlist link, an M3U file or local audio files",
-        "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: the files window (a file browser).",
+        "Link: opens as a playlist. M3U: imported. Audio files: added to the open playlist. No argument: the file browser.",
     ),
     command(Cmd::Export, BuiltinAction::PromptExport, &["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
     action(BuiltinAction::ToggleLog, &["log", "l"], "toggle the log pane", ""),
     action(BuiltinAction::ToggleSettings, &["settings", "set"], "toggle the settings pane", ""),
-    action(BuiltinAction::ToggleVis, &["vis", "v"], "toggle the real-audio bar-eq visualizer pane", ""),
+    action(BuiltinAction::ToggleVis, &["vis", "v"], "toggle the visualizer pane", ""),
     action(BuiltinAction::ToggleQueue, &["queue", "qu"], "toggle the queue pane", ""),
     action(BuiltinAction::ToggleHistory, &["history", "hi"], "toggle the history pane", ""),
     action(BuiltinAction::ShowHistory, &["hist", "ht"], "show the History tab window (history-tab)", ""),
@@ -127,44 +129,48 @@ pub const ITEMS: &[Item] = &[
         &["panes", "p"],
         "[<window>] [tabbed|docked|screen|float] [left|right|top|bottom] [horizontal|vertical]",
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
-        "Window names as for :window; without one, every window that is not a tab moves. A startup tab stays tabbed: naming it moves its companion window (tabbed closes it).",
+        "Names as for :window; none moves every non-tab window. Naming a startup tab moves its companion window.",
     ),
-    action(BuiltinAction::ToggleScan, &["togglescan", "ts"], "pause or resume the background scan (bpm, ...)", "Paused, it reads only what is cached."),
-    action(BuiltinAction::Update, &["update"], "install the latest release into ~/.local/bin/medley", "Checks GitHub; restart to run the new version."),
+    action(BuiltinAction::ToggleScan, &["togglescan", "ts"], "pause or resume the background scan (bpm, ...)", ""),
+    action(BuiltinAction::Update, &["update"], "install the latest release into ~/.local/bin/medley (restart after)", ""),
     action(BuiltinAction::ToggleShuffle, &["toggleshuffle", "sh"], "toggle queue shuffle", ""),
-    action(BuiltinAction::Link, &["link", "ln"], "merge two rows as one track", "Pick the selected row, then run :link again on a second row."),
+    action(BuiltinAction::Link, &["link", "ln"], "merge two rows as one track (run it on each row)", ""),
     action(BuiltinAction::Unlink, &["unlink", "ul"], "unlink the selected track from its links", ""),
-    action(BuiltinAction::OpenHelp, &["help", "h"], "open this window", "Enter on a row gives it a new key, Bksp its default back."),
+    action(BuiltinAction::OpenHelp, &["help", "h"], "open this window", ""),
     action(BuiltinAction::Quit, &["quit", "q"], "exit medley", ""),
-    fixed(Section::Movement, "j/k", "move the cursor", ""),
-    fixed(Section::Movement, "J/K", "move a page", ""),
-    fixed(Section::Movement, "Enter", "play or open the selected row", ""),
-    fixed(Section::Movement, "Esc", "clear the filter, leave the playlist, close a window that is not a tab", ""),
-    fixed(Section::Movement, "/", "search at the Search results, fuzzy-filter the current list anywhere else (an opened album or playlist included)", ""),
-    fixed(Section::Movement, ":", "open the command line", ""),
-    fixed(Section::Movement, "1-9", "switch to that tab", ""),
-    fixed(Section::Movement, "Tab", "focus the next window", ""),
     builtin(Section::Player, BuiltinAction::PlayPause, "play/pause", ""),
-    builtin(Section::Player, BuiltinAction::Next, "next track", "> always works too."),
-    builtin(Section::Player, BuiltinAction::Previous, "previous track", "< always works too."),
-    builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s", "→ always works too."),
-    builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s", "← always works too."),
-    builtin(Section::Player, BuiltinAction::RevealPlaying, "select the playing track in the active window", "Seeking does this too."),
+    builtin(Section::Player, BuiltinAction::Next, "next track (>)", ""),
+    builtin(Section::Player, BuiltinAction::Previous, "previous track (<)", ""),
+    builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s (→)", ""),
+    builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s (←)", ""),
+    builtin(Section::Player, BuiltinAction::ToggleShuffle, "toggle queue shuffle", ""),
+    builtin(Section::Player, BuiltinAction::ToggleVis, "toggle the visualizer pane", ""),
+    builtin(Section::Player, BuiltinAction::RevealPlaying, "select the playing track (seeking does too)", ""),
+    fixed(
+        Section::Hotkeys,
+        "any key",
+        "on a Playlists row, press a key to bind it (Bksp clears)",
+        "With a track selected, that key adds it to the playlist or removes it.",
+    ),
+    builtin(Section::Hotkeys, BuiltinAction::SwitchPlaylists, "switch to the playlist keys window (opens it when closed)", ""),
+    builtin(Section::Tracks, BuiltinAction::AddToPlaylistOrNew, "add the selected track to a playlist, or make a new one", ""),
     builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track, playlist or album", ""),
     builtin(Section::Tracks, BuiltinAction::Wedge, "wedge the selected track to the front of the queue", ""),
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
-    builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs), or unlike it when it is already liked", "Confirms before removing."),
+    builtin(Section::Tracks, BuiltinAction::Like, "like the selected track, or unlike it (asks first)", ""),
     builtin(Section::Tracks, BuiltinAction::ExportPlaylist, "export the selected or open local playlist as M3U", ""),
-    builtin(Section::Tracks, BuiltinAction::CycleKindFilter, "cycle which kinds of items the list shows: all, songs, albums, playlists", ""),
-    fixed(
-        Section::Tracks,
-        "any key",
-        "bind key to playlist",
-        "On a row of a Playlists list; Bksp clears it. With a track selected, a playlist's key adds it to or removes it from that playlist.",
-    ),
-    builtin(Section::Windows, BuiltinAction::SwitchPlaylists, "switch to the other Playlists window", "Opens the playlist keys window over the view when it is closed; on that window floating, closes it."),
+    builtin(Section::Tracks, BuiltinAction::CycleKindFilter, "cycle the list's kinds: all, songs, albums, playlists", ""),
+    builtin(Section::Windows, BuiltinAction::OpenHelp, "open or leave this window (Enter rebinds a row, Bksp resets it)", ""),
     builtin(Section::Windows, BuiltinAction::CyclePlacement, "move the focused window: tabbed, docked, screen, float", ""),
     builtin(Section::Windows, BuiltinAction::CyclePaneLayout, "cycle the docked-pane layout", ""),
+    fixed(Section::Windows, "1-9", "switch to that tab", ""),
+    fixed(Section::Windows, "Tab", "focus the next window", ""),
+    fixed(Section::Movement, "j/k", "move the cursor (↑/↓ too)", ""),
+    fixed(Section::Movement, "J/K", "move a page (PgUp/PgDn too)", ""),
+    fixed(Section::Movement, "Enter", "play or open the selected row", ""),
+    fixed(Section::Movement, "Esc", "clear the filter, go back, close a window that is not a tab", ""),
+    fixed(Section::Movement, "/", "search in Search, filter the current list elsewhere", ""),
+    fixed(Section::Movement, ":", "open the command line", ""),
 ];
 
 /// The item `word` names, by any of its spellings.

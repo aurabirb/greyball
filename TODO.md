@@ -63,18 +63,17 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Rearrange the Help window (`Section`s in `ui/src/items.rs`), in this order: (1) Player first,
-  including the shuffle key and the new `v`, with each description on one line in the Movement
-  section's style, the key in the text ("next track (>)"); (2) a custom-playlist-hotkeys section,
-  opening with a short explanation of how playlist hotkeys work, then the `` ` `` key; (3) Tracks and
-  playlists, with `+` moved into it; (4) Windows, holding `?`, `M`, `P` and the rest of the window
-  keys; Commands stays last. Where Movement falls is not specified: keep it after Windows, or report
-  back. Then review the content: every bound key is listed, and descriptions are trimmed to take as
-  little vertical space as possible.
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
   can't.
+- [ ] Keyboard selection of the kind filter: today only `f` cycles it, forward only (All → Songs →
+  Albums → Playlists), so Albums takes two presses and going back takes three. Add left/right arrows
+  to switch kinds while the focused window shows a kind bar (Search, and the Playlists top level),
+  plus a reverse-cycle key next to `f` (a rebindable `BuiltinAction` with a Help row). Decide the
+  conflict first: `←`/`→` are the fixed seek keys ("always works too"), so in a window with a kind
+  bar they would stop seeking there (seek stays on its rebindable keys); report back if that is not
+  acceptable and use the reverse key alone.
 - [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
   ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
   clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).

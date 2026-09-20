@@ -133,7 +133,6 @@ fn build(width: usize, s: &Session) -> Built {
         built.sections.push((built.lines.len(), built.rows.len()));
         built.lines.push(Line::Title(format!("[ {title} ]")));
         for cell in cells {
-            built.lines.push(Line::Blank);
             let mut text = if cell.command.is_empty() { Vec::new() } else { wrap(&cell.command, wrap_w) };
             text.extend(wrap(&cell.summary, wrap_w));
             if !cell.detail.is_empty() {
