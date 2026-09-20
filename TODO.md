@@ -133,7 +133,6 @@
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
-- [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 - [ ] Move the default media-cache directory to `~/Downloads/medley`, and make it adjustable from
@@ -155,6 +154,26 @@
   Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
   every placement (tab, docked, floating), filtering that window's own list through the same
   `TrackList` path. List the panels where it does nothing or acts on the wrong window, then fix them.
+
+### Album support
+Design: `docs/collections.md`.
+- [ ] Albums are collections (`(String, BrowseNode)`), `ItemKind::Album` covers album/EP/single. Add
+  an `ItemKind` filter (All / Albums / Playlists) to the Playlists window's `top_rows`, and a
+  saved-albums listing for Spotify. `BrowsePage.subtitle` carries "Album · year · N tracks" into the
+  list title line.
+
+### Search experience
+Design: `docs/collections.md`.
+- [ ] Replace `SearchHit` with `Track` (`Catalog::ingest` keeps deciding identity), then add
+  `Source::search_collections` and show Songs / Albums / Playlists sections in the Search window
+  with a key that cycles the kind filter. Includes Spotify playlists and albums in results.
+
+### Queue
+Design: `docs/collections.md`.
+- [ ] Queue entries become `Entry::{Track, Remote}` so a remote album/playlist can be enqueued as one
+  entry with a cursor; add the enqueue action.
+- [ ] The Queue window ends with a derived pseudo-track row showing the context that plays after the
+  last entry.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
