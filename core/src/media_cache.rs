@@ -38,8 +38,7 @@
 //!
 //! Resolving a display name needs a `Track`, which `MediaCache` doesn't
 //! otherwise have — it takes a `Store` handle solely to look one up
-//! (`Store::track_by_rendition`) at write time, and, for `prune_orphans`, to
-//! check whether a `(source, uri)` still belongs to any track at all. That
+//! (`Store::track_by_rendition`) at write time. That
 //! `Store` handle is never used to originate a fetch, and deliberately isn't
 //! threaded through `Player`/`RodioPlayer`/`SpotifyPlayer`'s own `put`/
 //! `put_file`/`link_local` call sites — those stay exactly as they were,
@@ -170,8 +169,7 @@ pub struct MediaCache {
     /// per-transaction overhead. Kept in sync with `index` on every write
     /// (see `dest`) and removal (see `prune_orphans`).
     index_cache: RwLock<HashMap<String, String>>,
-    /// Read-only from here: resolves a display name at write time, and
-    /// checks a track still exists at prune time.
+    /// Read-only from here: resolves a display name at write time.
     store: Arc<dyn Store>,
     /// Per-key locks so two callers wanting the same not-yet-cached
     /// rendition serialize (one decodes+writes, the other waits and then
@@ -330,45 +328,48 @@ impl MediaCache {
         Ok(dest)
     }
 
-    /// Drops any index entry (and its cache file) whose `(source, uri)` no
-    /// longer resolves to a track in the `Store` — e.g. a rendition removed
-    /// from its source. Run once at startup (`app/src/main.rs`, on a
-    /// background thread so it never delays the UI coming up) rather than on
-    /// a recurring timer: entries only go stale between runs (a source
-    /// dropping a rendition while medley isn't running), never mid-session,
-    /// so there's nothing a periodic sweep would catch that a startup one
-    /// wouldn't. Deletes the orphaned file too, not just the index row — a
-    /// stale multi-hundred-MB audio file with no index entry pointing at it
-    /// is worse than the row.
+    /// Drops index entries whose cache file no longer exists; never deletes files.
     pub fn prune_orphans(&self) {
-        let stale: Vec<(String, String)> =
-            self.index_cache.read().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let missing: Vec<String> = self
+            .index_cache
+            .read()
+            .unwrap()
+            .iter()
+            .filter_map(|(key, filename)| {
+                let (source, _) = key.split_once('\0')?;
+                let path = self.dir.join(sanitize(source)).join(filename);
+                (!path.exists()).then(|| key.clone())
+            })
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
 
-        let mut removed = 0usize;
-        for (key, filename) in stale {
-            let Some((source, uri)) = key.split_once('\0') else { continue };
-            let still_live =
-                self.store.track_by_rendition(&SourceId::new(source), uri).ok().flatten().is_some();
-            if still_live {
-                continue;
-            }
-            let path = self.dir.join(sanitize(source)).join(&filename);
-            let _ = std::fs::remove_file(&path);
-            if let Ok(w) = self.index.begin_write() {
-                if let Ok(mut t) = w.open_table(INDEX) {
-                    let _ = t.remove(key.as_str());
+        let committed = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let w = self.index.begin_write()?;
+            {
+                let mut t = w.open_table(INDEX)?;
+                for key in &missing {
+                    t.remove(key.as_str())?;
                 }
-                let _ = w.commit();
             }
-            self.index_cache.write().unwrap().remove(&key);
-            removed += 1;
+            w.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = committed {
+            log::warn!("media_cache: prune failed: {e}");
+            return;
         }
-        if removed > 0 {
-            log::info!(
-                "media_cache: pruned {removed} orphaned cache entr{}",
-                if removed == 1 { "y" } else { "ies" }
-            );
+
+        let mut cache = self.index_cache.write().unwrap();
+        for key in &missing {
+            cache.remove(key);
         }
+        log::info!(
+            "media_cache: dropped {} index entr{} whose files are missing",
+            missing.len(),
+            if missing.len() == 1 { "y" } else { "ies" }
+        );
     }
 }
 
