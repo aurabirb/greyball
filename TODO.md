@@ -174,21 +174,22 @@
     detected skipped, a short summary of what will happen before the final step, re-runnable from
     Settings, advanced options (custom host, manual login) only when asked for.
 
+### Player chrome
+- [ ] Remove the waveform column from the track lists.
+- [ ] Move the shuffle widget (`[S]`) into the top player control block as a `ϟ` symbol, red while
+  shuffle is active. The "Shuffle: on/off" flash must also appear on each press.
+- [ ] Hide the bottom scrubber by default: flip the `status_line` default to `false`
+  (`core/src/config.rs`); the Settings toggle already exists.
+- [ ] Make the `[B]` analyzer widget always sit to the left of the warning widget. Keep the change
+  minimal and don't introduce a new concept: it should feel like a "status group" that is simply
+  repositioned between windows.
+
 ### Album support
 Design: `docs/collections.md`.
 - [ ] Opened collection title line: add `subtitle: Option<String>` to `BrowsePage` (filled by the
   source, e.g. "Album · 2019 · 12 tracks") and show it on the list window's existing title line, with
   `release_label(track_count)` (single ≤3, EP 4–7, else album) once the list is loaded. Also make the
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
-
-### Queue
-Design: `docs/collections.md`.
-- [ ] `Command::EnqueueCollection(HotkeyTarget)` for a Search row, a Playlists row or an opened
-  collection: local playlists append their tracks at once; a remote one runs a pending job that
-  appends tracks as pages land (event-driven, never blocking, with a timeout that flashes a notice).
-  The queue stays tracks-only.
-- [ ] The Queue window shows non-selectable info rows after the tracks: `loading <name> …` per pending
-  job and a derived `Continues: <context> — <next track>` row.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
