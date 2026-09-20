@@ -318,6 +318,6 @@ impl HelpPane {
                 Line::Rest(text) => view.print((0, y), text),
             }
         }
-        draw_scrollbar(&printer.windowed(Rect::from_size((0, 1), (printer.size.x, body.height()))), body.width(), body.height(), offset, built.lines.len());
+        draw_scrollbar(&printer.windowed(Rect::from_size((0, 1), (printer.size.x, body.height()))), body.width(), body.height(), offset, built.lines.len(), None);
     }
 }

@@ -8,7 +8,7 @@ use core::{HotkeyMembership, PendingRows, Session};
 
 use crate::row::RowItem;
 
-use super::scroll::draw_scrollbar;
+use super::scroll::{ListState, draw_scrollbar};
 use super::text::{pad, pad_right_aligned, truncate};
 
 /// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
@@ -177,7 +177,7 @@ fn bpm_color(bpm: &str) -> Option<Color> {
 pub(super) const LIST_TITLE_ROWS: usize = 1;
 
 /// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
-pub(super) fn draw_row_list(printer: &Printer, title: &str, back: bool, rows: &[Row], offset: usize, sel: usize, total: usize) {
+pub(super) fn draw_row_list(printer: &Printer, title: &str, back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
     // Reserve the rightmost column of the list body as a scrollbar gutter.
     let content_w = printer.size.x.saturating_sub(1);
     let indent = main_col_start(content_w);
@@ -189,7 +189,7 @@ pub(super) fn draw_row_list(printer: &Printer, title: &str, back: bool, rows: &[
     }
     let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
     let body = printer.windowed(Rect::from_size((0, LIST_TITLE_ROWS), (printer.size.x, body_h)));
-    draw_list_body(&body, rows, offset, sel, total);
+    draw_list_body(&body, rows, state, total, playing);
 }
 
 /// The title row's clickable back button, over the tags column; hidden when it would run into the title.
@@ -200,7 +200,8 @@ pub(super) fn back_button_fits(content_w: usize) -> bool {
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
-fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, total: usize) {
+fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
+    let ListState { cursor: sel, offset } = state;
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
@@ -246,7 +247,7 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
             }
         }
     }
-    draw_scrollbar(printer, content_w, list_h, offset, total);
+    draw_scrollbar(printer, content_w, list_h, offset, total, playing);
 }
 
 /// Each `columns` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.

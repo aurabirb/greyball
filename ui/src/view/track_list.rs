@@ -126,6 +126,8 @@ pub(super) struct ListFrame {
     keyed: bool,
     /// Items per kind, parallel to the window's `segments`.
     kind_counts: Option<Vec<usize>>,
+    /// The playing track's row, for the scrollbar marker.
+    playing: Option<usize>,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -685,6 +687,7 @@ impl TrackList {
                 unit: self.unit(total),
                 assignable,
                 kind_counts: self.kind_counts(s),
+                playing: self.playing_index(s),
                 keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
@@ -745,7 +748,7 @@ impl TrackList {
         } else if kind_bar::start(&bar).is_some() {
             title = scroll_title(&title, room, 0);
         }
-        draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state.offset, self.state.cursor, frame.total);
+        draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
     }
 

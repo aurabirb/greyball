@@ -127,7 +127,7 @@ impl FilesPane {
         let lines: Vec<String> = self.entries.iter().map(Entry::label).collect();
         self.list.draw(&printer.windowed(body), &lines);
         let gutter = printer.windowed(Rect::from_size((0, 1), (printer.size.x, body.height())));
-        draw_scrollbar(&gutter, body.width(), body.height(), self.list.offset, lines.len());
+        draw_scrollbar(&gutter, body.width(), body.height(), self.list.offset, lines.len(), None);
     }
 
     pub(super) fn idle(&self) -> &'static str {

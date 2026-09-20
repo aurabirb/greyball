@@ -160,7 +160,8 @@ pub(super) fn bound_offset(offset: usize, len: usize, list_h: usize) -> usize {
 }
 
 /// Draw a scrollbar thumb in the column at `x = gutter_x` of `printer`, covering rows `0..list_h`; every other gutter cell is blanked.
-pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, offset: usize, total: usize) {
+/// `playing` (a row index) adds a `>` at its proportional gutter row, over the thumb too.
+pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, offset: usize, total: usize, playing: Option<usize>) {
     let thumb = if total > list_h {
         let thumb_len = (list_h * list_h / total).max(1).min(list_h);
         let track = list_h - thumb_len;
@@ -175,5 +176,10 @@ pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, 
         } else {
             printer.print((gutter_x, y), " ");
         }
+    }
+    if let Some(row) = playing.filter(|_| total > 0 && list_h > 0) {
+        let y = (row * list_h / total).min(list_h - 1);
+        let style = if thumb.contains(&y) { ColorStyle::highlight() } else { ColorStyle::secondary() };
+        printer.with_color(style, |p| p.print((gutter_x, y), ">"));
     }
 }
