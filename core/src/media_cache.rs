@@ -446,10 +446,15 @@ fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Datab
                 continue;
             }
         };
-        match merge_index(&incoming, &index) {
-            Ok((inserted, skipped)) => {
+        match merge_index(&incoming, &index, dir) {
+            Ok((inserted, fileless, skipped)) => {
                 drop(incoming);
-                log::info!("media_cache: ingested {}: inserted {inserted}, skipped {skipped}", extra.display());
+                let note = if fileless > 0 {
+                    format!(" ({fileless} without a file, will be dropped by the next prune)")
+                } else {
+                    String::new()
+                };
+                log::info!("media_cache: ingested {}: inserted {inserted}{note}, skipped {skipped}", extra.display());
                 merged.push(extra);
             }
             Err(e) => {
@@ -479,10 +484,10 @@ fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Datab
     index
 }
 
-fn merge_index(from: &Database, to: &Database) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+fn merge_index(from: &Database, to: &Database, dir: &Path) -> Result<(usize, usize, usize), Box<dyn std::error::Error>> {
     let read = from.begin_read()?;
     let src = read.open_table(INDEX)?;
-    let (mut inserted, mut skipped) = (0, 0);
+    let (mut inserted, mut fileless, mut skipped) = (0, 0, 0);
     let mut last: Option<String> = None;
     loop {
         let chunk: Vec<(String, String)> = match &last {
@@ -504,12 +509,15 @@ fn merge_index(from: &Database, to: &Database) -> Result<(usize, usize), Box<dyn
                 } else {
                     t.insert(k.as_str(), v.as_str())?;
                     inserted += 1;
+                    if let Some((source, _)) = k.split_once('\0') {
+                        fileless += usize::from(!dir.join(sanitize(source)).join(v).exists());
+                    }
                 }
             }
         }
         w.commit()?;
     }
-    Ok((inserted, skipped))
+    Ok((inserted, fileless, skipped))
 }
 
 fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
