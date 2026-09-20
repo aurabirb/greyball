@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use core::{
-    BrowseNode, BrowsePage, Bus, Error, PagedList, RemotePage, Result, SearchHit, SearchQuery, Source,
+    BrowseNode, BrowsePage, Bus, Error, PagedList, RemotePage, Result, Track, SearchQuery, Source,
     SourceId,
 };
 
@@ -46,16 +46,16 @@ pub struct SpotifySource {
     api: WebApi,
     bus: Bus,
     /// See `core::PagedList`.
-    liked: PagedList<SearchHit>,
+    liked: PagedList<Track>,
     /// One `PagedList` per playlist id browsed so far, created on first
     /// `browse` of that id — a playlist can exceed `PLAYLIST_PAGE_SIZE`
     /// tracks just like Liked Songs can exceed `LIKED_PAGE_SIZE`. Keyed by
     /// id rather than a single field because, unlike Liked Songs, there are
     /// many playlists and any of them may be browsed.
-    playlists: Mutex<HashMap<String, PagedList<SearchHit>>>,
+    playlists: Mutex<HashMap<String, PagedList<Track>>>,
     /// One `PagedList` per album id browsed so far, keyed by the bare album
     /// id (without `ALBUM_PREFIX`) — same rationale as `playlists`.
-    albums: Mutex<HashMap<String, PagedList<SearchHit>>>,
+    albums: Mutex<HashMap<String, PagedList<Track>>>,
     /// The current user's own `/me/playlists` folder list, paged in the
     /// background the same way `liked`/`albums` are — a large library can
     /// have hundreds of playlists, and this walk runs under the same
@@ -105,7 +105,7 @@ impl Source for SpotifySource {
         crate::uri::recognizes(uri)
     }
 
-    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(SearchHit)) -> Result<()> {
+    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         if q.text.trim().is_empty() {
             return Ok(());
         }
@@ -117,7 +117,7 @@ impl Source for SpotifySource {
         Ok(())
     }
 
-    fn resolve(&self, uri: &str) -> Result<SearchHit> {
+    fn resolve(&self, uri: &str) -> Result<Track> {
         let r = SpotifyRef::parse(uri).ok_or_else(|| src_err(format!("not a spotify uri: {uri}")))?;
         if r.kind != ItemKind::Track {
             // MVP: only track URIs resolve to a playable hit.

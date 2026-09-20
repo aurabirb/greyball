@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use core::{
     Bus, BrowseNode, BrowsePage, Error, Media, MediaProvider, PagedList, Quality, RateLimiter,
-    Rendition, RemotePage, Result, SearchHit, SearchQuery, Source, SourceId,
+    Rendition, RemotePage, Result, Track, SearchQuery, Source, SourceId,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -51,7 +51,7 @@ pub struct SoundcloudSource {
     bus: Bus,
     /// Liked Tracks is the only paginated-in-the-background node so far —
     /// mirrors `sources_spotify::SpotifySource::liked`.
-    liked: PagedList<SearchHit>,
+    liked: PagedList<Track>,
     /// From `[soundcloud] hls` — prefer a higher-bitrate HLS stream over
     /// the 128kbps progressive one when the track offers one.
     hls: bool,
@@ -220,7 +220,7 @@ impl SoundcloudSource {
     /// A playlist's tracks. `representation=full` asks the API for full
     /// track objects inline instead of the truncated stubs a plain
     /// `/playlists/{id}` returns for large playlists.
-    fn playlist_tracks(&self, id: &str) -> Result<Vec<SearchHit>> {
+    fn playlist_tracks(&self, id: &str) -> Result<Vec<Track>> {
         let v = self.api_get(&format!("/playlists/{id}"), &[("representation", "full")])?;
         let playlist: ApiPlaylistDetail =
             serde_json::from_value(v).map_err(|e| src_err(format!("playlist {id}: {e}")))?;
@@ -231,7 +231,7 @@ impl SoundcloudSource {
     /// MVP: offset/limit paging, not verified against a live token — the
     /// api-v2 collection shape (`collection` + `next_href`) is shared with
     /// `/search/tracks` above, which *is* verified live.
-    fn likes_page(&self, offset: usize, limit: usize) -> std::result::Result<RemotePage<SearchHit>, String> {
+    fn likes_page(&self, offset: usize, limit: usize) -> std::result::Result<RemotePage<Track>, String> {
         self.require_auth().map_err(|e| e.to_string())?;
         let offset_s = offset.to_string();
         let limit_s = limit.to_string();
@@ -240,7 +240,7 @@ impl SoundcloudSource {
             .map_err(|e| e.to_string())?;
         let collection = v.get("collection").and_then(|c| c.as_array()).cloned().unwrap_or_default();
         let consumed = collection.len();
-        let hits: Vec<SearchHit> = collection
+        let hits: Vec<Track> = collection
             .into_iter()
             .filter_map(|item| serde_json::from_value::<ApiLike>(item).ok())
             .filter_map(|l| l.track)
@@ -379,7 +379,7 @@ impl Source for SoundcloudSource {
         crate::uri::recognizes(uri)
     }
 
-    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(SearchHit)) -> Result<()> {
+    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         let text = q.text.trim();
         if text.is_empty() {
             return Ok(());
@@ -401,7 +401,7 @@ impl Source for SoundcloudSource {
         Ok(())
     }
 
-    fn resolve(&self, uri: &str) -> Result<SearchHit> {
+    fn resolve(&self, uri: &str) -> Result<Track> {
         let r = TrackRef::parse(uri).ok_or_else(|| src_err(format!("not a SoundCloud track: {uri:?}")))?;
         self.track_ref(&r)?
             .into_hit()
@@ -590,7 +590,7 @@ struct ApiFormat {
 }
 
 impl ApiTrack {
-    fn into_hit(self) -> Option<SearchHit> {
+    fn into_hit(self) -> Option<Track> {
         if self.media.transcodings.is_empty() {
             return None;
         }
@@ -605,15 +605,6 @@ impl ApiTrack {
             .publisher_metadata
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
-        Some(SearchHit {
-            source: source_id(),
-            uri: format!("soundcloud:track:{}", self.id),
-            title,
-            artists,
-            duration_ms: self.duration,
-            isrc,
-            album: None,
-            quality: Quality::Lossy { kbps: None },
-        })
+        Some(Track::fresh(title, artists, isrc, None, Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None })))
     }
 }

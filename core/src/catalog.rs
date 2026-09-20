@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::event::{Bus, CoreEvent};
 use crate::matcher::Matcher;
 use crate::traits::{Result, Store};
-use crate::types::{LinkReason, Playlist, Rendition, SearchHit, SourceId, Track, TrackId};
+use crate::types::{LinkReason, Playlist, Rendition, SourceId, Track, TrackId};
 
 /// Push `r` unless a rendition with the same `(source, uri)` already exists.
 fn merge_rendition(renditions: &mut Vec<Rendition>, r: Rendition) {
@@ -74,11 +74,12 @@ impl Catalog {
         self.playlists_gen.load(Ordering::Relaxed)
     }
 
-    /// Fold a hit into the library. Returns the logical track it belongs to.
-    pub fn ingest(&self, hit: SearchHit) -> Result<TrackId> {
+    /// Fold a fresh track into the library. Returns the id of the track it belongs to.
+    pub fn ingest(&self, hit: Track) -> Result<TrackId> {
         let _guard = self.lock.lock().unwrap();
+        let (source, uri) = (hit.renditions[0].source.clone(), hit.renditions[0].uri.clone());
         // 1. exact rendition dedupe
-        if let Some(t) = self.store.track_by_rendition(&hit.source, &hit.uri)? {
+        if let Some(t) = self.store.track_by_rendition(&source, &uri)? {
             return Ok(t.id);
         }
 
@@ -109,26 +110,16 @@ impl Catalog {
         }
 
         // 4. new track
-        let id = TrackId::new();
-        let track = Track {
-            id,
-            title: hit.title.clone(),
-            artists: hit.artists.clone(),
-            duration_ms: hit.duration_ms,
-            isrc: hit.isrc.clone(),
-            album: hit.album.clone(),
-            year: None,
-            attrs: std::collections::BTreeMap::new(),
-            tags: vec![],
-            renditions: vec![hit.to_rendition(LinkReason::Manual)],
-        };
-        self.store.upsert_track(&track)?;
+        let id = hit.id;
+        self.store.upsert_track(&hit)?;
         self.bus.send(CoreEvent::TrackUpdated(id));
         Ok(id)
     }
 
-    fn append_rendition(&self, t: &mut Track, hit: &SearchHit, reason: LinkReason) {
-        merge_rendition(&mut t.renditions, hit.to_rendition(reason));
+    fn append_rendition(&self, t: &mut Track, hit: &Track, reason: LinkReason) {
+        let mut r = hit.renditions[0].clone();
+        r.link = reason;
+        merge_rendition(&mut t.renditions, r);
         merge_metadata(t, hit.isrc.clone(), hit.duration_ms, hit.album.clone());
     }
 

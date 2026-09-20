@@ -3,7 +3,7 @@
 use std::io::{Read, Seek};
 
 use crate::types::{
-    Playlist, PlaylistId, Rendition, SearchHit, SearchQuery, SourceId, Track, TrackId,
+    Playlist, PlaylistId, Rendition, SearchQuery, SourceId, Track, TrackId,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -41,7 +41,7 @@ pub enum BrowseNode {
 #[derive(Clone, Debug)]
 pub struct BrowsePage {
     pub title: String,
-    pub tracks: Vec<SearchHit>,
+    pub tracks: Vec<Track>,
     pub folders: Vec<(String, BrowseNode)>,
     /// `true` if `tracks` is a prefix of the real list and more may still
     /// land on a later `browse` call (a background fetch in progress) —
@@ -65,8 +65,8 @@ pub trait Source: Send + Sync {
     /// True if this source can handle a pasted URI/URL.
     fn recognizes(&self, uri: &str) -> bool;
     /// Blocking. Push hits into `sink` as they are found; return when done.
-    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(SearchHit)) -> Result<()>;
-    fn resolve(&self, uri: &str) -> Result<SearchHit>;
+    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()>;
+    fn resolve(&self, uri: &str) -> Result<Track>;
     /// `want`: how many rows the caller needs ready now (paginated sources
     /// use it to pace background fetching — see `core::PagedList`); ignore
     /// if not paginated.
@@ -74,7 +74,7 @@ pub trait Source: Send + Sync {
     /// Turn a recognized URI into a `BrowseNode` for `browse`, for URIs that
     /// point at a browsable collection rather than a single track (e.g. a
     /// pasted playlist link) — `resolve` can't represent those, since it
-    /// returns exactly one `SearchHit`. Default: no such mapping.
+    /// returns exactly one `Track`. Default: no such mapping.
     fn browse_uri(&self, _uri: &str) -> Option<BrowseNode> {
         None
     }

@@ -2,7 +2,7 @@
 //! Scrapes a client_id, runs a track search, prints the hits, then resolves the
 //! first one's stream URL. Needs network. Not part of the test suite.
 
-use core::{Bus, LinkReason, Media, MediaProvider, SearchQuery, Source};
+use core::{Bus, Media, MediaProvider, SearchQuery, Source};
 use sources_soundcloud::SoundcloudSource;
 
 fn main() {
@@ -24,12 +24,12 @@ fn main() {
     }
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
-        println!("  {} — {}  [{}]  {}ms", h.artists.join(", "), h.title, h.uri, h.duration_ms);
+        println!("  {} — {}  [{}]  {}ms", h.artists.join(", "), h.title, h.renditions[0].uri, h.duration_ms);
     }
 
     if let Some(first) = hits.first() {
-        match src.open(&first.to_rendition(LinkReason::Manual)) {
-            Ok(Media::Url(u)) => println!("\nstream for {}: {u}", first.uri),
+        match src.open(&first.renditions[0]) {
+            Ok(Media::Url(u)) => println!("\nstream for {}: {u}", first.renditions[0].uri),
             Ok(_) => println!("\nstream: unexpected non-URL Media variant"),
             Err(e) => eprintln!("\nopen failed: {e}"),
         }

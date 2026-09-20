@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use core::{
-    BrowseNode, BrowsePage, Error, Media, MediaProvider, Quality, Rendition, Result, SearchHit,
+    BrowseNode, BrowsePage, Error, Media, MediaProvider, Quality, Rendition, Result, Track,
     SearchQuery, Source, SourceId,
 };
 use regex::Regex;
@@ -123,20 +123,11 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Build a `SearchHit` from an absolute audio URL (no network).
-fn hit_from_url(u: &Url) -> SearchHit {
+/// Build a `Track` from an absolute audio URL (no network).
+fn hit_from_url(u: &Url) -> Track {
     let stem = stem_of(u);
     let (artists, title) = core::parse_artist_title(&stem);
-    SearchHit {
-        source: source_id(),
-        uri: u.to_string(),
-        title,
-        artists,
-        duration_ms: 0,
-        isrc: None,
-        album: None,
-        quality: quality_for(u),
-    }
+    Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), u.to_string(), 0, quality_for(u)))
 }
 
 /// Extract every usable link from a listing body, resolved against `base`.
@@ -191,7 +182,7 @@ impl Source for HttpDirSource {
         })
     }
 
-    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(SearchHit)) -> Result<()> {
+    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         if self.roots.is_empty() {
             return Err(Error::Source {
                 src: source_id(),
@@ -259,7 +250,7 @@ impl Source for HttpDirSource {
         Ok(())
     }
 
-    fn resolve(&self, uri: &str) -> Result<SearchHit> {
+    fn resolve(&self, uri: &str) -> Result<Track> {
         let u = Url::parse(uri).map_err(|e| Error::Source {
             src: source_id(),
             message: format!("bad url {uri:?}: {e}"),

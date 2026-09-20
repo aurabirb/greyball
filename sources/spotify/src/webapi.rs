@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Quality, RateLimiter, RemotePage, SearchHit};
+use core::{Quality, RateLimiter, RemotePage, Rendition, Track};
 use serde::Deserialize;
 
 const API: &str = "https://api.spotify.com/v1";
@@ -206,20 +206,9 @@ struct SeveralTracks {
 }
 
 impl ApiTrack {
-    fn into_hit(self) -> Option<SearchHit> {
+    fn into_hit(self) -> Option<Track> {
         let id = self.id?;
-        Some(SearchHit {
-            source: crate::source_id(),
-            uri: format!("spotify:track:{id}"),
-            title: self.name,
-            artists: self.artists.into_iter().map(|a| a.name).collect(),
-            duration_ms: self.duration_ms.min(u32::MAX as u64) as u32,
-            isrc: self.external_ids.isrc,
-            album: self.album.map(|a| a.name),
-            // Spotify streams are Ogg Vorbis / AAC — lossy, bitrate depends on
-            // the negotiated playback config.
-            quality: Quality::Lossy { kbps: None },
-        })
+        Some(Track::fresh(self.name, self.artists.into_iter().map(|a| a.name).collect(), self.external_ids.isrc, self.album.map(|a| a.name), Rendition::fresh(crate::source_id(), format!("spotify:track:{id}"), self.duration_ms.min(u32::MAX as u64) as u32, Quality::Lossy { kbps: None })))
     }
 }
 
@@ -378,7 +367,7 @@ impl WebApi {
     ///    Quota Mode on the Spotify dashboard.
     const MAX_LIMIT: usize = 10;
 
-    pub fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
+    pub fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Track>, String> {
         let limit = limit.clamp(1, Self::MAX_LIMIT);
         let q = url_encode(query);
         let url = format!("{API}/search?type=track&limit={limit}&offset=0&q={q}");
@@ -392,7 +381,7 @@ impl WebApi {
     }
 
     /// Look up a single track by its base-62 id.
-    pub fn track(&self, id: &str) -> Result<SearchHit, String> {
+    pub fn track(&self, id: &str) -> Result<Track, String> {
         let url = format!("{API}/tracks/{id}");
         let body: ApiTrack = self.get(&url)?.json().map_err(|e| e.to_string())?;
         body.into_hit().ok_or_else(|| "track has no id".to_string())
@@ -431,7 +420,7 @@ impl WebApi {
     /// endpoint a browser itself uses to read a public playlist. Local/
     /// unavailable items (null `item`) are skipped, but still counted in
     /// `consumed` — see `RemotePage::consumed`.
-    pub fn playlist_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
+    pub fn playlist_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<Track>, String> {
         let url = format!("{API}/playlists/{id}/items?limit={limit}&offset={offset}");
         match self.get(&url) {
             Ok(resp) => {
@@ -477,7 +466,7 @@ impl WebApi {
     /// Same Development Quota Mode gap as `playlist_tracks_page`: a `403` on
     /// an album this app isn't allowed to read falls back to `web_player`'s
     /// `getAlbum` read path instead of failing outright.
-    pub fn album_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
+    pub fn album_tracks_page(&self, id: &str, offset: usize, limit: usize) -> Result<RemotePage<Track>, String> {
         let url = format!("{API}/albums/{id}/tracks?limit={limit}&offset={offset}");
         let page: AlbumTracks = match self.get(&url) {
             Ok(resp) => resp.json().map_err(|e| e.to_string())?,
@@ -565,7 +554,7 @@ impl WebApi {
     /// API's reported `total` — the caller (`SpotifySource`'s `PagedList`)
     /// walks `offset` across repeated calls to load the whole list in the
     /// background instead of blocking one call on the full walk.
-    pub fn saved_tracks_page(&self, offset: usize, limit: usize) -> Result<RemotePage<SearchHit>, String> {
+    pub fn saved_tracks_page(&self, offset: usize, limit: usize) -> Result<RemotePage<Track>, String> {
         let url = format!("{API}/me/tracks?limit={limit}&offset={offset}");
         let body: SavedTracks = self.get(&url)?.json().map_err(|e| e.to_string())?;
         // `consumed` must be the raw item count, not `hits.len()` — a saved

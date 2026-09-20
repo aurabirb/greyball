@@ -136,7 +136,29 @@ pub struct Track {
     pub renditions: Vec<Rendition>,
 }
 
+impl Rendition {
+    pub fn fresh(source: SourceId, uri: String, duration_ms: u32, quality: Quality) -> Self {
+        Self { source, uri, duration_ms, quality, link: LinkReason::Manual, added_at: chrono::Utc::now() }
+    }
+}
+
 impl Track {
+    /// A not-yet-ingested track carrying exactly one rendition.
+    pub fn fresh(title: String, artists: Vec<String>, isrc: Option<String>, album: Option<String>, rendition: Rendition) -> Self {
+        Self {
+            id: TrackId::new(),
+            title,
+            artists,
+            duration_ms: rendition.duration_ms,
+            isrc,
+            album,
+            year: None,
+            attrs: Default::default(),
+            tags: vec![],
+            renditions: vec![rendition],
+        }
+    }
+
     pub fn display_artist(&self) -> String {
         if self.artists.is_empty() {
             "Unknown Artist".to_string()
@@ -210,7 +232,6 @@ pub struct Playlist {
 pub enum ItemKind {
     Track,
     Album,
-    Artist,
     Playlist,
 }
 
@@ -229,33 +250,6 @@ impl SearchQuery {
             text: text.into(),
             kinds: vec![ItemKind::Track],
             limit: 100,
-        }
-    }
-}
-
-/// What a Source yields. Not yet a logical Track.
-#[derive(Clone, Debug)]
-pub struct SearchHit {
-    pub source: SourceId,
-    pub uri: String,
-    pub title: String,
-    pub artists: Vec<String>,
-    pub duration_ms: u32,
-    pub isrc: Option<String>,
-    pub album: Option<String>,
-    pub quality: Quality,
-}
-
-impl SearchHit {
-    /// Build a fresh `Rendition` from this hit with the given link reason.
-    pub fn to_rendition(&self, link: LinkReason) -> Rendition {
-        Rendition {
-            source: self.source.clone(),
-            uri: self.uri.clone(),
-            duration_ms: self.duration_ms,
-            quality: self.quality.clone(),
-            link,
-            added_at: chrono::Utc::now(),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use unicode_normalization::UnicodeNormalization;
 
-use crate::types::{LinkReason, SearchHit, Track};
+use crate::types::{LinkReason, Track};
 
 pub struct Matcher;
 
@@ -65,7 +65,7 @@ impl Matcher {
     }
 
     /// Does `hit` refer to the same recording as `track`?
-    pub fn matches(track: &Track, hit: &SearchHit) -> Option<LinkReason> {
+    pub fn matches(track: &Track, hit: &Track) -> Option<LinkReason> {
         // 1. ISRC exact match
         if let (Some(a), Some(b)) = (&track.isrc, &hit.isrc) {
             if a.eq_ignore_ascii_case(b) {

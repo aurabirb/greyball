@@ -5,7 +5,7 @@
 //! "look for a local soulseekd" means in practice.
 //!
 //! Search hits `POST /api/v0/searches` and converts its file results to
-//! `SearchHit`s, hard-capped at [`client::MAX_RESULTS`] — Soulseek searches
+//! `Track`s, hard-capped at [`client::MAX_RESULTS`] — Soulseek searches
 //! can otherwise return an unbounded flood as slow peers keep trickling in.
 //! Playback has no streamable URL: `open` enqueues a download through
 //! slskd's own transfer queue (`POST .../transfers/downloads/batches`),

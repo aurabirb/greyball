@@ -43,7 +43,7 @@ impl Search {
             std::thread::spawn(move || {
                 let sid = source.id();
                 let mut hits = 0usize;
-                let mut sink = |hit: crate::types::SearchHit| {
+                let mut sink = |hit: crate::types::Track| {
                     if gen_counter.load(Ordering::SeqCst) != generation {
                         return; // superseded
                     }

@@ -28,7 +28,7 @@ use crate::traits::{
     BrowseNode, Error, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
-    LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchHit, SearchQuery, SourceId, Track,
+    LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
     TrackId, parse_artist_title,
 };
 use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
@@ -2245,16 +2245,13 @@ impl Session {
 
             let mut canonical: Option<TrackId> = None;
             for spec in &specs {
-                let hit = SearchHit {
-                    source: SourceId::from(spec.source.as_str()),
-                    uri: spec.uri.clone(),
-                    title: title.clone(),
-                    artists: artists.clone(),
-                    duration_ms: dur_ms,
-                    isrc: entry.meta.isrc.clone(),
-                    album: entry.meta.album.clone(),
-                    quality: spec.quality.clone(),
-                };
+                let hit = Track::fresh(
+                    title.clone(),
+                    artists.clone(),
+                    entry.meta.isrc.clone(),
+                    entry.meta.album.clone(),
+                    Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), dur_ms, spec.quality.clone()),
+                );
                 let tid = self.catalog.ingest(hit)?;
                 canonical.get_or_insert(tid);
             }
@@ -2371,16 +2368,13 @@ impl Session {
                 continue;
             }
             let (artists, title) = parse_artist_title(&uri_stem(&spec.uri));
-            let tid = self.catalog.ingest(SearchHit {
-                source: SourceId::from(spec.source.as_str()),
-                uri: spec.uri.clone(),
+            let tid = self.catalog.ingest(Track::fresh(
                 title,
                 artists,
-                duration_ms: 0,
-                isrc: None,
-                album: None,
-                quality: spec.quality.clone(),
-            })?;
+                None,
+                None,
+                Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), 0, spec.quality.clone()),
+            ))?;
             match &mut pl {
                 Some(pl) => {
                     if pl.items.contains(&tid) {
@@ -2645,7 +2639,7 @@ impl Session {
     }
 }
 
-/// One rendition candidate, ready to become a [`SearchHit`]. Locality (and,
+/// One rendition candidate, ready to become a [`Track`]. Locality (and,
 /// for a local one, its path) lives entirely in `source`/`uri` — see
 /// `resolver::is_local_source`/`local_path_from_uri`.
 struct RenditionSpec {

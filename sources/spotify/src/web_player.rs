@@ -5,7 +5,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use core::{Quality, RemotePage, SearchHit};
+use core::{Quality, RemotePage, Rendition, Track};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha1::Sha1;
@@ -36,7 +36,7 @@ const FETCH_PLAYLIST_HASH: &str = concat!("bb67e0af06e8d6f52b531f97468ee4a", "cd
 const FETCH_ALBUM_HASH: &str = concat!("6a74b456cd1735c9193d9e8ec8cc5184c", "ad7ce13572210315229db3975964361");
 
 /// One playlist page's worth of tracks/total from the `fetchPlaylist`
-/// persisted query, mapped into this codebase's own `RemotePage`/`SearchHit`
+/// persisted query, mapped into this codebase's own `RemotePage`/`Track`
 /// shapes so callers don't need to know which backend served the page.
 pub fn fetch_playlist_page(
     http: &reqwest::blocking::Client,
@@ -44,7 +44,7 @@ pub fn fetch_playlist_page(
     playlist_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage<SearchHit>, String> {
+) -> Result<RemotePage<Track>, String> {
     if session.is_none() {
         *session = Some(Session::establish(http)?);
     }
@@ -71,7 +71,7 @@ pub fn fetch_album_page(
     album_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage<SearchHit>, String> {
+) -> Result<RemotePage<Track>, String> {
     if session.is_none() {
         *session = Some(Session::establish(http)?);
     }
@@ -232,7 +232,7 @@ fn query_playlist(
     playlist_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage<SearchHit>, String> {
+) -> Result<RemotePage<Track>, String> {
     let payload = serde_json::json!({
         "variables": {
             "uri": format!("spotify:playlist:{playlist_id}"),
@@ -274,7 +274,7 @@ fn query_playlist(
     Ok(RemotePage { hits, total, consumed })
 }
 
-fn track_from_item(item: &Value) -> Option<SearchHit> {
+fn track_from_item(item: &Value) -> Option<Track> {
     let data = item.pointer("/itemV2/data")?;
     let uri = data.get("uri").and_then(Value::as_str)?.to_string();
     let title = data.get("name").and_then(Value::as_str)?.to_string();
@@ -294,16 +294,7 @@ fn track_from_item(item: &Value) -> Option<SearchHit> {
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32;
-    Some(SearchHit {
-        source: crate::source_id(),
-        uri,
-        title,
-        artists,
-        duration_ms,
-        isrc: None,
-        album,
-        quality: Quality::Lossy { kbps: None },
-    })
+    Some(Track::fresh(title, artists, None, album, Rendition::fresh(crate::source_id(), uri, duration_ms, Quality::Lossy { kbps: None })))
 }
 
 fn query_album(
@@ -312,7 +303,7 @@ fn query_album(
     album_id: &str,
     offset: usize,
     limit: usize,
-) -> Result<RemotePage<SearchHit>, String> {
+) -> Result<RemotePage<Track>, String> {
     let payload = serde_json::json!({
         "variables": {
             "uri": format!("spotify:album:{album_id}"),
@@ -361,7 +352,7 @@ fn query_album(
     Ok(RemotePage { hits, total, consumed })
 }
 
-fn track_from_album_item(item: &Value, album_name: Option<&str>) -> Option<SearchHit> {
+fn track_from_album_item(item: &Value, album_name: Option<&str>) -> Option<Track> {
     let data = item.get("track")?;
     let uri = data.get("uri").and_then(Value::as_str)?.to_string();
     let title = data.get("name").and_then(Value::as_str)?.to_string();
@@ -380,16 +371,7 @@ fn track_from_album_item(item: &Value, album_name: Option<&str>) -> Option<Searc
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32;
-    Some(SearchHit {
-        source: crate::source_id(),
-        uri,
-        title,
-        artists,
-        duration_ms,
-        isrc: None,
-        album: album_name.map(str::to_string),
-        quality: Quality::Lossy { kbps: None },
-    })
+    Some(Track::fresh(title, artists, None, album_name.map(str::to_string), Rendition::fresh(crate::source_id(), uri, duration_ms, Quality::Lossy { kbps: None })))
 }
 
 /// Standard TOTP (HMAC-SHA1, 30s step, 6 digits) at unix time `t`, matching

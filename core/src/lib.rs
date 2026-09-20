@@ -58,6 +58,6 @@ pub use traits::{
     ReadSeek, Result, Source, Store,
 };
 pub use types::{
-    ItemKind, LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchHit, SearchQuery,
+    ItemKind, LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery,
     SourceId, Track, TrackId, Uuid, parse_artist_title,
 };

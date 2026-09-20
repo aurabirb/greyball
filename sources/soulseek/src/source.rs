@@ -1,7 +1,7 @@
 //! `SoulseekSource` — `Source` + `MediaProvider` backed by a local `slskd`.
 //!
 //! Search hits a live `slskd` search and converts its file responses
-//! straight to `SearchHit`s (capped at `client::MAX_RESULTS`, see the TODO
+//! straight to `Track`s (capped at `client::MAX_RESULTS`, see the TODO
 //! this closes). Playback has no CDN URL to stream: `open` enqueues a
 //! download through slskd's own transfer queue, blocks polling until it
 //! lands on disk, then hands back that file's `Media::Path` — same shape
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
-    BrowseNode, BrowsePage, Error, Media, MediaProvider, Quality, Rendition, Result, SearchHit,
+    BrowseNode, BrowsePage, Error, Media, MediaProvider, Quality, Rendition, Result, Track,
     SearchQuery, Source, SourceId,
 };
 
@@ -126,7 +126,7 @@ impl Source for SoulseekSource {
         false
     }
 
-    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(SearchHit)) -> Result<()> {
+    fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         let text = q.text.trim();
         if text.is_empty() {
             return Ok(());
@@ -147,7 +147,7 @@ impl Source for SoulseekSource {
         Ok(())
     }
 
-    fn resolve(&self, uri: &str) -> Result<SearchHit> {
+    fn resolve(&self, uri: &str) -> Result<Track> {
         let track = TrackRef::parse(uri).ok_or_else(|| src_err(format!("not a soulseek track: {uri:?}")))?;
         // No per-file lookup endpoint exists outside a live search — best
         // effort from the filename alone (still enough to play/queue it).
@@ -155,16 +155,7 @@ impl Source for SoulseekSource {
         if artists.is_empty() {
             artists.push(track.username.clone());
         }
-        Ok(SearchHit {
-            source: source_id(),
-            uri: uri.to_string(),
-            title,
-            artists,
-            duration_ms: 0,
-            isrc: None,
-            album: None,
-            quality: quality_for(&extension(&track.filename), None, None, None),
-        })
+        Ok(Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), uri.to_string(), 0, quality_for(&extension(&track.filename), None, None, None))))
     }
 
     fn browse(&self, node: &BrowseNode, _want: usize) -> Result<BrowsePage> {
@@ -293,7 +284,7 @@ fn quality_for(ext: &str, bit_rate: Option<u32>, bit_depth: Option<u32>, sample_
     }
 }
 
-fn file_to_hit(resp: &SearchResponse, file: &SearchFile) -> Option<SearchHit> {
+fn file_to_hit(resp: &SearchResponse, file: &SearchFile) -> Option<Track> {
     let track = TrackRef { username: resp.username.clone(), filename: file.filename.clone(), size: file.size };
     let (mut artists, title) = core::parse_artist_title(&stem(&file.filename));
     if title.trim().is_empty() {
@@ -302,14 +293,5 @@ fn file_to_hit(resp: &SearchResponse, file: &SearchFile) -> Option<SearchHit> {
     if artists.is_empty() {
         artists.push(resp.username.clone());
     }
-    Some(SearchHit {
-        source: source_id(),
-        uri: track.to_uri(),
-        title,
-        artists,
-        duration_ms: file.length.unwrap_or(0).saturating_mul(1000),
-        isrc: None,
-        album: None,
-        quality: quality_for(&file.extension.to_lowercase(), file.bit_rate, file.bit_depth, file.sample_rate),
-    })
+    Some(Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), track.to_uri(), file.length.unwrap_or(0).saturating_mul(1000), quality_for(&file.extension.to_lowercase(), file.bit_rate, file.bit_depth, file.sample_rate))))
 }
