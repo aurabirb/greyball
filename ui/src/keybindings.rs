@@ -31,6 +31,8 @@ pub enum Action {
     CyclePaneLayout,
     /// UI-local: move the focused window to its next placement.
     CyclePlacement,
+    /// UI-local: cycle the Search window's result-kind filter.
+    CycleKindFilter,
     /// UI-local: open the fullscreen help/shortcuts screen directly (`?`) —
     /// same destination as `:help`, just without going through the command
     /// line. The view owns the modal's state.
@@ -121,6 +123,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::Update => Action::Command(Command::Update),
         BuiltinAction::CyclePaneLayout => Action::CyclePaneLayout,
         BuiltinAction::CyclePlacement => Action::CyclePlacement,
+        BuiltinAction::CycleKindFilter => Action::CycleKindFilter,
         BuiltinAction::Enqueue => match selected {
             Some(id) => Action::Command(Command::Enqueue(id)),
             None => Action::None,

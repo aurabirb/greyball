@@ -181,12 +181,6 @@ Design: `docs/collections.md`.
   saved-albums listing for Spotify. `BrowsePage.subtitle` carries "Album · year · N tracks" into the
   list title line.
 
-### Search experience
-Design: `docs/collections.md`.
-- [ ] Replace `SearchHit` with `Track` (`Catalog::ingest` keeps deciding identity), then add
-  `Source::search_collections` and show Songs / Albums / Playlists sections in the Search window
-  with a key that cycles the kind filter. Includes Spotify playlists and albums in results.
-
 ### Queue
 Design: `docs/collections.md`.
 - [ ] Queue entries become `Entry::{Track, Remote}` so a remote album/playlist can be enqueued as one

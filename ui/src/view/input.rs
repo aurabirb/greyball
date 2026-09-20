@@ -273,6 +273,13 @@ impl MedleyView {
                 }
                 EventResult::consumed()
             }
+            Action::CycleKindFilter => {
+                let id = self.active_list_id();
+                if let Some(list) = self.windows[id].list_mut() {
+                    list.cycle_kinds();
+                }
+                EventResult::consumed()
+            }
             Action::CyclePlacement => {
                 self.cycle_placement();
                 EventResult::consumed()

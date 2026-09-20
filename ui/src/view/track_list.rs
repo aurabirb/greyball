@@ -8,7 +8,7 @@ use cursive::event::{Event, Key, MouseButton, MouseEvent};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, Command, HotkeyTarget, ListRef, PendingRows, Playlist, PlaylistId, Session, SourceId, TrackId};
+use core::{BrowseNode, Command, HotkeyTarget, ItemKind, ListRef, PendingRows, Playlist, PlaylistId, Session, SourceId, TrackId};
 
 use crate::keybindings;
 use crate::row::RowItem;
@@ -74,7 +74,53 @@ pub(super) fn top_rows(s: &Session) -> Vec<TopRow> {
     rows
 }
 
-/// Where a Playlists window is; every other kind stays at `TopLevel`.
+/// A Search result collection and its kind.
+type Collection = (ItemKind, TopRow);
+
+/// Which result kinds a Search window shows.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum KindFilter {
+    #[default]
+    All,
+    Songs,
+    Albums,
+    Playlists,
+}
+
+impl KindFilter {
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::Songs,
+            Self::Songs => Self::Albums,
+            Self::Albums => Self::Playlists,
+            Self::Playlists => Self::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Songs => "songs",
+            Self::Albums => "albums",
+            Self::Playlists => "playlists",
+        }
+    }
+
+    fn shows_tracks(self) -> bool {
+        matches!(self, Self::All | Self::Songs)
+    }
+
+    fn admits(self, kind: ItemKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Songs => false,
+            Self::Albums => kind == ItemKind::Album,
+            Self::Playlists => kind == ItemKind::Playlist,
+        }
+    }
+}
+
+/// Where a window is: a Playlists window at its top level or in a playlist, a Search window in an opened collection; every other kind stays at `TopLevel`.
 #[derive(Default)]
 enum Open {
     #[default]
@@ -120,7 +166,9 @@ pub(super) struct TrackList {
     open: Open,
     /// The `/`-filter, live while typed; never empty.
     query: Option<String>,
-    /// Bumped whenever `open` or `query` changes — the list-identity part of every memo key.
+    /// Search only: which result kinds are listed.
+    kinds: KindFilter,
+    /// Bumped whenever `open`, `query` or `kinds` changes — the list-identity part of every memo key.
     view_gen: u64,
     /// The top level lists the playlists that have a key first.
     keyed_first: bool,
@@ -135,6 +183,8 @@ pub(super) struct TrackList {
     frame: Memo<FrameKey, Arc<ListFrame>>,
     /// The top-level rows in this window's order, keyed on the playlists, remote playlists and hotkeys generations.
     top: Memo<(u64, u64, u64), Arc<[TopRow]>>,
+    /// Search only: the collection rows after the tracks, albums then playlists, keyed on the results and view generations.
+    collections: Memo<(u64, u64), Arc<[Collection]>>,
 }
 
 impl TrackList {
@@ -145,6 +195,8 @@ impl TrackList {
             select: None,
             assigned: None,
             top: Memo::default(),
+            collections: Memo::default(),
+            kinds: KindFilter::default(),
             state: ListState::default(),
             open: Open::default(),
             query: None,
@@ -186,6 +238,14 @@ impl TrackList {
         }
     }
 
+    pub(super) fn cycle_kinds(&mut self) {
+        if self.kind == ListKind::Search && matches!(self.open, Open::TopLevel) {
+            self.kinds = self.kinds.next();
+            self.state = ListState::default();
+            self.view_gen += 1;
+        }
+    }
+
     pub(super) fn is_search(&self) -> bool {
         self.kind == ListKind::Search
     }
@@ -203,11 +263,11 @@ impl TrackList {
     pub(super) fn list_gen(&self, s: &Session) -> u64 {
         s.removed_tracks_gen() + match (self.kind, &self.open) {
             (ListKind::NowPlaying, _) => s.context_gen(),
+            (_, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
             (ListKind::Search, _) => s.results_gen(),
             (ListKind::Queue, _) => s.queue.queue_gen(),
             (ListKind::History, _) => s.queue.history_gen(),
             (ListKind::Playlists, Open::Local(_)) => s.playlists_gen(),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
             (ListKind::Playlists, Open::TopLevel) => 0,
         }
     }
@@ -215,13 +275,11 @@ impl TrackList {
     /// Every track already loaded for the list, unwindowed.
     fn all_tracks(&self, s: &Session) -> Vec<core::Track> {
         match (self.kind, &self.open) {
+            (_, Open::Remote(sid, _, node)) => s.remote_playlist_window(sid, node, 0, s.remote_playlist_len(sid, node)),
             (ListKind::NowPlaying, _) => s.playing_context_window(0, s.playing_context_len()),
             (ListKind::Queue, _) => s.queue_window(0, s.queue_len()),
             (ListKind::History, _) => s.history_window(0, s.queue.history_len()),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_window(*id, 0, s.playlist_len(*id)),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => {
-                s.remote_playlist_window(sid, node, 0, s.remote_playlist_len(sid, node))
-            }
             (ListKind::Playlists, Open::TopLevel) | (ListKind::Search, _) => vec![],
         }
     }
@@ -247,12 +305,13 @@ impl TrackList {
             return ids.to_vec();
         }
         match (self.kind, &self.open) {
+            (_, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_ids(),
-            (ListKind::Search, _) => s.results_ids(),
+            (ListKind::Search, _) if self.kinds.shows_tracks() => s.results_ids(),
+            (ListKind::Search, _) => vec![],
             (ListKind::Queue, _) => s.queue_ids(),
             (ListKind::History, _) => s.history_ids(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_track_ids(*id),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
             (ListKind::Playlists, Open::TopLevel) => vec![],
         }
     }
@@ -320,7 +379,29 @@ impl TrackList {
         })
     }
 
+    /// A Search window's collection rows: albums, then playlists, as the kind filter admits.
+    fn collections(&self, s: &Session) -> Arc<[Collection]> {
+        self.collections.get_or_build((s.results_gen(), self.view_gen), || {
+            let hits = s.search_collections();
+            [ItemKind::Album, ItemKind::Playlist]
+                .into_iter()
+                .filter(|&kind| self.kinds.admits(kind))
+                .flat_map(|kind| hits.iter().filter(move |hit| hit.1 == kind))
+                .map(|(sid, kind, name, node)| (*kind, TopRow::Remote(sid.clone(), name.clone(), node.clone())))
+                .collect()
+        })
+    }
+
+    /// How many track rows a Search window lists before its collection rows.
+    fn search_tracks(&self, s: &Session) -> usize {
+        if self.kinds.shows_tracks() { s.results_len() } else { 0 }
+    }
+
     fn top_row(&self, s: &Session) -> Option<TopRow> {
+        if self.kind == ListKind::Search {
+            let at = self.state.cursor.checked_sub(self.search_tracks(s))?;
+            return self.collections(s).get(at).map(|(_, row)| row.clone());
+        }
         self.top(s).get(self.state.cursor).cloned()
     }
 
@@ -363,12 +444,12 @@ impl TrackList {
             return ids.len();
         }
         match (self.kind, &self.open) {
+            (_, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_len(),
-            (ListKind::Search, _) => s.results_len(),
+            (ListKind::Search, _) => self.search_tracks(s) + self.collections(s).len(),
             (ListKind::Queue, _) => s.queue_len(),
             (ListKind::History, _) => s.queue.history_len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
             (ListKind::Playlists, Open::TopLevel) => self.top(s).len(),
         }
     }
@@ -376,12 +457,12 @@ impl TrackList {
     /// The list's display name as a playback context.
     fn context_name(&self, s: &Session) -> Option<String> {
         match (self.kind, &self.open) {
+            (_, Open::Remote(_, name, _)) => Some(name.clone()),
             (ListKind::NowPlaying, _) => s.playing_context_name(),
             (ListKind::Search, _) => Some("Search results".to_string()),
             (ListKind::Queue, _) => Some("Queue".to_string()),
             (ListKind::History, _) => Some("History".to_string()),
             (ListKind::Playlists, Open::Local(id)) => s.playlists().into_iter().find(|p| p.id == *id).map(|p| p.name),
-            (ListKind::Playlists, Open::Remote(_, name, _)) => Some(name.clone()),
             (ListKind::Playlists, Open::TopLevel) => None,
         }
     }
@@ -398,7 +479,7 @@ impl TrackList {
             let (local, name) = (self.open_local(), self.context_name(s));
             return WindowOutcome::Run(Command::PlayContext { tracks, index, remote, local, name });
         }
-        if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
+        if !matches!(self.open, Open::TopLevel) || !matches!(self.kind, ListKind::Playlists | ListKind::Search) {
             return WindowOutcome::Ignored;
         }
         match self.top_row(s) {
@@ -410,11 +491,14 @@ impl TrackList {
 
     fn unit(&self, count: usize) -> &'static str {
         let playlists = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel);
-        match (playlists, count == 1) {
-            (true, true) => "playlist",
-            (true, false) => "playlists",
-            (false, true) => "track",
-            (false, false) => "tracks",
+        let results = self.kind == ListKind::Search && matches!(self.open, Open::TopLevel);
+        match (playlists, results, count == 1) {
+            (true, _, true) => "playlist",
+            (true, _, false) => "playlists",
+            (_, true, true) => "result",
+            (_, true, false) => "results",
+            (_, _, true) => "track",
+            (_, _, false) => "tracks",
         }
     }
 
@@ -426,9 +510,9 @@ impl TrackList {
         }
         let (name, hint) = match (self.kind, &self.open) {
             (ListKind::NowPlaying, _) => (s.playing_context_name(), None),
+            (_, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
             (ListKind::Search, _) => (s.results_query().map(str::to_string), searching.then_some("Esc to cancel")),
             (ListKind::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
-            (ListKind::Playlists, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
             _ => (None, None),
         };
         let name = name.unwrap_or_else(|| format!("{} ({total} {})", self.kind.label(), self.unit(total)));
@@ -460,20 +544,29 @@ impl TrackList {
                 vec![plain_row("nothing played yet — press Enter on a track to start playing")]
             }
             (ListKind::NowPlaying, _) => track_rows(s.playing_context_window(offset, limit)),
-            (ListKind::Search, _) if s.results_len() == 0 => match s.results_query() {
+            (_, Open::Remote(sid, _, node)) => track_rows(s.remote_playlist_window(sid, node, offset, limit)),
+            (ListKind::Search, _) if s.results_len() == 0 && s.search_collections().is_empty() => match s.results_query() {
                 // A search ran and came back empty — say so.
                 Some(q) => vec![plain_row(format!(
                     "no results for {q:?} — check the Log pane (:log) for source errors"
                 ))],
                 None => vec![],
             },
-            (ListKind::Search, _) => track_rows(s.results_window(offset, limit)),
+            (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
+            (ListKind::Search, _) => {
+                let tracks = self.search_tracks(s);
+                let mut rows = if offset < tracks { track_rows(s.results_window(offset, limit)) } else { vec![] };
+                let room = limit.saturating_sub(rows.len());
+                let collections = self.collections(s);
+                rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|(kind, row)| {
+                    let label = if *kind == ItemKind::Album { "album" } else { "playlist" };
+                    plain_row(format!("[{label}] {}", top_row_name(row, &[])))
+                }));
+                rows
+            }
             (ListKind::Queue, _) => track_rows(s.queue_window(offset, limit)),
             (ListKind::History, _) => track_rows(s.history_window(offset, limit)),
             (ListKind::Playlists, Open::Local(id)) => track_rows(s.playlist_window(*id, offset, limit)),
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => {
-                track_rows(s.remote_playlist_window(sid, node, offset, limit))
-            }
             (ListKind::Playlists, Open::TopLevel) => {
                 let playlists = s.playlists();
                 self.top(s)
@@ -501,7 +594,7 @@ impl TrackList {
 
     pub(super) fn loading(&self, s: &Session) -> bool {
         match (self.kind, &self.open) {
-            (ListKind::Playlists, Open::Remote(sid, _, node)) => s.remote_playlist_loading(sid, node),
+            (_, Open::Remote(sid, _, node)) => s.remote_playlist_loading(sid, node),
             (ListKind::Playlists, Open::TopLevel) => s.source_ids().iter().any(|sid| s.remote_playlists_loading(sid)),
             _ => false,
         }
@@ -562,7 +655,10 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
-            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.kind_key], &format!("show: {}", self.kinds.label()))]
+                .into_iter()
+                .flatten()
+                .collect(),
         };
         hints.into_iter().chain(tail).collect::<Vec<_>>().join("   ")
     }
@@ -586,7 +682,10 @@ impl TrackList {
         if let Some((_, next)) = self.assigned.take_if(|(bound, _)| s.playlist_hotkey(bound).is_some()) {
             self.select = Some(next);
         }
-        let selected = self.select.take().and_then(|target| self.top(s).iter().position(|row| row.target() == target));
+        let selected = self.select.take().and_then(|target| match self.kind {
+            ListKind::Search => self.collections(s).iter().position(|(_, row)| row.target() == target).map(|at| at + self.search_tracks(s)),
+            _ => self.top(s).iter().position(|row| row.target() == target),
+        });
         self.state.cursor = selected.unwrap_or(self.state.cursor).min(len.saturating_sub(1));
         self.state.relayout(resized || selected.is_some(), len, Self::body(rect).height());
     }

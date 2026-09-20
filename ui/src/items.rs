@@ -155,6 +155,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
     builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs), or unlike it when it is already liked", "Confirms before removing."),
     builtin(Section::Tracks, BuiltinAction::ExportPlaylist, "export the selected or open local playlist as M3U", ""),
+    builtin(Section::Tracks, BuiltinAction::CycleKindFilter, "cycle what the Search results show: all, songs, albums, playlists", ""),
     fixed(
         Section::Tracks,
         "any key",
