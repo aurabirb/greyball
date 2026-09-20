@@ -13,6 +13,12 @@ working-agreement rule is established, add it here directly rather than only in 
 - Before committing: `cargo build --workspace --all-features` and
   `cargo clippy --workspace --all-features --all-targets` — both must be clean. There is no
   `cargo test` step — see the Tests rule under Code style.
+- After each implementation task, run a separate read-only review agent before moving on. Tell it the
+  code was written by an AI agent and that it is scored on: edge cases and bugs it finds, DRY
+  violations, opportunities for a better architecture, code elegance, and how minimal the change is
+  for the task. It must cite file:line with a concrete failing scenario, must not edit or commit, and
+  reports in simple bullet lists, most severe first. Valid findings are then fixed by an
+  implementation agent (new commit) before the next task.
 - Commit with a new commit (never amend), then `git push origin main`.
 - Never stash or undo changes you didn't make — other agents may be working in the repo concurrently.
 - Report genuine user-visible ambiguities back instead of guessing.
