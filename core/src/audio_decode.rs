@@ -111,13 +111,22 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
 }
 
 /// Decode `stream` to stereo f32 frames. `max_frames` (`None` for the whole file) stops decoding once that
-/// many frames are in. `NoAudio` for a stream too short to be useful.
-pub fn decode_stereo_prefix(stream: &StreamHandle, max_frames: Option<usize>) -> Result<(Vec<[f32; 2]>, u32), DecodeError> {
+/// many frames are in; `wanted` turning false abandons it as `Interrupted`. `NoAudio` for a stream too
+/// short to be useful.
+pub fn decode_stereo_prefix(stream: &StreamHandle, max_frames: Option<usize>, wanted: &dyn Fn() -> bool) -> Result<(Vec<[f32; 2]>, u32), DecodeError> {
     let mut frames: Vec<[f32; 2]> = Vec::new();
+    let mut abandoned = false;
     let sample_rate = decode_blocks(stream, |block| {
+        if !wanted() {
+            abandoned = true;
+            return false;
+        }
         frames.extend_from_slice(block);
         max_frames.is_none_or(|m| frames.len() < m)
     })?;
+    if abandoned {
+        return Err(DecodeError::Interrupted);
+    }
     if let Some(m) = max_frames {
         frames.truncate(m);
     }

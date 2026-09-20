@@ -84,13 +84,13 @@ impl ScanPlugin for BpmPlugin {
         !track.attrs.contains_key("bpm")
     }
 
-    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>) -> Outcome {
+    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
         let stream = match audio() {
             Ok(s) => s,
             Err(outcome) => return outcome,
         };
         let max_frames = (ANALYSIS_SECONDS * SAMPLE_RATE) as usize;
-        let stereo = match core::audio_decode::decode_stereo_prefix(&stream, Some(max_frames)) {
+        let stereo = match core::audio_decode::decode_stereo_prefix(&stream, Some(max_frames), wanted) {
             Ok((stereo, _)) => stereo,
             Err(DecodeError::Interrupted) => return Outcome::Retry,
             Err(DecodeError::NoAudio) => {

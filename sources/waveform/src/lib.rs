@@ -34,7 +34,7 @@ impl ScanPlugin for WaveformPlugin {
         !track.attrs.contains_key(waveform::ATTR)
     }
 
-    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>) -> Outcome {
+    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
         let stream = match audio() {
             Ok(s) => s,
             Err(outcome) => return outcome,
@@ -50,9 +50,9 @@ impl ScanPlugin for WaveformPlugin {
                     (sum, n) = (0.0, 0);
                 }
             }
-            true
+            wanted()
         });
-        if decoded == Err(DecodeError::Interrupted) {
+        if decoded == Err(DecodeError::Interrupted) || !wanted() {
             return Outcome::Retry;
         }
         if n > 0 {

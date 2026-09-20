@@ -897,6 +897,9 @@ impl Session {
             }
             CoreEvent::TrackUpdated(id) => {
                 self.refresh_cached_track(*id);
+                if let Some(scan) = &self.scan {
+                    scan.track_changed(*id);
+                }
                 Ok(true)
             }
             CoreEvent::PlaylistsChanged => {
@@ -917,12 +920,19 @@ impl Session {
             }
             CoreEvent::Player(pe) => self.on_player_event(pe),
             CoreEvent::Stream { key: (source, uri), state } => {
-                if *state != crate::stream::StreamState::Done {
+                use crate::stream::StreamState;
+                if let Some(scan) = &self.scan
+                    && matches!(state, StreamState::Done | StreamState::Failed(_) | StreamState::Cancelled)
+                {
+                    scan.stream_ended();
+                }
+                if *state != StreamState::Done {
                     return Ok(false);
                 }
-                // The track just became cached: refresh the cached mark and let its scan use the file.
+                // The track just became cached: refresh the cached mark; the playing track's scan uses the file.
                 self.touch();
                 if let Some(id) = self.event_track(source, uri)?
+                    && self.shown.now_playing == Some(id)
                     && let Some(scan) = &self.scan
                 {
                     log::debug!("app: {source} {uri} is cached -> prioritizing {id:?}");

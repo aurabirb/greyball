@@ -648,6 +648,11 @@ impl StreamEngine {
         Ok((handle, claim))
     }
 
+    /// Whether a download of `key` is running right now (something a `Peek` could join).
+    pub fn is_running(&self, key: &Key) -> bool {
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).get(key).is_some_and(|w| w.strong_count() > 0)
+    }
+
     fn attach_running(&self, key: &Key, intent: Intent) -> Option<(StreamHandle, Claim)> {
         let shared = self.running.lock().unwrap_or_else(|e| e.into_inner()).get(key).and_then(Weak::upgrade)?;
         attach(shared, intent)
