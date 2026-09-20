@@ -34,7 +34,7 @@ Scenarios to build and check against:
    tracks left.
 7. Shuffle and repeat-track on with a queued album: the queued tracks still play in order, and single
    tracks of the album can be removed from the queue.
-8. A second search issued while the first is streaming shows only the second one's results.
+8. A second search issued from a window while its first is streaming shows only the second one's results; a search from another Search window leaves both alone.
 
 ## Vocabulary
 
@@ -82,8 +82,8 @@ search plus one `search_collections` per requested kind and reports collections 
 The Search window shows a kind bar (All, Songs, Albums, Playlists) in its title row; a click or the
 kind key cycles which kinds are listed (no refetch). Songs come first, then `[album] …` and
 `[playlist] …` rows. Collection rows are still `TopRow::Remote`, drawn through `plain_row` with a kind
-prefix, so Enter/open/queue reuse the Playlists window's paths. Tag `SearchHit`/`SearchCollection`/`SearchDone` events with the search
-generation in the same change (fixes the mixed-results bug in TODO.md).
+prefix, so Enter/open/queue reuse the Playlists window's paths. `SearchHit`/`SearchCollection`/`SearchDone` events carry the search
+id `Search::run` returned, and the results live in one `ResultSet` per id (`Session::results(id)`), each owned by the Search window that ran it (`ui/src/view/README.md`, "Search windows").
 
 ### 3. Albums view
 

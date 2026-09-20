@@ -29,10 +29,10 @@ use crate::traits::{
     BrowseNode, Error, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
-    ItemKind, LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
+    LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
     TrackId, parse_artist_title,
 };
-use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
+use crate::view_cache::{Change, PendingRows, RemoteCtx, ResultSet, ViewCache};
 
 /// How long a skip waits for another before its track actually loads.
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -212,7 +212,6 @@ pub enum HotkeyTarget {
 /// Every user intent.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Search(String),
     Play(TrackId),
     /// "Play this list, starting here" — the whole currently-visible list
     /// (search results, a playlist, Liked Songs, ...), remembered as a
@@ -273,7 +272,6 @@ pub enum Command {
     },
     /// Import an enriched-M3U file, folding its tracks into the catalog.
     ImportM3u(PathBuf),
-    AddUri(String),
     /// Add local audio files to a playlist by path (`:add`/`:open` line), or
     /// to the queue when no playlist is given (no open/selected playlist to
     /// add to). Paths are resolved against the process CWD; non-audio or
@@ -483,7 +481,6 @@ pub struct Session {
     failed_playback_sources: Vec<SourceId>,
     /// Tracks in a row that failed to load with none playing in between.
     load_failures: usize,
-    search_generation: u64,
     /// Set while `Next`/`Previous` run, to a press arriving within `SKIP_DEBOUNCE` of the last one.
     skipping: bool,
     last_skip: Option<Instant>,
@@ -615,7 +612,6 @@ impl Session {
             pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
-            search_generation: 0,
             skipping: false,
             last_skip: None,
             deferred_load: None,
@@ -658,10 +654,6 @@ impl Session {
         self.catalog.removed_gen()
     }
 
-    pub fn results_gen(&self) -> u64 {
-        self.view.results_gen()
-    }
-
     /// User playlists: membership, order and names.
     pub fn playlists_gen(&self) -> u64 {
         self.catalog.playlists_gen()
@@ -700,11 +692,6 @@ impl Session {
             self.load_failures = 0;
         }
         match cmd {
-            Command::Search(text) => {
-                self.view.begin_search(&text);
-                self.search_generation = self.search.run(SearchQuery::all_kinds(text));
-                Ok(Dispatch::Ok)
-            }
             Command::Play(id) => {
                 self.play_now(id);
                 Ok(Dispatch::Ok)
@@ -895,21 +882,6 @@ impl Session {
             }
             Command::ExportM3uTo { playlist, path } => self.export_m3u_to(playlist, path),
             Command::ImportM3u(path) => self.import_m3u(path),
-            Command::AddUri(uri) => {
-                let unplayable = || Error::Other("not a playable URL".to_string());
-                let Some(source) = self.source_for_uri(&uri) else {
-                    return Err(unplayable());
-                };
-                let source = source.clone();
-                match source.resolve(&uri) {
-                    Ok(hit) => {
-                        let tid = self.catalog.ingest(hit)?;
-                                self.push_result(tid);
-                        Ok(Dispatch::Ok)
-                    }
-                    Err(_) => Err(unplayable()),
-                }
-            }
             Command::AddFilesToPlaylist { playlist, paths } => {
                 self.add_files_to_playlist(playlist, paths)
             }
@@ -923,19 +895,9 @@ impl Session {
             self.touch();
         }
         match ev {
-            CoreEvent::SearchHit { search, track } => {
-                let current = *search == self.search_generation;
-                if current {
-                    self.push_result(*track);
-                }
-                Ok(current)
-            }
+            CoreEvent::SearchHit { search, track } => Ok(self.view.push_result(*search, *track, &self.store)),
             CoreEvent::SearchCollection { search, source, kind, name, node } => {
-                let current = *search == self.search_generation;
-                if current {
-                    self.view.push_collection_result(source.clone(), *kind, name.clone(), node.clone());
-                }
-                Ok(current)
+                Ok(self.view.push_collection_result(*search, source.clone(), *kind, name.clone(), node.clone()))
             }
             CoreEvent::TrackUpdated(id) => {
                 self.refresh_cached_track(*id);
@@ -952,7 +914,7 @@ impl Session {
                 Ok(true)
             }
             CoreEvent::Flash(_) => Ok(false),
-            CoreEvent::SearchDone { search, .. } => Ok(*search == self.search_generation),
+            CoreEvent::SearchDone { search, .. } => Ok(self.view.results(*search).is_some()),
             CoreEvent::PlayRequested(id) => {
                 self.play_track(*id, true);
                 Ok(true)
@@ -1277,37 +1239,29 @@ impl Session {
 
     // ---- read-only snapshots ----
 
-    /// All result ids, cheap (no store hits) — for cursor bounds and
-    /// `Command::PlayContext`, which needs the whole list, not just what's
-    /// currently visible.
-    pub fn results_ids(&self) -> Vec<TrackId> {
-        self.view.results_ids()
+    /// Starts a search for `text` across every source and returns its id, dropping `replaces` first; blank text only drops.
+    pub fn search(&mut self, text: &str, replaces: Option<u64>) -> Option<u64> {
+        self.touch();
+        if let Some(old) = replaces {
+            self.forget_search(old);
+        }
+        if text.trim().is_empty() {
+            return None;
+        }
+        let id = self.search.run(SearchQuery::all_kinds(text.to_string()));
+        self.view.begin_search(id, text.to_string());
+        Some(id)
     }
 
-    /// Cheap count of the resolved search results, with no clone — for the
-    /// Search screen's "no results for X" check and title.
-    pub fn results_len(&self) -> usize {
-        self.view.results_len()
+    /// Cancels search `id` and drops what it found.
+    pub fn forget_search(&mut self, id: u64) {
+        self.search.forget(id);
+        self.view.forget_search(id);
     }
 
-    /// A window of the resolved search results (`offset..offset+limit`) —
-    /// for rendering just the visible slice instead of cloning the whole
-    /// (already in-memory, but still O(n)) results cache every redraw.
-    pub fn results_window(&self, offset: usize, limit: usize) -> Vec<Track> {
-        self.view.results_window(offset, limit)
-    }
-
-    pub fn search_collections(&self) -> &[(SourceId, ItemKind, String, BrowseNode)] {
-        self.view.collection_results()
-    }
-
-    pub fn results_query(&self) -> Option<&str> {
-        self.view.results_query()
-    }
-
-    /// Append `tid` to the search results, deduped.
-    fn push_result(&mut self, tid: TrackId) {
-        self.view.push_result(tid, &self.store);
+    /// What search `id` has found so far; `None` once forgotten.
+    pub fn results(&self, id: u64) -> Option<&ResultSet> {
+        self.view.results(id)
     }
 
     /// Patch any copy of `id` already sitting in a view cache (search

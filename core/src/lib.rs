@@ -32,7 +32,7 @@ pub use app::{
     BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, LastPlayed, ListRef,
     PLUGIN_HEALTH_CHECK_INTERVAL, Session, cache_rendition,
 };
-pub use view_cache::PendingRows;
+pub use view_cache::{PendingRows, ResultSet};
 pub use catalog::Catalog;
 pub use config::{
     expand_home, tilde, Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,

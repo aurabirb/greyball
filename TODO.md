@@ -13,16 +13,6 @@
 ## TODOs:
 
 ### Owner's list — do these first, in this order
-- [ ] Make each Search window independent (the `search` tab and the `results` companion can be docked
-  side by side): the query and the results are per window — a search run from one window never
-  replaces the other's; the query input is drawn in that window's own title row, not in the command
-  bar/corner; `Editing::Search(WindowId)` so `commit_edit` resets the window that searched (not
-  `windows.named("search")`), `searching` and the "Esc to cancel" hint apply only to the window being
-  edited, and `FocusSearch` prefers an already-shown Search window. Results move from `Session`/
-  `ViewCache` single-set state to a result set per search id owned by the window (events already
-  carry the search generation; evict a set when its window starts a new search or closes). A leading
-  `/` typed into the query buffer is stripped. Reuse the shared `TrackList` paths; no Search-only
-  copies of window code.
 - [ ] Show the approximate position of the now-playing track on the scrollbar: a small marker in
   the scrollbar gutter (`draw_scrollbar`, `ui/src/view/scroll.rs`) at the proportional row
   `playing_row * list_h / total`, drawn only in a list that contains the playing track (the row from

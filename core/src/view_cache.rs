@@ -216,17 +216,46 @@ struct FolderWalk {
     walks_root: bool,
 }
 
+/// What one search found, by the id `Search::run` gave it; tracks resolved once so a redraw never re-hits the store.
+#[derive(Default)]
+pub struct ResultSet {
+    query: String,
+    tracks: Vec<Track>,
+    collections: Vec<(SourceId, ItemKind, String, BrowseNode)>,
+    /// Bumped whenever `tracks` or `collections` gain an entry.
+    generation: u64,
+}
+
+impl ResultSet {
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+
+    pub fn track_ids(&self) -> Vec<TrackId> {
+        self.tracks.iter().map(|t| t.id).collect()
+    }
+
+    pub fn collections(&self) -> &[(SourceId, ItemKind, String, BrowseNode)] {
+        &self.collections
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tracks.is_empty() && self.collections.is_empty()
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ViewCache {
-    results: Vec<TrackId>,
-    /// `results`, already resolved to `Track` — kept in lockstep by
-    /// `push_result` so a redraw never re-resolves the whole list against
-    /// the store just to render it again.
-    results_cache: Vec<Track>,
-    results_query: Option<String>,
-    collection_results: Vec<(SourceId, ItemKind, String, BrowseNode)>,
-    /// Bumped whenever `results`' membership changes.
-    results_gen: u64,
+    /// One per live search; a window's set is dropped when it searches again or closes.
+    results: HashMap<u64, ResultSet>,
 
     /// A source's top-level playlist folders, loaded in the background —
     /// see `ensure_remote_playlists`.
@@ -248,17 +277,17 @@ pub(crate) struct ViewCache {
 }
 
 impl ViewCache {
-    /// Empties the results for a new search; a blank `query` leaves none on record.
-    pub fn begin_search(&mut self, query: &str) {
-        self.results.clear();
-        self.results_cache.clear();
-        self.collection_results.clear();
-        self.results_query = (!query.trim().is_empty()).then(|| query.to_string());
-        self.results_gen += 1;
+    /// An empty set for the search `id`, to be filled by its events.
+    pub fn begin_search(&mut self, id: u64, query: String) {
+        self.results.insert(id, ResultSet { query, ..ResultSet::default() });
     }
 
-    pub fn results_gen(&self) -> u64 {
-        self.results_gen
+    pub fn forget_search(&mut self, id: u64) {
+        self.results.remove(&id);
+    }
+
+    pub fn results(&self, id: u64) -> Option<&ResultSet> {
+        self.results.get(&id)
     }
 
     /// A remote playlist's track-list generation; 0 until first touched.
@@ -275,65 +304,33 @@ impl ViewCache {
             .sum()
     }
 
-    /// Text of the last search, so an empty result list can say "no results for X".
-    pub fn results_query(&self) -> Option<&str> {
-        self.results_query.as_deref()
+    /// False for a search no longer wanted: its hit is dropped.
+    pub fn push_collection_result(&mut self, id: u64, source: SourceId, kind: ItemKind, name: String, node: BrowseNode) -> bool {
+        let Some(set) = self.results.get_mut(&id) else { return false };
+        set.collections.push((source, kind, name, node));
+        set.generation += 1;
+        true
     }
 
-    /// All result ids, cheap (no store hits) — for cursor bounds and
-    /// `Command::PlayContext`, which needs the whole list, not just what's
-    /// currently visible.
-    pub fn results_ids(&self) -> Vec<TrackId> {
-        self.results.clone()
-    }
-
-    /// Cheap count of `results_cache`, with no clone — for the Search
-    /// screen's "no results for X" check and title.
-    pub fn results_len(&self) -> usize {
-        self.results_cache.len()
-    }
-
-    /// A window of the resolved search results (`offset..offset+limit`) —
-    /// for rendering just the visible slice instead of cloning the whole
-    /// (already in-memory, but still O(n)) `results_cache` every redraw.
-    pub fn results_window(&self, offset: usize, limit: usize) -> Vec<Track> {
-        self.results_cache.iter().skip(offset).take(limit).cloned().collect()
-    }
-
-    pub fn collection_results(&self) -> &[(SourceId, ItemKind, String, BrowseNode)] {
-        &self.collection_results
-    }
-
-    pub fn push_collection_result(&mut self, source: SourceId, kind: ItemKind, name: String, node: BrowseNode) {
-        self.collection_results.push((source, kind, name, node));
-        self.results_gen += 1;
-    }
-
-    /// Append `tid` to the search results, deduped, resolving it against the
-    /// store once here rather than leaving a redraw to re-resolve the whole
-    /// accumulated list every time.
-    pub fn push_result(&mut self, tid: TrackId, store: &Arc<dyn Store>) {
-        if self.results.contains(&tid) {
-            return;
+    /// Appends `tid` to search `id`'s tracks, deduped and resolved once; false for a search no longer wanted.
+    pub fn push_result(&mut self, id: u64, tid: TrackId, store: &Arc<dyn Store>) -> bool {
+        let Some(set) = self.results.get_mut(&id) else { return false };
+        if set.tracks.iter().any(|t| t.id == tid) {
+            return true;
         }
-        self.results.push(tid);
-        self.results_gen += 1;
         if let Ok(Some(t)) = store.get_track(tid) {
-            self.results_cache.push(t);
+            set.tracks.push(t);
+            set.generation += 1;
         }
+        true
     }
 
-    /// `results_cache` and `remote_playlist_tracks`'s entries hold resolved
-    /// `Track`s precisely so redraws don't re-hit the store — but that means
-    /// a `TrackUpdated` (linking/unlinking, BPM analysis, ...) needs to
-    /// patch any copy already sitting in one of those caches, or the UI
-    /// would keep showing stale data for it until the list is reloaded from
-    /// scratch.
+    /// Result sets and `remote_playlist_tracks` hold resolved `Track`s, so a `TrackUpdated` must patch every copy.
     pub fn refresh_cached_track(&mut self, id: TrackId, store: &Arc<dyn Store>) {
         let Ok(Some(fresh)) = store.get_track(id) else {
             return;
         };
-        if let Some(t) = self.results_cache.iter_mut().find(|t| t.id == id) {
+        for t in self.results.values_mut().flat_map(|set| set.tracks.iter_mut()).filter(|t| t.id == id) {
             *t = fresh.clone();
         }
         for entry in self.remote_playlist_tracks.lock().unwrap().values_mut() {
