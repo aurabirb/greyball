@@ -5,7 +5,7 @@ use core::Side;
 use crate::screen::{Corner, Placement};
 
 use super::modal::Modal;
-use super::status_line::StatusLine;
+use super::status_line::{SCAN_TAG_W, StatusLine};
 use super::warnings::warnings_rect;
 use super::window::{Window, WindowId};
 use super::{MedleyView, Placed};
@@ -37,17 +37,24 @@ impl Slots {
     }
 }
 
-/// The warnings button: its cells, and the slot it is drawn in.
+/// The status group at the right end of the right slot's row: the analyzer tag, then the warnings button when there are warnings.
 pub(super) struct Widget {
-    pub(super) rect: Rect,
+    pub(super) scan: Rect,
+    pub(super) warnings: Option<Rect>,
     pub(super) scrubber: bool,
     pub(super) host: WindowId,
 }
 
 impl Widget {
-    /// The scrubber line's width once the button, if it sits there, has taken its cells.
+    /// The group's cells, from the analyzer tag to the row's end.
+    pub(super) fn rect(&self) -> Rect {
+        let end = self.warnings.unwrap_or(self.scan);
+        Rect::from_size(self.scan.top_left(), (end.left() + end.width() - self.scan.left(), 1))
+    }
+
+    /// The scrubber line's width once the group, if it sits there, has taken its cells.
     pub(super) fn status_width(widget: Option<&Widget>, total: usize) -> usize {
-        total - widget.filter(|widget| widget.scrubber).map_or(0, |widget| widget.rect.width())
+        total - widget.filter(|widget| widget.scrubber).map_or(0, |widget| widget.rect().width())
     }
 }
 
@@ -88,22 +95,26 @@ impl MedleyView {
             .min_by_key(|slot| reach(slot.row))
     }
 
-    /// The warnings button, when there are warnings and the right slot can hold it.
-    pub(super) fn warnings_widget(slots: &Slots, count: usize) -> Option<Widget> {
-        let slot = slots.at(Corner::Right).filter(|_| count > 0)?;
-        Some(Widget { rect: warnings_rect(count, slot.row), scrubber: slot.scrubber, host: slot.host })
+    /// The status group in the right slot, the analyzer tag always left of the warnings button.
+    pub(super) fn status_widget(slots: &Slots, count: usize) -> Option<Widget> {
+        let slot = slots.at(Corner::Right)?;
+        let warnings = (count > 0).then(|| warnings_rect(count, slot.row));
+        let end = warnings.map_or(slot.row.left() + slot.row.width(), |rect| rect.left());
+        let width = SCAN_TAG_W.min(end - slot.row.left());
+        let scan = Rect::from_size((end - width, slot.row.top()), (width, 1));
+        Some(Widget { scan, warnings, scrubber: slot.scrubber, host: slot.host })
     }
 
-    /// The warnings button as drawn now, for input handling outside `draw`.
+    /// The status group as drawn now, for input handling outside `draw`.
     pub(super) fn current_widget(&self) -> Option<Widget> {
-        Self::warnings_widget(&self.slots(&self.placed()), self.warn_count())
+        Self::status_widget(&self.slots(&self.placed()), self.warn_count())
     }
 
     /// Where the input line draws: the left slot's row up to the button when that is wide enough, else the whole last screen row.
     pub(super) fn input_rect(&self, slots: &Slots, widget: Option<&Widget>) -> Rect {
         let clipped = |row: Rect| {
-            let beside = widget.filter(|widget| widget.rect.top() == row.top() && widget.rect.left() >= row.left());
-            Rect::from_size(row.top_left(), (beside.map_or(row.width(), |widget| widget.rect.left() - row.left()), 1))
+            let beside = widget.filter(|widget| widget.rect().top() == row.top() && widget.rect().left() >= row.left());
+            Rect::from_size(row.top_left(), (beside.map_or(row.width(), |widget| widget.rect().left() - row.left()), 1))
         };
         let size = self.last_screen_size;
         let slot = slots.at(Corner::Left).map(|slot| clipped(slot.row)).filter(|rect| rect.width() >= INPUT_FLOOR);

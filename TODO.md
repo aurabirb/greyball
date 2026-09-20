@@ -181,11 +181,6 @@
     detected skipped, a short summary of what will happen before the final step, re-runnable from
     Settings, advanced options (custom host, manual login) only when asked for.
 
-### Player chrome
-- [ ] Make the `[B]` analyzer widget always sit to the left of the warning widget. Keep the change
-  minimal and don't introduce a new concept: it should feel like a "status group" that is simply
-  repositioned between windows.
-
 ### Album support
 Design: `docs/collections.md`.
 - [ ] Opened collection title line: add `subtitle: Option<String>` to `BrowsePage` (filled by the

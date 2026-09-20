@@ -353,7 +353,7 @@ impl MedleyView {
         let floats = shown.iter().position(|&id| self.windows.placement(id) == Placement::Floating).unwrap_or(shown.len());
         shown[floats..].sort();
         let mut order: Vec<Focus> = shown.into_iter().map(Focus::Window).collect();
-        if Self::warnings_widget(&self.slots(&placed), warn_count).is_some() {
+        if Self::status_widget(&self.slots(&placed), warn_count).is_some_and(|widget| widget.warnings.is_some()) {
             order.push(Focus::Warnings);
         }
         order
@@ -428,7 +428,7 @@ impl View for MedleyView {
         let frame = self.frame(&placed);
         let chrome = &frame.chrome;
         let slots = self.slots(&placed);
-        let widget = Self::warnings_widget(&slots, chrome.warn_count);
+        let widget = Self::status_widget(&slots, chrome.warn_count);
         // A fullscreen window covers the tab bar, the scrubber line and the docked windows.
         let covered = self.fullscreen().is_some();
         if !covered && self.open_in(Placement::Docked).next().is_some() {
@@ -452,7 +452,7 @@ impl View for MedleyView {
                 chrome,
                 docked,
                 hints: self.show_hints,
-                reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect.width()),
+                reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect().width()),
             };
             window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);
         }
@@ -472,9 +472,13 @@ impl View for MedleyView {
             printer.windowed(rect).with_color(ColorStyle::primary(), |p| p.print((0, 0), &pad(&input, p.size.x)));
         }
         if let Some(widget) = widget {
-            let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
-            let style = if self.focus == Focus::Warnings { ColorStyle::new(bg, fg) } else { ColorStyle::new(fg, bg) };
-            printer.windowed(widget.rect).with_color(style, |p| p.print((0, 0), &warnings_label(chrome.warn_count)));
+            let scan_style = if widget.scrubber { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
+            printer.windowed(widget.scan).with_color(scan_style, |p| p.print((0, 0), &frame.status.bpm_tag));
+            if let Some(rect) = widget.warnings {
+                let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
+                let style = if self.focus == Focus::Warnings { ColorStyle::new(bg, fg) } else { ColorStyle::new(fg, bg) };
+                printer.windowed(rect).with_color(style, |p| p.print((0, 0), &warnings_label(chrome.warn_count)));
+            }
         }
     }
 
@@ -537,10 +541,14 @@ impl MedleyView {
         if let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(local) = position.checked_sub(*offset)
             && let Some(widget) = self.current_widget()
-            && widget.rect.contains(local)
         {
-            self.open_warnings();
-            return EventResult::consumed();
+            if widget.warnings.is_some_and(|rect| rect.contains(local)) {
+                self.open_warnings();
+                return EventResult::consumed();
+            }
+            if widget.scan.contains(local) {
+                return self.run(core::Command::ToggleScan);
+            }
         }
 
         // Fixed rows of the whole screen: the tab bar on top, the status line at the bottom.

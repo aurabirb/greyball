@@ -54,7 +54,7 @@ pub(super) struct StatusLine {
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
     pub(super) duration_ms: u32,
-    bpm_tag: String,
+    pub(super) bpm_tag: String,
     pub(super) shuffle: bool,
 }
 
@@ -65,7 +65,6 @@ struct Layout {
     playpause: (usize, usize),
     next: (usize, usize),
     scrubber: (usize, usize),
-    bpm: (usize, usize),
 }
 
 impl StatusLine {
@@ -102,31 +101,28 @@ impl StatusLine {
         let (prev_w, playpause_w, next_w) =
             (PREV_ICON.width(), player_action_glyph(&self.state).width(), NEXT_ICON.width());
         let (curtime_w, totaltime_w) = (ms(self.position_ms).width(), self.total_time().width());
-        let bpm_w = self.bpm_tag.width();
 
         let prev = (0, prev_w);
         let playpause = (prev_w + 1, playpause_w);
         let next = (prev_w + 1 + playpause_w + 1, next_w);
         let title_start = next.0 + next_w + gap;
-        let reserved = gap + curtime_w + 1 + BAR_WIDTH + 1 + totaltime_w + gap + bpm_w;
+        let reserved = gap + curtime_w + 1 + BAR_WIDTH + 1 + totaltime_w;
         let name_w = total_w.saturating_sub(title_start).saturating_sub(reserved);
 
         let scrubber = (title_start + name_w + gap + curtime_w + 1, BAR_WIDTH);
-        let bpm = (scrubber.0 + BAR_WIDTH + 1 + totaltime_w + gap, bpm_w);
-        Layout { name_w, prev, playpause, next, scrubber, bpm }
+        Layout { name_w, prev, playpause, next, scrubber }
     }
 
     /// Draws the line across row 0 of `printer`; the track name scrolls by `marquee_offset` when it doesn't fit.
     pub(super) fn draw(&self, printer: &Printer, marquee_offset: usize) {
         let name_w = self.layout(printer.size.x).name_w;
         let status = format!(
-            "{PREV_ICON} {} {NEXT_ICON}  {}  {} {} {}  {}",
+            "{PREV_ICON} {} {NEXT_ICON}  {}  {} {} {}",
             player_action_glyph(&self.state),
             pad(&scroll_title(&self.now_playing, name_w, marquee_offset), name_w),
             ms(self.position_ms),
             progress_bar(self.position_ms, self.duration_ms, BAR_WIDTH),
             self.total_time(),
-            self.bpm_tag,
         );
         printer.with_color(ColorStyle::highlight_inactive(), |p| {
             p.print((0, 0), &pad(&status, p.size.x));
@@ -146,8 +142,6 @@ impl StatusLine {
             let frac = (x - layout.scrubber.0) as f64 / layout.scrubber.1 as f64;
             let target_ms = (frac * self.duration_ms as f64).round() as u32;
             Some(Command::Seek(target_ms as i64 - self.position_ms as i64))
-        } else if in_span(x, layout.bpm) {
-            Some(Command::ToggleScan)
         } else {
             None
         }
@@ -162,6 +156,9 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     let filled = filled.min(width);
     format!("{}{}", "=".repeat(filled), "-".repeat(width - filled))
 }
+
+/// Width of every `bpm_status_tag`.
+pub(super) const SCAN_TAG_W: usize = 4;
 
 /// Bracketed BPM-scan status tag next to the scrubber — read fresh every frame, never cached.
 pub(super) fn bpm_status_tag(s: &Session, now_playing: Option<TrackId>) -> String {
