@@ -6,6 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use core::{Command, TrackId};
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::memo::Memo;
 use super::status_line::StatusLine;
@@ -32,6 +33,12 @@ const HEART_TITLE_MIN: usize = 4;
 
 /// Bars from one to eight eighths tall.
 const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+/// Braille spinner frames, picked from the wall clock so the bar keeps no animation state.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// One frame per redraw at the 4 fps floor.
+const SPINNER_FRAME_MS: u128 = 250;
 
 /// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
 fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
@@ -106,8 +113,8 @@ impl TabBar<'_> {
     }
 
     fn layout(&self, total_w: usize) -> Layout {
-        // The last column stays clear, matching the list's scrollbar gutter below.
-        let content_w = total_w.saturating_sub(1);
+        // The last column holds the progress glyph, with a gap before the title.
+        let content_w = total_w.saturating_sub(2);
         let buttons_w = transport_layout(0, &self.status.state).last().map_or(0, |&(_, s, w)| s + w);
         let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
         let collapsed = full_w + TRANSPORT_GAP + buttons_w + WAVE_MIN + TRANSPORT_GAP + TITLE_MIN > content_w;
@@ -131,7 +138,7 @@ impl TabBar<'_> {
         let room = content_w.saturating_sub(detail_start);
         let has_heart = self.status.now_playing_id.is_some() && room >= HEART_W + HEART_TITLE_MIN;
         let detail_w = room.saturating_sub(if has_heart { HEART_W } else { 0 });
-        let want = self.status.progress_tag().width() + self.status.now_playing.width();
+        let want = self.status.now_playing.width();
         let has_wave = total_w >= WAVE_MIN_BAR && !self.status.waveform.is_empty() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
         let title_w = if has_wave { want.min((detail_w / 2).max(TITLE_MIN)).min(detail_w - TRANSPORT_GAP - WAVE_MIN) } else { want.min(detail_w) };
         let wave = has_wave.then(|| (detail_start, detail_w - title_w - if title_w > 0 { TRANSPORT_GAP } else { 0 }));
@@ -143,8 +150,7 @@ impl TabBar<'_> {
     /// The visible title and its start column, clipped to the layout's title width.
     fn title(&self, layout: &Layout) -> (usize, String) {
         let (start, w) = layout.title;
-        let tag = self.status.progress_tag();
-        let mut text = format!("{tag}{}", scroll_title(&self.status.now_playing, w.saturating_sub(tag.width()), self.marquee_offset));
+        let mut text = scroll_title(&self.status.now_playing, w, self.marquee_offset);
         while text.width() > w {
             text.pop();
         }
@@ -184,6 +190,7 @@ impl TabBar<'_> {
                 None => printer.with_effect(Effect::Dim, |p| p.print((x, 0), LIKED_ICON)),
             }
         }
+        printer.with_effect(Effect::Dim, |p| p.print((printer.size.x.saturating_sub(1), 0), self.progress_glyph()));
         let (start, text) = self.title(&layout);
         if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
@@ -209,6 +216,18 @@ impl TabBar<'_> {
                 p.with_effect(Effect::Underline, |p| p.print((start, 0), done));
                 p.print((start + done.width(), 0), rest);
             });
+        }
+    }
+
+    /// Corner cell: a spinner while playback waits on the download, else the download's share as a bar, else blank.
+    fn progress_glyph(&self) -> &'static str {
+        match (self.status.buffering, self.status.download_pct) {
+            (true, _) => {
+                let ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                SPINNER[(ms / SPINNER_FRAME_MS) as usize % SPINNER.len()]
+            }
+            (false, Some(p)) => GLYPHS[(p.min(100) as usize * 7 + 50) / 100],
+            (false, None) => " ",
         }
     }
 

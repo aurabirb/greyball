@@ -81,15 +81,6 @@
   receiving it as events from the live analysis (the stream engine lets it run while the track
   downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
   and stays quiet when no tempo is known.
-- [ ] Replace the `[buffering N%] ` text prefix with a single-character buffering / download indicator in
-  the top row (the tab bar, `ui/src/view/tab_bar.rs`), in its top-right corner (the row's last column);
-  it stays in the top row, not the status bar, because it is blank most of the time. The prefix is built
-  in `ui/src/view/status_line.rs` ~126-130 and shown by `tab_bar.rs`/`frame.rs`; remove it there. Idle:
-  draw a blank cell. Buffering (`PlayerStatus.buffering`, no percent): an animated braille spinner.
-  Downloading with a known percent (`download_pct`): one character from the waveform's block glyphs
-  (`GLYPHS` in `tab_bar.rs`: `▁…█`) chosen by the percent. The spinner frame must come from the frame
-  clock or the player tick without a timer that wakes the UI when idle; keep the corner clear of the
-  tab buttons and title when the bar is narrow.
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what

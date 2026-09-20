@@ -123,24 +123,13 @@ impl StatusLine {
         Layout { name_w, prev, playpause, next, scrubber }
     }
 
-    /// "buffering" or the download percent, ahead of the title.
-    pub(super) fn progress_tag(&self) -> String {
-        match (self.buffering, self.download_pct) {
-            (true, Some(p)) => format!("[buffering {p}%] "),
-            (true, None) => "[buffering] ".to_string(),
-            (false, Some(p)) => format!("[{p}%] "),
-            (false, None) => String::new(),
-        }
-    }
-
     /// Draws the line across row 0 of `printer`; the track name scrolls by `marquee_offset` when it doesn't fit.
     pub(super) fn draw(&self, printer: &Printer, marquee_offset: usize) {
         let name_w = self.layout(printer.size.x).name_w;
-        let tag = self.progress_tag();
         let status = format!(
             "{PREV_ICON} {} {NEXT_ICON}  {}  {} {} {}",
             player_action_glyph(&self.state),
-            pad(&format!("{tag}{}", scroll_title(&self.now_playing, name_w.saturating_sub(tag.width()), marquee_offset)), name_w),
+            pad(&scroll_title(&self.now_playing, name_w, marquee_offset), name_w),
             ms(self.position_ms),
             progress_bar(self.position_ms, self.duration_ms, BAR_WIDTH),
             self.total_time(),
