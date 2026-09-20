@@ -151,10 +151,10 @@ pub(super) struct TrackList {
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
     matches: Memo<(u64, u64), Arc<[TrackId]>>,
     frame: Memo<FrameKey, Arc<ListFrame>>,
-    /// The top-level rows in this window's order, keyed on the playlists, remote playlists and hotkeys generations and the view generation (kind filter).
+    /// `top_all` narrowed by the kind filter, keyed on the same generations and the view generation.
     top: Memo<(u64, u64, u64, u64), Arc<[TopRow]>>,
-    /// A Playlists top level's kind-bar counts, all rows unfiltered.
-    top_counts: Memo<(u64, u64, u64), Vec<usize>>,
+    /// The top-level rows in this window's order before the kind filter, keyed on the playlists, remote playlists and hotkeys generations.
+    top_all: Memo<(u64, u64, u64), Arc<[TopRow]>>,
     /// Search only: the collection rows after the tracks, albums then playlists, keyed on the results and view generations.
     collections: Memo<(u64, u64), Arc<[TopRow]>>,
 }
@@ -168,7 +168,7 @@ impl TrackList {
             anchor: None,
             assigned: None,
             top: Memo::default(),
-            top_counts: Memo::default(),
+            top_all: Memo::default(),
             collections: Memo::default(),
             kinds: KindFilter::default(),
             state: ListState::default(),
@@ -234,11 +234,9 @@ impl TrackList {
             return None;
         }
         if self.kind == ListKind::Playlists {
-            return Some(self.top_counts.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), 0), || {
-                let rows = top_rows(s);
-                let of = |kind| rows.iter().filter(|row| row.kind() == kind).count();
-                vec![rows.len(), of(ItemKind::Album), of(ItemKind::Playlist)]
-            }));
+            let rows = self.top_all(s);
+            let of = |kind| rows.iter().filter(|row| row.kind() == kind).count();
+            return Some(vec![rows.len(), of(ItemKind::Album), of(ItemKind::Playlist)]);
         }
         let hits = s.search_collections();
         let of = |kind| hits.iter().filter(|hit| hit.1 == kind).count();
@@ -381,8 +379,13 @@ impl TrackList {
     /// The top-level rows as this window lists them: what the cursor, a click, Enter and a bound key all index.
     fn top(&self, s: &Session) -> Arc<[TopRow]> {
         self.top.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), s.hotkeys_gen(), self.view_gen), || {
+            self.top_all(s).iter().filter(|row| self.kinds.admits(row.kind())).cloned().collect()
+        })
+    }
+
+    fn top_all(&self, s: &Session) -> Arc<[TopRow]> {
+        self.top_all.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), s.hotkeys_gen()), || {
             let mut rows = top_rows(s);
-            rows.retain(|row| self.kinds.admits(row.kind()));
             if self.keyed_first {
                 rows.sort_by_key(|row| s.playlist_hotkey(&row.target()).is_none());
             }
@@ -501,16 +504,17 @@ impl TrackList {
     }
 
     fn unit(&self, count: usize) -> &'static str {
-        let playlists = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel);
-        let results = self.is_results();
-        match (playlists, results, count == 1) {
-            (true, _, true) => "playlist",
-            (true, _, false) => "playlists",
-            (_, true, true) => "result",
-            (_, true, false) => "results",
-            (_, _, true) => "track",
-            (_, _, false) => "tracks",
+        if self.is_results() {
+            return if count == 1 { "result" } else { "results" };
         }
+        if self.at_playlists_top() {
+            return self.kinds.unit(count);
+        }
+        if count == 1 { "track" } else { "tracks" }
+    }
+
+    fn at_playlists_top(&self) -> bool {
+        self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel)
     }
 
     /// The title row: `<name>`, optionally followed by `  (<hint>)`.
@@ -526,7 +530,8 @@ impl TrackList {
             (ListKind::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
             _ => (None, None),
         };
-        let name = name.unwrap_or_else(|| format!("{} ({total} {})", self.kind.label(), self.unit(total)));
+        let heading = if self.at_playlists_top() && self.kinds == KindFilter::Albums { "Albums" } else { self.kind.label() };
+        let name = name.unwrap_or_else(|| format!("{heading} ({total} {})", self.unit(total)));
         match hint {
             Some(hint) => format!("{name}  ({hint})"),
             None => name,
@@ -626,7 +631,7 @@ impl TrackList {
         let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, ctx.searching);
         self.frame.get_or_build(key, || {
             let total = self.len(s);
-            let assignable = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel) && total > 0;
+            let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
             Arc::new(ListFrame {
                 title: self.title(s, total, ctx.searching),
                 rows: self.rows(s, self.state.offset, view_h),
@@ -698,13 +703,22 @@ impl TrackList {
 
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
     pub(super) fn relayout(&mut self, resized: bool, s: &Session, rect: Rect) {
-        let len = self.len(s);
         // Its first key moves a row up into the keyed group; the cursor goes to the playlist that followed it.
         if let Some((_, next)) = self.assigned.take_if(|(bound, _)| s.playlist_hotkey(bound).is_some()) {
             self.select = Some(next);
         }
         let anchored = self.anchor.take().filter(|(generation, at, _)| *generation == self.view_gen && *at == self.state.cursor);
         let explicit = self.select.take();
+        if let Some(target) = &explicit {
+            let hidden = self.at_playlists_top()
+                && !self.top(s).iter().any(|row| row.target() == *target)
+                && self.top_all(s).iter().any(|row| row.target() == *target);
+            if hidden {
+                self.kinds = KindFilter::All;
+                self.view_gen += 1;
+            }
+        }
+        let len = self.len(s);
         let follow = explicit.is_some();
         let target = explicit.or(anchored.map(|(.., target)| target));
         let selected = target.and_then(|target| match self.kind {
@@ -786,7 +800,8 @@ impl TrackList {
         if self.kind != ListKind::Playlists || !matches!(self.open, Open::TopLevel) {
             return WindowOutcome::Ignored;
         }
-        let Some(target) = self.top_row(s).as_ref().map(TopRow::target) else { return WindowOutcome::Ignored };
+        let Some(row) = self.top_row(s).filter(|row| row.kind() != ItemKind::Album) else { return WindowOutcome::Ignored };
+        let target = row.target();
         let keyed = s.playlist_hotkey(&target).is_some();
         match event {
             Event::Key(Key::Backspace) if keyed => WindowOutcome::Unbind(target),

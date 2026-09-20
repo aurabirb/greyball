@@ -82,7 +82,7 @@ search plus one `search_collections` per requested kind and reports collections 
 The Search window shows a kind bar (All, Songs, Albums, Playlists) in its title row; a click or the
 kind key cycles which kinds are listed (no refetch). Songs come first, then `[album] …` and
 `[playlist] …` rows. Collection rows are still `TopRow::Remote`, drawn through `plain_row` with a kind
-prefix, so Enter/open/hotkey-bind/queue reuse the Playlists window's paths. Tag `SearchHit`/`SearchCollection`/`SearchDone` events with the search
+prefix, so Enter/open/queue reuse the Playlists window's paths. Tag `SearchHit`/`SearchCollection`/`SearchDone` events with the search
 generation in the same change (fixes the mixed-results bug in TODO.md).
 
 ### 3. Albums view
@@ -91,13 +91,15 @@ A Playlists window at its top level shows the same kind bar as Search with segme
 Playlists (`KindFilter::COLLECTIONS`; `f` cycles them). `TopRow::Remote` carries its `ItemKind`, set by
 the listing that produced the row, and the window's filter is applied to `top_rows` in `TrackList::top`;
 "Albums" is the same window with the filter set, so it docks/tabs like any other. Local playlists are
-always `Playlist`; album rows read `[album] [source] Artist – Title`.
+always `Playlist`; album rows read `[album] [source] Artist – Title`. Album rows are never bound to
+hotkeys (albums are read-only): a key on one is ignored and the assign hint is not shown.
 
 Saved albums come from a new default-empty `Source::saved_albums(&self, want: usize) -> Result<BrowsePage>`
-(the albums are `BrowsePage.folders`; Spotify pages `/me/albums` into nodes `album:<id>`).
-`ViewCache::ensure_remote_playlists` fetches it beside the playlist folders in the same single-flight
-background walk into `remote_albums`, persisted in the same store table under the key `<source>#albums`,
-read with `Session::remote_albums(source)`; `remote_playlists_gen` covers both lists.
+(the albums are `BrowsePage.folders`; Spotify pages `/me/albums` into nodes `album:<id>`), offered
+only by a source whose `has_saved_albums` is true. `ViewCache::ensure_remote_playlists` fetches it as
+its own single-flight walk beside the playlist folders (`ensure_folders`, used once per list) into
+`remote_albums`, persisted in the same store table under the key `<source>#albums`, read with
+`Session::remote_albums(source)`; `remote_playlists_gen` covers both lists.
 
 ### 4. Queue
 

@@ -125,7 +125,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   - `Ctx` is what the shell hands a window under a lock: `&Session`, the live pane layout config,
     `searching` and every window's placement.
 - `TrackList` owns its kind, `ListState`, where a Playlists window is (`Open`: top level, a local
-  playlist, a remote one), its `/`-filter query and three memos. `TrackList::top` is the one
+  playlist, a remote one), its `/`-filter query and its memos (`matches`, `frame`, `top_all`, `top`, `collections`). `TrackList::top` is the one
   function that orders a Playlists window's top-level rows; the cursor, a click, Enter, the row
   builder and a bound key all index it. `select` names the playlist the next `relayout` puts the
   cursor on, which is how the cursor lands on
@@ -155,6 +155,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   toggles the selected track's membership as in any list; a removal asks first (`Session::removal_prompt`), and from the list showing that playlist unfiltered it removes only the cursor row (`TrackList::open_row`, a position; `PendingRows` dims just that row), elsewhere every occurrence. A filter stays with its window
   across tab switches and closing; only Esc or `reset_for_new_list` clears it.
 
+## Kind bar
+
+`kind_bar.rs` draws and hit-tests the title row's kind bar. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
+
 ## Memos
 
 `Memo<K, V>` (`memo.rs`) is the one-entry cache everything keyed here is built on
@@ -167,7 +171,9 @@ build closure against its key.
 | memo | key | reads |
 | --- | --- | --- |
 | `TrackList::matches` (ranked filter ids) | `list_gen`, `view_gen` | the whole list, `query`, `open` |
-| `TrackList::top` (ordered top-level rows) | playlists, remote-playlists and hotkeys generations | local and remote playlists, which have a key, `keyed_first` |
+| `TrackList::top_all` (ordered top-level rows, unfiltered) | playlists, remote-playlists and hotkeys generations | local and remote playlists and saved albums, which have a key, `keyed_first` |
+| `TrackList::top` (top-level rows the kind filter admits) | the `top_all` key, `view_gen` | `top_all`, `kinds` |
+| `TrackList::collections` (Search's collection rows) | `results_gen`, `view_gen` | the search collections, `kinds` |
 | `TrackList::frame` (`ListFrame`) | `revision`, `view_gen`, offset, body height, `searching` | visible rows (attrs, now-playing, hotkey letters, liked marks, pending marks), title, total |
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, vis fps, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision`, `warnings_revision` | status core, warning count, the help, playlist-keys, placement, like, transport, queue, reveal and layout keys, and the keys assigned to playlists |
