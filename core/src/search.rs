@@ -27,7 +27,7 @@ impl Search {
 
     /// Spawn one OS thread per source. Returns immediately. A generation counter
     /// cancels stale searches: results from a superseded generation are dropped.
-    pub fn run(&self, q: SearchQuery) {
+    pub fn run(&self, q: SearchQuery) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         log::info!(
             "search gen {generation}: {:?} across {} source(s)",
@@ -50,7 +50,7 @@ impl Search {
                     match catalog.ingest(hit) {
                         Ok(tid) => {
                             hits += 1;
-                            bus.send(CoreEvent::SearchHit(tid))
+                            bus.send(CoreEvent::SearchHit { search: generation, track: tid })
                         }
                         Err(e) => bus.send(CoreEvent::BackgroundFailure {
                             context: sid.to_string(),
@@ -67,7 +67,7 @@ impl Search {
                             if stale { " (superseded)" } else { "" }
                         );
                         if !stale {
-                            bus.send(CoreEvent::SearchDone { source: sid.clone() });
+                            bus.send(CoreEvent::SearchDone { search: generation, source: sid.clone() });
                         }
                     }
                     Err(e) => {
@@ -80,5 +80,6 @@ impl Search {
                 }
             });
         }
+        generation
     }
 }

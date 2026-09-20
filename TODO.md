@@ -33,10 +33,6 @@
   Help/Log go through the one scrollbar function; the marker input is optional so windows with no
   playing row draw exactly as before.
 ### Bugs
-- [ ] A second `:s` started while the first is still streaming mixes both result sets:
-  `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
-  query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag
-  hits and `SearchDone` with the search they belong to and drop the ones that are not current.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`

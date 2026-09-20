@@ -10,8 +10,8 @@ use crate::types::{SourceId, TrackId};
 
 #[derive(Clone, Debug)]
 pub enum CoreEvent {
-    SearchHit(TrackId),
-    SearchDone { source: SourceId },
+    SearchHit { search: u64, track: TrackId },
+    SearchDone { search: u64, source: SourceId },
     TrackUpdated(TrackId),
     QueueChanged,
     /// Playlists were added / replaced (e.g. by an M3U import). The front-end

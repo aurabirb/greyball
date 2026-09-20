@@ -477,6 +477,7 @@ pub struct Session {
     failed_playback_sources: Vec<SourceId>,
     /// Tracks in a row that failed to load with none playing in between.
     load_failures: usize,
+    search_generation: u64,
     /// Set while `Next`/`Previous` run, to a press arriving within `SKIP_DEBOUNCE` of the last one.
     skipping: bool,
     last_skip: Option<Instant>,
@@ -605,6 +606,7 @@ impl Session {
             pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
+            search_generation: 0,
             skipping: false,
             last_skip: None,
             deferred_load: None,
@@ -689,7 +691,7 @@ impl Session {
         match cmd {
             Command::Search(text) => {
                 self.view.begin_search(&text);
-                self.search.run(SearchQuery::text(text));
+                self.search_generation = self.search.run(SearchQuery::text(text));
                 Ok(Dispatch::Ok)
             }
             Command::Play(id) => {
@@ -882,9 +884,12 @@ impl Session {
             self.touch();
         }
         match ev {
-            CoreEvent::SearchHit(tid) => {
-                self.push_result(*tid);
-                Ok(true)
+            CoreEvent::SearchHit { search, track } => {
+                let current = *search == self.search_generation;
+                if current {
+                    self.push_result(*track);
+                }
+                Ok(current)
             }
             CoreEvent::TrackUpdated(id) => {
                 self.refresh_cached_track(*id);
@@ -898,7 +903,7 @@ impl Session {
             CoreEvent::QueueChanged => {
                 Ok(true)
             }
-            CoreEvent::SearchDone { .. } => Ok(true),
+            CoreEvent::SearchDone { search, .. } => Ok(*search == self.search_generation),
             CoreEvent::PlayRequested(id) => {
                 self.play_track(*id, true);
                 Ok(true)
