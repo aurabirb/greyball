@@ -4,11 +4,12 @@ use cursive::theme::{Color, ColorStyle, Effect, Style};
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{HotkeyMembership, PendingRows, Session};
+use core::{HotkeyMembership, PendingRows, Session, waveform};
 
 use crate::row::RowItem;
 
 use super::scroll::draw_scrollbar;
+use super::tab_bar::{GLYPHS, resample};
 use super::text::{pad, pad_right_aligned, truncate};
 
 /// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
@@ -48,6 +49,7 @@ pub(super) struct Row {
     /// A track's attribute tags.
     tags: Cell,
     main: Cell,
+    wave: Cell,
     /// One letter per hotkey-bound playlist holding this track, italic while that membership is pending; a top-level playlist's key.
     pub(super) hotkeys: Cell,
     source: Cell,
@@ -62,6 +64,7 @@ pub(super) fn plain_row(main: impl Into<String>) -> Row {
     Row {
         tags: Cell::plain(""),
         main: main_cell(" ", false, &main.into()),
+        wave: Cell::plain(""),
         source: Cell::plain(""),
         duration: Cell::plain(""),
         hotkeys: Cell::plain(""),
@@ -74,6 +77,7 @@ pub(super) fn plain_row(main: impl Into<String>) -> Row {
 enum Column {
     Tags,
     Main,
+    Wave,
     Hotkeys,
     Source,
     Duration,
@@ -107,6 +111,7 @@ fn render_cell(
             let dot = if liked.is_some() { LIKED_MARK } else { " " };
             main_cell(dot, liked == Some(true), &t.main())
         }
+        Column::Wave => Cell::plain(wave_text(t)),
         Column::Source => Cell::plain(t.source(cached)),
         Column::Duration => Cell::plain(t.duration()),
         Column::Hotkeys => Cell {
@@ -135,6 +140,7 @@ pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &Pe
             Row {
                 tags: render_cell(Column::Tags, &t, cached, liked, visible, &hotkeys),
                 main: render_cell(Column::Main, &t, cached, liked, visible, &hotkeys),
+                wave: render_cell(Column::Wave, &t, cached, liked, visible, &hotkeys),
                 hotkeys: render_cell(Column::Hotkeys, &t, cached, liked, visible, &hotkeys),
                 source: render_cell(Column::Source, &t, cached, liked, visible, &hotkeys),
                 duration: render_cell(Column::Duration, &t, cached, liked, visible, &hotkeys),
@@ -207,9 +213,9 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
     for (y, row) in rows.iter().enumerate() {
         let selected = y + offset == sel;
         let mark = if row.current { "> " } else { "  " };
-        let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
-        let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
-        let cols = five_col([&tags, &main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
+        let cells = [&row.tags, &row.main, &row.wave, &row.hotkeys, &row.source, &row.duration];
+        let [tags, main, wave, hotkeys, source, duration] = cells.map(Cell::text);
+        let cols = columns([&tags, &main, &wave, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
         let line = pad(&format!("{mark}{cols}"), content_w);
         let mut row_style = Style::from(if selected {
             ColorStyle::highlight()
@@ -249,28 +255,48 @@ fn draw_list_body(printer: &Printer, rows: &[Row], offset: usize, sel: usize, to
     draw_scrollbar(printer, content_w, list_h, offset, total);
 }
 
-/// Each `five_col` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
-fn column_layout(width: usize) -> [Option<(usize, usize, bool)>; 5] {
+/// Each `columns` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
+type Layout = [Option<(usize, usize, bool)>; 6];
+
+fn column_layout(width: usize) -> Layout {
     let show_source = width + ROW_MARK_W + 1 >= SOURCE_MIN_LIST_W;
-    let source_w = if show_source { SOURCE_COL_W } else { 0 };
-    let gaps = if show_source { 3 } else { 2 };
-    let fixed = TAGS_COL_W + source_w + DURATION_COL_W + HOTKEYS_COL_W + gaps;
+    let source_w = if show_source { SOURCE_COL_W + 1 } else { 0 };
+    let fixed = TAGS_COL_W + HOTKEYS_COL_W + 1 + source_w + DURATION_COL_W + 1;
     if width <= fixed {
-        return [None; 5];
+        return [None; 6];
     }
-    let main_w = width - fixed;
+    let show_wave = width - fixed >= WAVE_COL_W + 1 + WAVE_MAIN_MIN;
+    let wave_w = if show_wave { WAVE_COL_W + 1 } else { 0 };
+    let main_w = width - fixed - wave_w;
     let main_start = TAGS_COL_W;
-    let hotkeys_start = main_start + main_w + 1;
+    let wave_start = main_start + main_w + 1;
+    let hotkeys_start = main_start + main_w + wave_w + 1;
     let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
     let duration_start = if show_source { source_start + SOURCE_COL_W + 1 } else { source_start };
     [
         Some((0, TAGS_COL_W, true)),
         Some((main_start, main_w, false)),
+        show_wave.then_some((wave_start, WAVE_COL_W, false)),
         Some((hotkeys_start, HOTKEYS_COL_W, false)),
         show_source.then_some((source_start, SOURCE_COL_W, false)),
         Some((duration_start, DURATION_COL_W, false)),
     ]
 }
+
+/// The track's envelope as bar glyphs across the waveform column; blank when it has none.
+fn wave_text(t: &core::Track) -> String {
+    let Some(hex) = t.attrs.get(waveform::ATTR) else { return String::new() };
+    let envelope = waveform::decode(hex);
+    if envelope.is_empty() {
+        return String::new();
+    }
+    resample(&envelope, WAVE_COL_W).iter().map(|&l| if l == 0 { " " } else { GLYPHS[l as usize - 1] }).collect()
+}
+
+const WAVE_COL_W: usize = 12;
+
+/// The least the title keeps when the waveform column is shown.
+const WAVE_MAIN_MIN: usize = 30;
 
 /// Narrowest list (including mark and scrollbar gutter) that still shows the source column.
 const SOURCE_MIN_LIST_W: usize = 80;
@@ -291,13 +317,13 @@ const LIKED_MARK_W: usize = 1;
 
 const LIKED_MARK: &str = "·";
 
-const SOURCE_COL_W: usize = 6;
+const SOURCE_COL_W: usize = 5;
 
 const DURATION_COL_W: usize = 6;
 
-const HOTKEYS_COL_W: usize = 8;
+const HOTKEYS_COL_W: usize = 6;
 
-fn five_col(cells: [&str; 5], layout: &[Option<(usize, usize, bool)>; 5], width: usize) -> String {
+fn columns(cells: [&str; 6], layout: &Layout, width: usize) -> String {
     if layout[1].is_none() {
         return truncate(cells[1], width);
     }

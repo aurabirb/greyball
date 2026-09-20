@@ -28,10 +28,10 @@ const WAVE_MIN_BAR: usize = 80;
 const TITLE_MIN: usize = 16;
 
 /// Bars from one to eight eighths tall.
-const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+pub(super) const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
-fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
+pub(super) fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
     (0..width)
         .map(|x| {
             let lo = x * envelope.len() / width;
