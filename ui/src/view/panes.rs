@@ -8,6 +8,7 @@ use crate::screen::{HELP, Kind, ListKind, Placement};
 
 use super::{Focus, MedleyView};
 use super::track_list::{TrackList, top_rows};
+use super::tab_bar::SPINNER_FPS;
 use super::window::WindowId;
 
 /// Rows reserved at the very top of the terminal and bottom.
@@ -377,14 +378,15 @@ impl MedleyView {
         }
     }
 
-    /// Syncs cursive's redraw rate to whether a Vis window is shown; a callback only when that changed.
+    /// Syncs cursive's redraw rate to whether a Vis window is shown or the tab bar spins; a callback only when that changed.
     pub(super) fn sync_vis_fps(&mut self) -> EventResult {
         let shown = self.visible().into_iter().any(|id| self.windows[id].kind == Kind::Vis);
-        let want = shown.then(|| self.vis.fps());
-        if want == self.vis_fast {
+        let spinning = self.with_session(|s| s.player_status().spinning());
+        let want = [shown.then(|| self.vis.fps()), spinning.then_some(SPINNER_FPS)].into_iter().flatten().max();
+        if want == self.fast_fps {
             return EventResult::Ignored;
         }
-        self.vis_fast = want;
+        self.fast_fps = want;
         self.vis.set_enabled(shown);
         let fps = want.unwrap_or(crate::BASELINE_FPS);
         EventResult::with_cb(move |siv| siv.set_fps(fps))

@@ -187,6 +187,13 @@ pub struct PlayerStatus {
     pub download_pct: Option<u8>,
 }
 
+impl PlayerStatus {
+    /// Playback waits on a download whose share is unknown.
+    pub fn spinning(&self) -> bool {
+        self.buffering && self.download_pct.is_none()
+    }
+}
+
 impl Default for PlayerStatus {
     fn default() -> Self {
         Self {

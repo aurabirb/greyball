@@ -54,8 +54,8 @@ pub(super) struct StatusLine {
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
     pub(super) duration_ms: u32,
-    /// Playback waits on the download.
-    pub(super) buffering: bool,
+    /// Playback waits on a download whose share is unknown.
+    pub(super) spinning: bool,
     /// The share downloaded, while the track is still coming in.
     pub(super) download_pct: Option<u8>,
     pub(super) bpm_tag: ScanTag,
@@ -93,7 +93,7 @@ impl StatusLine {
             state: core.state,
             position_ms: ps.position_ms,
             duration_ms: ps.duration_ms,
-            buffering: ps.buffering,
+            spinning: ps.spinning(),
             download_pct: ps.download_pct,
             bpm_tag,
             shuffle: core.shuffle,

@@ -6,7 +6,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use core::{Command, TrackId};
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use super::memo::Memo;
 use super::status_line::StatusLine;
@@ -34,11 +35,21 @@ const HEART_TITLE_MIN: usize = 4;
 /// Bars from one to eight eighths tall.
 const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
-/// Braille spinner frames, picked from the wall clock so the bar keeps no animation state.
+/// Braille spinner frames, picked from a monotonic clock so the bar keeps no animation state.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// One frame per redraw at the 4 fps floor.
-const SPINNER_FRAME_MS: u128 = 250;
+/// Redraw rate while the spinner shows, one frame per redraw.
+pub(super) const SPINNER_FPS: u32 = 10;
+
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// The progress glyph's column plus the gap before the title.
+const CORNER_W: usize = 2;
+
+/// The bar `eighths` tall, clamped to one..=eight.
+fn bar(eighths: usize) -> &'static str {
+    GLYPHS[eighths.clamp(1, 8) - 1]
+}
 
 /// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
 fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
@@ -113,8 +124,7 @@ impl TabBar<'_> {
     }
 
     fn layout(&self, total_w: usize) -> Layout {
-        // The last column holds the progress glyph, with a gap before the title.
-        let content_w = total_w.saturating_sub(2);
+        let content_w = total_w.saturating_sub(CORNER_W);
         let buttons_w = transport_layout(0, &self.status.state).last().map_or(0, |&(_, s, w)| s + w);
         let full_w = self.tab_layout(false).last().map_or(0, |&(_, start, w)| start + w);
         let collapsed = full_w + TRANSPORT_GAP + buttons_w + WAVE_MIN + TRANSPORT_GAP + TITLE_MIN > content_w;
@@ -190,7 +200,7 @@ impl TabBar<'_> {
                 None => printer.with_effect(Effect::Dim, |p| p.print((x, 0), LIKED_ICON)),
             }
         }
-        printer.with_effect(Effect::Dim, |p| p.print((printer.size.x.saturating_sub(1), 0), self.progress_glyph()));
+        printer.with_effect(Effect::Dim, |p| p.print((printer.size.x.saturating_sub(CORNER_W - 1), 0), self.progress_glyph()));
         let (start, text) = self.title(&layout);
         if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
@@ -221,12 +231,9 @@ impl TabBar<'_> {
 
     /// Corner cell: a spinner while playback waits on the download, else the download's share as a bar, else blank.
     fn progress_glyph(&self) -> &'static str {
-        match (self.status.buffering, self.status.download_pct) {
-            (true, _) => {
-                let ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-                SPINNER[(ms / SPINNER_FRAME_MS) as usize % SPINNER.len()]
-            }
-            (false, Some(p)) => GLYPHS[(p.min(100) as usize * 7 + 50) / 100],
+        match (self.status.spinning, self.status.download_pct) {
+            (true, _) => SPINNER[(START.elapsed().as_millis() * SPINNER_FPS as u128 / 1000) as usize % SPINNER.len()],
+            (false, Some(p)) => bar((p as usize * 8).div_ceil(100)),
             (false, None) => " ",
         }
     }
@@ -238,7 +245,7 @@ impl TabBar<'_> {
         };
         for (x, &level) in levels.iter().enumerate() {
             if level > 0 {
-                let glyph = GLYPHS[level as usize - 1];
+                let glyph = bar(level as usize);
                 if x < played {
                     printer.with_color(ColorStyle::title_primary(), |p| {
                         p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
