@@ -55,6 +55,13 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Rework the list window's title row (`TrackList::draw`, `ui/src/view/track_list.rs` ~751; `draw_row_list`,
+  `ui/src/view/rows.rs`; `kind_bar`; `count()`): swap the positions of the title and the kind filters, so
+  the filters (playlist subtabs) sit on the left and the title on the right; do not write the count unit
+  `(xx playlists)` at all for the Playlists window; put the `[f] change filter` hint (currently drawn left
+  of the filter bar) after the playlist subtab; and right-align every list window's title, not just this
+  one. Where the wording is ambiguous (what exactly `(xx playlists)` is — the `count()` text or part of
+  the title), report it back rather than guessing.
 - [ ] Fetch the remote branch `worktree-copy-shared-link` (`git fetch origin worktree-copy-shared-link`)
   and merge it into `main`: review it against the "copy shared link" shortcut item below first (it likely
   implements it — delete that item if so), resolve conflicts, then run the build/clippy gates and push.
