@@ -72,6 +72,10 @@
   preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
   info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
   position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
+- [ ] After the SoundCloud HLS item above: make sure playback can start before the file has been
+  fully downloaded for every source (Spotify, HTTP, local, Soulseek, ...), not just SoundCloud —
+  audit each source's load path for a whole-file wait before the player gets audio and fix the ones
+  that block.
 - [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
   dialog; drops its hotkey binding; windows showing it back out to the top level) and
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`
