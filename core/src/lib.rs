@@ -25,6 +25,7 @@ pub mod traits;
 pub mod types;
 pub mod update;
 pub mod waveform;
+mod enqueue;
 mod view_cache;
 
 pub use app::{

@@ -458,10 +458,7 @@ impl TrackList {
             return None;
         }
         let row = self.top_row(s)?;
-        let name = match &row {
-            TopRow::Remote(_, name, ..) => name.clone(),
-            TopRow::Local(_) => top_row_name(&row, &s.playlists()),
-        };
+        let name = top_row_name(&row, &s.playlists());
         Some((row.target(), name))
     }
 

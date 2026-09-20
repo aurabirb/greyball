@@ -13,6 +13,7 @@ use crate::catalog::Catalog;
 use crate::update::{INSTALLED, Outcome};
 use crate::config::Config;
 use crate::hotkeys::Hotkeys;
+use crate::enqueue::{ENQUEUE_CAP, ENQUEUE_TIMEOUT, PendingEnqueue, queued_note};
 use crate::event::{Bus, CoreEvent, PlayerEvent};
 use crate::media_cache::MediaCache;
 use crate::playlist_m3u::{
@@ -35,26 +36,6 @@ use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
 
 /// How long a skip waits for another before its track actually loads.
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(200);
-
-/// How long a remote collection may take to load before its pending enqueue is dropped.
-const ENQUEUE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// The most tracks one collection appends to the queue.
-const ENQUEUE_CAP: usize = 500;
-
-/// A remote collection being appended to the queue as its pages land.
-struct PendingEnqueue {
-    source: SourceId,
-    node: BrowseNode,
-    name: String,
-    appended: usize,
-    deadline: Instant,
-}
-
-fn queued_note(name: &str, n: usize, capped: bool) -> String {
-    let cut = if capped { format!(", first {ENQUEUE_CAP} only") } else { String::new() };
-    format!("queued {name} ({n} tracks{cut})")
-}
 
 /// Build the synthetic playback-fallback `Rendition` for `track`, if any of
 /// its real renditions already has a `MediaCache` entry — routed through the
@@ -1373,27 +1354,7 @@ impl Session {
         let mut notes = Vec::new();
         let now = Instant::now();
         for mut job in std::mem::take(&mut self.pending_enqueues) {
-            // Settled state first: a snapshot taken after it is complete.
-            let errored = self.view.remote_playlist_errored(&job.source, &job.node);
-            let loading = self.remote_playlist_loading(&job.source, &job.node);
-            let ids = self.view.remote_playlist_confirmed_ids(&job.source, &job.node, self.remote_ctx());
-            let take = ids.len().min(ENQUEUE_CAP);
-            if take > job.appended {
-                self.queue.append_many(&ids[job.appended..take]);
-                job.appended = take;
-            }
-            let (queued, name) = (job.appended, &job.name);
-            let note = if take == ENQUEUE_CAP && ids.len() > ENQUEUE_CAP {
-                Some(queued_note(name, queued, true))
-            } else if errored {
-                Some(format!("could not load {name} ({queued} tracks queued)"))
-            } else if !loading {
-                Some(if queued == 0 { format!("nothing to queue from {name}") } else { queued_note(name, queued, false) })
-            } else if now >= job.deadline {
-                Some(format!("gave up loading {name} ({queued} tracks queued)"))
-            } else {
-                None
-            };
+            let note = job.advance(&self.view, self.remote_ctx(), &self.queue, now);
             match note {
                 Some(note) => notes.push((job.source, job.node, note)),
                 None => {
