@@ -275,7 +275,7 @@ impl Default for Config {
             visible_track_attrs: vec!["bpm".to_string()],
             panes: PaneLayoutConfig::default(),
             vis: VisConfig::default(),
-            status_line: true,
+            status_line: false,
             show_hints: true,
             auto_update: true,
             media_cache_dir: PathBuf::new(),

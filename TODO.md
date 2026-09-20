@@ -182,8 +182,6 @@
     Settings, advanced options (custom host, manual login) only when asked for.
 
 ### Player chrome
-- [ ] Hide the bottom scrubber by default: flip the `status_line` default to `false`
-  (`core/src/config.rs`); the Settings toggle already exists.
 - [ ] Make the `[B]` analyzer widget always sit to the left of the warning widget. Keep the change
   minimal and don't introduce a new concept: it should feel like a "status group" that is simply
   repositioned between windows.
