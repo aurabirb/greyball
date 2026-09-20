@@ -230,10 +230,13 @@ show a "downloading" mark from `engine.status`.
 ### Analyzers
 - `open_scan_audio` collapses to `engine.open(r, Intent::Fetch|Peek)`; the reader is an independent
   cursor over the same file. `decode_blocks`/`SourceAdapter` get a progressive, non-seekable
-  variant that waits on `wait_range` for the next bytes; `open_analysis_audio` loses the
+  variant whose reads wait for the next bytes (seekable only once the stream is `Done`); `open_analysis_audio` loses the
   `read_all` fallback. BPM (60 s prefix) starts as soon as the prefix exists; the waveform consumes
   progressively (the "progressive waveform" TODO item). `Player::open_for_scan`,
   `scan_fetch_paused` and `MediaProvider::materialize` are removed.
+  The driver keeps each walk `Fetch` claim until `Done` (one download at a time, a failed fetch backs its
+  source off so a run of bad tracks cannot recycle Spotify's session); only `Play` announces a cache hit as
+  `Stream{Done}`, so scanning cached files raises no events.
 - Analyzers consume the contiguous prefix (`StreamInfo.prefix`) as it grows. After a scrub jump the
   file has islands beyond the gap; an in-order analyzer simply waits at the gap until the backfill
   closes it. Analyzing arbitrary chunks as they land (out of order) is out of scope: a decoder needs

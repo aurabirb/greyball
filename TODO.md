@@ -34,6 +34,7 @@
   and wide-glyph titles on screen.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
+- [ ] The scan driver runs one analysis at a time: a waveform pass over a long set being downloaded holds the scan thread until the stream is `Done`, so another track's BPM waits behind it. Run priority (now-playing) analyses on their own thread.
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
@@ -42,11 +43,6 @@
   and returns `Media::Path`. slskd writes the partial file under `<folder>/incomplete/<user>/<remote dirs>/`;
   following it with a `Media::Stream` producer needs its exact incomplete file name and resume behavior
   verified against a connected slskd (its Soulseek server connection was down, so nothing was downloaded).
-- [ ] Streaming playback stage 3 (`docs/streaming-playback.md`): port the analyzers. `core::scan::
-  open_scan_audio` returns `Error::Unsupported` for an uncached track (the scan of a track that is not in
-  `MediaCache` fails until then); move it and `ScanDriver::prioritize` onto `StreamEngine::open(r,
-  Intent::Fetch | Peek)`, add the progressive non-seekable `decode_blocks` variant, drop
-  `Player::open_for_scan`/`scan_fetch_paused`, and make BPM and waveform work during the download.
 - [ ] Spotify downloads that overlap (a skipped track still fetching during `GRACE` while the next one
   starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
   reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
@@ -75,7 +71,7 @@
   clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
 - [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
   progressively for a track still downloading — the playing track's bytes already land in a growing
-  stream file (`core::stream`), so decode what has arrived with `core::audio_decode::decode_blocks`, publish the buckets filled so far and let the
+  stream file (`core::stream`); `WaveformPlugin` already decodes it progressively, so publish the buckets filled so far and let the
   widget draw left to right as the download advances (undownloaded columns blank, each bucket's
   share of the track from the known duration); persist only once complete. SoundCloud tracks carry a
   ready-made `waveform_url` in the API response — use it there instead of decoding if it's cheap to
