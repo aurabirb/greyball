@@ -990,7 +990,9 @@ impl Session {
             }
             CoreEvent::UrlResolved { playlist, result } => {
                 let msg = match result {
-                    Ok(tracks) => self.add_resolved_tracks(*playlist, tracks).unwrap_or_else(|e| e.to_string()),
+                    Ok((tracks, incomplete)) => {
+                        self.add_resolved_tracks(*playlist, tracks, *incomplete).unwrap_or_else(|e| e.to_string())
+                    }
                     Err(msg) => msg.clone(),
                 };
                 self.bus.send(CoreEvent::Flash(msg));
@@ -1938,20 +1940,22 @@ impl Session {
     }
 
     /// Blocking: the tracks a pasted URL points at (a whole collection when the source can browse it), capped at `ENQUEUE_CAP`.
-    pub fn import_url(source: &dyn Source, url: &str) -> Result<Vec<Track>> {
+    /// The flag is true when the source reported an error partway, so the list may be cut short.
+    pub fn import_url(source: &dyn Source, url: &str) -> Result<(Vec<Track>, bool)> {
         let Some(node) = source.browse_uri(url) else {
-            return source.resolve(url).map(|t| vec![t]);
+            return source.resolve(url).map(|t| (vec![t], false));
         };
         let deadline = Instant::now() + ENQUEUE_TIMEOUT;
         loop {
             let page = source.browse(&node, ENQUEUE_CAP)?;
             if !page.partial || page.tracks.len() >= ENQUEUE_CAP || Instant::now() >= deadline {
-                if page.tracks.is_empty() && page.errored {
-                    return Err(Error::Other(format!("could not load {url}")));
+                if page.tracks.is_empty() {
+                    let why = if page.errored { "could not load" } else { "nothing to import from" };
+                    return Err(Error::Other(format!("{why} {url}")));
                 }
                 let mut tracks = page.tracks;
                 tracks.truncate(ENQUEUE_CAP);
-                return Ok(tracks);
+                return Ok((tracks, page.errored));
             }
             std::thread::sleep(Duration::from_millis(300));
         }
@@ -2542,25 +2546,17 @@ impl Session {
                 artists,
                 Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), 0, spec.quality.clone()),
             ))?;
-            match &mut pl {
-                Some(pl) => {
-                    if pl.items.contains(&tid) {
-                        log::info!("add: already in \"{}\", skipping: {raw}", pl.name);
-                        skipped += 1;
-                        continue;
-                    }
-                    pl.items.push(tid);
-                }
-                None => self.queue.append(tid),
+            if !self.place_track(&mut pl, tid) {
+                log::info!("add: already in the playlist, skipping: {raw}");
+                skipped += 1;
+                continue;
             }
             added += 1;
         }
 
+        self.save_target(&pl, added)?;
         match pl {
             Some(pl) => {
-                if added > 0 {
-                    self.save_playlist(&pl)?;
-                }
                 log::info!("add: \"{}\" — {added} added, {skipped} skipped", pl.name);
                 Ok(Dispatch::Done(if skipped > 0 {
                     format!("added {added} track(s) to \"{}\" ({skipped} skipped)", pl.name)
@@ -2579,34 +2575,48 @@ impl Session {
         }
     }
 
-    fn add_resolved_tracks(&mut self, playlist: Option<PlaylistId>, tracks: &[Track]) -> Result<String> {
+    fn add_resolved_tracks(&mut self, playlist: Option<PlaylistId>, tracks: &[Track], incomplete: bool) -> Result<String> {
         let mut pl = playlist
             .map(|id| self.store.get_playlist(id)?.ok_or(Error::NotFound))
             .transpose()?;
         let (mut added, mut skipped) = (0usize, 0usize);
         for track in tracks {
             let tid = self.catalog.ingest(track.clone())?;
-            match &mut pl {
-                Some(pl) if pl.items.contains(&tid) => {
-                    skipped += 1;
-                    continue;
-                }
-                Some(pl) => pl.items.push(tid),
-                None => self.queue.append(tid),
+            if !self.place_track(&mut pl, tid) {
+                skipped += 1;
+                continue;
             }
             added += 1;
         }
+        self.save_target(&pl, added)?;
         let (verb, target) = match &pl {
             Some(pl) => ("added", format!(" to \"{}\"", pl.name)),
             None => ("queued", String::new()),
         };
-        if let Some(pl) = &pl
-            && added > 0
-        {
-            self.save_playlist(pl)?;
-        }
         let skipped = if skipped > 0 { format!(" ({skipped} already there)") } else { String::new() };
-        Ok(format!("{verb} {added} track(s){target}{skipped}"))
+        Ok(format!("{verb} {added} track(s){target}{skipped}{}", if incomplete { " (incomplete)" } else { "" }))
+    }
+
+    /// Adds to the open playlist, or the queue when there is none; false when the playlist already has it.
+    fn place_track(&mut self, pl: &mut Option<Playlist>, tid: TrackId) -> bool {
+        match pl {
+            Some(pl) if pl.items.contains(&tid) => false,
+            Some(pl) => {
+                pl.items.push(tid);
+                true
+            }
+            None => {
+                self.queue.append(tid);
+                true
+            }
+        }
+    }
+
+    fn save_target(&mut self, pl: &Option<Playlist>, added: usize) -> Result<()> {
+        match pl {
+            Some(pl) if added > 0 => self.save_playlist(pl),
+            _ => Ok(()),
+        }
     }
 
     /// A local playlist flips in the store now; a remote one settles on a background thread.

@@ -382,7 +382,13 @@ impl Source for SoundcloudSource {
     fn share_url(&self, uri: &str) -> Option<String> {
         match TrackRef::parse(uri)? {
             TrackRef::Permalink(url) => Some(url),
-            TrackRef::Id(id) => self.track_by_id(id).ok()?.permalink_url,
+            TrackRef::Id(id) => match self.track_by_id(id) {
+                Ok(t) => t.permalink_url,
+                Err(e) => {
+                    log::warn!("soundcloud: share_url: track {id}: {e}");
+                    None
+                }
+            },
         }
     }
 

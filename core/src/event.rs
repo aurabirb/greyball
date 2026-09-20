@@ -56,7 +56,7 @@ pub enum CoreEvent {
     /// The shareable URL for the clipboard, or why there is none.
     LinkResolved(Result<String, String>),
     /// The tracks a pasted URL resolved to, bound for `playlist` (the queue when `None`).
-    UrlResolved { playlist: Option<PlaylistId>, result: Result<Vec<Track>, String> },
+    UrlResolved { playlist: Option<PlaylistId>, result: Result<(Vec<Track>, bool), String> },
 }
 
 #[derive(Clone, Debug)]

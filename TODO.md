@@ -63,6 +63,16 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
+  `browse_uri` that resolves the URL through `/resolve` to a playlist id and lists it with
+  `playlist_tracks` (`sources/soundcloud/src/client.rs`); `TrackRef::parse` (`uri.rs`) currently
+  rejects 3-segment set paths. `on.soundcloud.com/...` short links need their redirect followed to the
+  permalink first.
+- [ ] Bracketed paste in the TUI: enable it in terminal setup, add a paste event to the edit buffer
+  (`ui/src/view/input.rs`) and strip newlines so a multi-line paste can't run a command.
+- [ ] `y` (copy shared link) polish: debounce repeated presses (each spawns a detached thread and a
+  network call), and the "Copied" flash shows even when the terminal ignores OSC 52 (tmux without
+  `set-clipboard`/`allow-passthrough`) — word the notice and docs accordingly, or detect it.
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
