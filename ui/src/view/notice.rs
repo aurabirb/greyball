@@ -63,8 +63,11 @@ impl Notice {
             CoreEvent::UpdateResult(Err(msg)) => Some(Notice::failed(msg.clone())),
             CoreEvent::LinkResolved(Ok(url)) => {
                 log::info!("copied link: {url}");
-                super::clipboard::copy(url);
-                Some(Notice::Flash(format!("Copied: {url}")))
+                let msg = match super::clipboard::copy(url).as_str() {
+                    "OSC 52" => format!("Sent to terminal clipboard (OSC 52): {url}"),
+                    tool => format!("Copied ({tool}): {url}"),
+                };
+                Some(Notice::Flash(msg))
             }
             CoreEvent::LinkResolved(Err(msg)) => Some(Notice::Flash(msg.clone())),
             _ => None,
