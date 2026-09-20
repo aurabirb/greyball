@@ -151,9 +151,8 @@ impl Plugin for SpotifyPlugin {
             word: "spotify".to_string(),
             help: "addlogin [name] [client_id] — (re)authenticate and add a Web API credential \
                    pair alongside any already stored (never replaces one). name is just a label, \
-                   default if omitted. client_id is \"medley\" or \"ncspot\" for those apps' own \
-                   ids, any other string to use verbatim, or omitted for ncspot's (medley's own \
-                   app 403s some endpoints, e.g. Like)"
+                   default if omitted. client_id is \"ncspot\" for ncspot's id, any other string \
+                   to use verbatim, or omitted for ncspot's"
                 .to_string(),
         }]
     }

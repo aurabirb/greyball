@@ -1,23 +1,20 @@
 //! OAuth login + credential/token cache.
 //!
-//! Two *separate* Spotify apps are involved, each OAuth'd independently —
-//! not one id doing double duty:
+//! Two *separate* Spotify client ids are OAuth'd independently — not one id
+//! doing double duty:
 //!
 //! * [`MUSIC_CLIENT_ID`] — Spotify's own official client id (the one
 //!   librespot/most third-party clients use for the streaming/Connect
 //!   session). Used only to obtain librespot [`Credentials`].
-//! * [`WEBAPI_CLIENT_ID`] — the dedicated `blueball`/medley app registered
-//!   on the Spotify dashboard. Its "APIs used" is Web API only (Development
-//!   mode, no Web Playback SDK/streaming grant) — using it for the librespot
-//!   session was the bug; it's only ever meant to mint the bearer token for
-//!   `webapi.rs` search/resolve calls.
+//! * [`NCSPOT_CLIENT_ID`] — the default for the bearer token `webapi.rs`
+//!   uses for search/resolve/library calls.
 //!
 //! The Web API side supports several named credential *pairs* at once
-//! (`TokenStore`, `webapi_tokens.json`) instead of a single cached token:
-//! `spotify addlogin [name] [client_id]` (see `crate::plugin`) adds one
-//! without disturbing whatever's already stored, and `webapi.rs`'s `403`
-//! fallback (`fallback_webapi_token`) switches the active one when the
-//! current pair is refused a call medley's own app isn't approved for.
+//! (`TokenStore`, `webapi_tokens.json`), each remembering the client id that
+//! minted it: `spotify addlogin [name] [client_id]` (see `crate::plugin`)
+//! adds one without disturbing whatever's already stored, and `webapi.rs`'s
+//! `403` fallback (`fallback_webapi_token`) switches the active one when the
+//! current pair is refused a call.
 //!
 //! Artefacts are cached under the medley data dir (`$XDG_DATA_HOME/medley/
 //! spotify/`):
@@ -45,52 +42,14 @@ use serde::{Deserialize, Serialize};
 /// dynamically chosen free port works here.
 pub(crate) const MUSIC_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 
-/// The dedicated `blueball` app registered for medley on the Spotify
-/// developer dashboard — Development mode, "APIs used: Web API" only. Used
-/// solely to mint the bearer token for Web API search/resolve calls; never
-/// for the librespot session (it has no streaming/Connect grant).
-const WEBAPI_CLIENT_ID: &str = "89485716cfd24928b4d7ffc2bee5e07e";
-
-/// Must exactly match a redirect URI registered against `WEBAPI_CLIENT_ID`
-/// on the Spotify developer dashboard — Spotify validates it byte-for-byte
-/// for this app, unlike `MUSIC_CLIENT_ID`'s loopback-any-port match. (The
-/// app also has `https://medley.awebo.click/spcb/` registered, for a
-/// remote/non-loopback flow — not wired up: `librespot-oauth` only opens a
-/// local listener for an `http://127.0.0.1:<port>/…` redirect_uri.)
-const WEBAPI_REDIRECT_URI: &str = "http://127.0.0.1:3121/callback";
-
 /// ncspot's own published Web API client id (`src/authentication.rs`,
-/// https://github.com/hrkfdn/ncspot) — a working fallback for endpoints
-/// medley's own Development-mode app 403s on (e.g. `/me/tracks` PUT, Like).
-/// The default for `addlogin`'s `client_id`. Redirect matching is
-/// loopback-any-port, like `MUSIC_CLIENT_ID`.
+/// https://github.com/hrkfdn/ncspot) — the default for the Web API login.
+/// Redirect matching is loopback-any-port, like `MUSIC_CLIENT_ID`.
 const NCSPOT_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
-/// Name of the original single Web API credential pair, from before
-/// multiple pairs existed — the one `Auth::login`/`probe`/`wiring` use
-/// unless something promoted a different one active.
+
+/// The pair `Auth::login` (setup) fills and `probe`/`wiring` use unless
+/// something promoted a different one active.
 const DEFAULT_ACCOUNT: &str = "default";
-
-/// `SPOTIFY_WEBAPI_CLIENT_ID` env var overrides `WEBAPI_CLIENT_ID` — for
-/// testing whether search 400s ("Invalid limit") are a Development-mode
-/// catalog-access restriction on the `blueball` app rather than the request
-/// shape: point this at a different registered client id without a rebuild.
-/// Only the web-api id is overridable this way; `MUSIC_CLIENT_ID` (playback)
-/// isn't in question here.
-fn webapi_client_id() -> String {
-    std::env::var("SPOTIFY_WEBAPI_CLIENT_ID").unwrap_or_else(|_| WEBAPI_CLIENT_ID.to_string())
-}
-
-/// Redirect URI to match whatever client id `webapi_client_id()` resolves
-/// to — Spotify validates it byte-for-byte for the `blueball` app, so
-/// swapping the client id alone isn't enough. Pass the full URI, port and
-/// all (e.g. `http://127.0.0.1:8721/login`). No need to split the port out
-/// ourselves: `librespot_oauth` parses it
-/// straight back out of this string (`get_socket_address()`) to bind its
-/// own local callback listener, so whatever port is embedded here is
-/// exactly the one that ends up listening.
-fn webapi_redirect_uri() -> String {
-    std::env::var("SPOTIFY_WEBAPI_REDIRECT_URI").unwrap_or_else(|_| WEBAPI_REDIRECT_URI.to_string())
-}
 
 const MUSIC_SCOPES: &[&str] = &["streaming"];
 
@@ -117,32 +76,23 @@ fn scopes_match(tok: &CachedToken) -> bool {
     tok.scopes == WEBAPI_SCOPES.join(" ")
 }
 
-/// `addlogin`'s `client_id` argument: `"medley"`/`"ncspot"` are shorthands
-/// for the two apps' ids, anything else is used verbatim, and omitted
-/// defaults to ncspot's (medley's own app 403s some endpoints outright).
+/// `addlogin`'s `client_id` argument: `"ncspot"` is a shorthand for
+/// ncspot's id, anything else is used verbatim, and omitted defaults to it.
 fn resolve_client_id(arg: Option<&str>) -> String {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None | Some("ncspot") => NCSPOT_CLIENT_ID.to_string(),
-        Some("medley") => webapi_client_id(),
         Some(other) => other.to_string(),
     }
 }
 
-/// The OAuth client to mint/refresh a token with, for `client_id` —
-/// medley's own app requires its fixed, exactly-registered
-/// `WEBAPI_REDIRECT_URI`; any other client id (ncspot's, or a custom one
-/// pasted via `addlogin`) uses loopback-any-port instead, like
-/// `MUSIC_CLIENT_ID`.
+/// The OAuth client to mint/refresh a token with, for `client_id`, on a
+/// loopback-any-port redirect.
 fn oauth_client_for_id(client_id: &str) -> Result<librespot_oauth::OAuthClient, String> {
-    if client_id == webapi_client_id() {
-        webapi_oauth_client()
-    } else {
-        let redirect = format!("http://127.0.0.1:{}/login", free_port()?);
-        OAuthClientBuilder::new(client_id, &redirect, WEBAPI_SCOPES.to_vec())
-            .open_in_browser()
-            .build()
-            .map_err(|e| e.to_string())
-    }
+    let redirect = format!("http://127.0.0.1:{}/login", free_port()?);
+    OAuthClientBuilder::new(client_id, &redirect, WEBAPI_SCOPES.to_vec())
+        .open_in_browser()
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -311,17 +261,7 @@ impl Auth {
         let mut store = load_token_store(cache_dir);
 
         let mut credentials = cache.credentials();
-        let expected = webapi_client_id();
-        let mut access_token = store.accounts.get(DEFAULT_ACCOUNT).cloned().and_then(|t| {
-            if t.client_id != expected {
-                // Cached under a different app (e.g. before the music/web-api
-                // split) — never reuse or refresh it, `expiry_fresh`/expiry
-                // says nothing about which app it's for.
-                log::info!(
-                    "spotify: cached web-api token was issued for a different client id, discarding"
-                );
-                return None;
-            }
+        let access_token = store.accounts.get(DEFAULT_ACCOUNT).cloned().and_then(|t| {
             if t.scopes != WEBAPI_SCOPES.join(" ") {
                 // Cached from before a scope was added (e.g.
                 // `playlist-read-private`) — a refresh keeps the *original*
@@ -338,7 +278,7 @@ impl Auth {
                 Some(t.access_token)
             } else if let Some(rt) = &t.refresh_token {
                 log::info!("spotify: web-api token expired, refreshing");
-                refresh(rt, &expected)
+                refresh(rt, &t.client_id)
                     .inspect_err(|e| log::warn!("spotify: web-api token refresh failed: {e}"))
                     .ok()
                     .inspect(|new| {
@@ -364,18 +304,20 @@ impl Auth {
         }
 
         if access_token.is_none() {
-            log::info!("spotify: launching OAuth browser login (web api)");
-            let tok = run_webapi_oauth()?;
-            let cached = CachedToken::from_oauth(&tok, expected);
-            access_token = Some(cached.access_token.clone());
-            store.accounts.insert(DEFAULT_ACCOUNT.to_string(), cached);
+            Self::add_login(cache_dir, None, None)?;
+            store = load_token_store(cache_dir);
         }
+        let access_token = store
+            .accounts
+            .get(DEFAULT_ACCOUNT)
+            .map(|t| t.access_token.clone())
+            .ok_or("web-api token missing after login")?;
         store.active = Some(DEFAULT_ACCOUNT.to_string());
         save_token_store(cache_dir, &store);
 
         Ok(Auth {
             credentials: credentials.expect("credentials set above"),
-            access_token: access_token.expect("token set above"),
+            access_token,
             cache_dir: cache_dir.to_path_buf(),
         })
     }
@@ -444,11 +386,9 @@ pub fn refresh_and_persist(cache_dir: &Path) -> Option<String> {
 
 /// Try every stored Web API credential pair other than the currently active
 /// one, refreshing as needed, and promote the first usable one to active —
-/// `webapi.rs`'s `403` fallback: medley's own Development-mode client id can
-/// be denied a specific endpoint outright (e.g. `/me/tracks` PUT, i.e.
-/// Like), and a fresh/refreshed token under that *same* client id would
-/// `403` again, so recovering needs a different credential pair, not just a
-/// new token. Never touches (deletes/overwrites) the pair that just
+/// `webapi.rs`'s `403` fallback: a client id can be denied a specific
+/// endpoint outright, and a fresh/refreshed token under that *same* client
+/// id would `403` again, so recovering needs a different credential pair. Never touches (deletes/overwrites) the pair that just
 /// 403'd, or any other pair it doesn't end up using — it may work again
 /// later (e.g. after a rate-limit window passes). Returns the new access
 /// token, or `None` if nothing else stored works either.
@@ -481,10 +421,8 @@ pub fn fallback_webapi_token(cache_dir: &Path) -> Option<String> {
     None
 }
 
-/// A free loopback port for `MUSIC_CLIENT_ID`'s (or `NCSPOT_CLIENT_ID`'s)
-/// redirect — both match any port on `127.0.0.1`, so a dynamic one avoids
-/// colliding with `WEBAPI_REDIRECT_URI`'s fixed port if flows ever run
-/// close together (first-run login with both caches empty).
+/// A free loopback port for the OAuth redirects — both client ids match any
+/// port on `127.0.0.1`.
 fn free_port() -> Result<u16, String> {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|s| s.local_addr())
@@ -500,13 +438,6 @@ fn music_oauth_client() -> Result<librespot_oauth::OAuthClient, String> {
         .map_err(|e| e.to_string())
 }
 
-fn webapi_oauth_client() -> Result<librespot_oauth::OAuthClient, String> {
-    OAuthClientBuilder::new(&webapi_client_id(), &webapi_redirect_uri(), WEBAPI_SCOPES.to_vec())
-        .open_in_browser()
-        .build()
-        .map_err(|e| e.to_string())
-}
-
 fn run_music_oauth() -> Result<librespot_oauth::OAuthToken, String> {
     // log::info!, not eprintln! — cursive owns the terminal, a raw stderr
     // write here corrupts the TUI's painted cells.
@@ -514,13 +445,6 @@ fn run_music_oauth() -> Result<librespot_oauth::OAuthToken, String> {
         "spotify: opening browser for Spotify login — music/playback (paste the URL below if it doesn't open)"
     );
     music_oauth_client()?.get_access_token().map_err(|e| e.to_string())
-}
-
-fn run_webapi_oauth() -> Result<librespot_oauth::OAuthToken, String> {
-    log::info!(
-        "spotify: opening browser for Spotify login — web API (paste the URL below if it doesn't open)"
-    );
-    webapi_oauth_client()?.get_access_token().map_err(|e| e.to_string())
 }
 
 fn refresh(refresh_token: &str, client_id: &str) -> Result<CachedToken, String> {

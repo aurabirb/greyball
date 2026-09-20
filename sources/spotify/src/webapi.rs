@@ -2,9 +2,8 @@
 //! playlist browsing, which is all `Source` needs. medley avoids the
 //! `rspotify` dep and calls the REST endpoints directly with the OAuth
 //! bearer token from [`crate::auth`]. A `401` triggers an in-place token
-//! refresh (`crate::auth::refresh_and_persist`) and retry; a `403` (medley's
-//! own Development-mode app refused outright, not just an expired token)
-//! instead switches to another stored credential pair
+//! refresh (`crate::auth::refresh_and_persist`) and retry; a `403` (the client
+//! id refused outright, not just an expired token) instead switches to another stored credential pair
 //! (`crate::auth::fallback_webapi_token`) and retries under that.
 
 use std::path::PathBuf;
@@ -407,13 +406,10 @@ impl WebApi {
     ///    nothing is lost by omitting it.
     /// 2. Even with `market` gone, `limit` still 400s above 10 — confirmed
     ///    by curl bisection (1/5/10 → 200, 11/12/15/20/50 → 400) against
-    ///    this Development-mode app (`WEBAPI_CLIENT_ID` in `auth.rs`),
-    ///    which isn't approved for Spotify's Extended Quota Mode. The
-    ///    publicly documented max of 50 only applies to quota-extended
-    ///    apps; this one is silently capped lower. Clamped to the real,
-    ///    empirically-confirmed ceiling instead of the documented one —
-    ///    raise this back to 50 if/when the app is approved for Extended
-    ///    Quota Mode on the Spotify dashboard.
+    ///    a Development-mode app, which isn't approved for Spotify's Extended
+    ///    Quota Mode. The publicly documented max of 50 only applies to
+    ///    quota-extended apps. Clamped to the confirmed ceiling instead of
+    ///    the documented one.
     const MAX_LIMIT: usize = 10;
 
     pub fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Track>, String> {
