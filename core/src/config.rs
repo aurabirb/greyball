@@ -125,7 +125,7 @@ pub struct HttpConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpotifyConfig {
-    /// Register the Spotify source + player at startup. On by default —
+    /// Register the Spotify source + media provider at startup. On by default —
     /// **with no cached credentials yet, this blocks startup on an OAuth
     /// browser login** (`Auth::login`). Set `enabled = false` to opt out
     /// entirely.
@@ -192,7 +192,7 @@ pub struct SoulseekConfig {
 pub struct ScanConfig {
     /// After supplying whatever a plugin reads, keep draining the rest of
     /// the track so the backend commits the whole file to its local cache
-    /// (for Spotify: librespot's on-disk cache). Applies to every plugin's
+    /// Applies to every plugin's
     /// background-walk fetches, not just bpm's. See `Player::open_for_scan`.
     pub cache_full: bool,
     pub bpm: BpmScanConfig,

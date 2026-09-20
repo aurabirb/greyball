@@ -80,10 +80,8 @@ impl ScanPlugin for BpmPlugin {
 
     fn needs(&self, track: &Track) -> bool {
         // Not Spotify-specific: the DSP below only cares about decoded PCM,
-        // and `open_scan_audio` already fetches it generically (any
-        // source's `MediaProvider`, or a source's own `Player::open_for_scan`
-        // for one like Spotify with no `MediaProvider` at all) — so this
-        // plugin scans every track, not just ones with a Spotify rendition.
+        // and `open_scan_audio` fetches it generically for any source
+        // — so this plugin scans every track, not just ones with a Spotify rendition.
         !track.attrs.contains_key("bpm")
     }
 

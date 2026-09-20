@@ -38,8 +38,10 @@
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
   slow interval) on an actual triggering event instead of polling for one.
-- [ ] Streaming playback stage 2 (`docs/streaming-playback.md`), remainder: Soulseek (investigate whether
-  slskd's partial file can be read safely), local files and the HTTP source checked in the running app.
+- [ ] Soulseek: play before slskd finishes the transfer. `SoulseekSource::open` waits for the whole download
+  and returns `Media::Path`. slskd writes the partial file under `<folder>/incomplete/<user>/<remote dirs>/`;
+  following it with a `Media::Stream` producer needs its exact incomplete file name and resume behavior
+  verified against a connected slskd (its Soulseek server connection was down, so nothing was downloaded).
 - [ ] Streaming playback stage 3 (`docs/streaming-playback.md`): port the analyzers. `core::scan::
   open_scan_audio` returns `Error::Unsupported` for an uncached track (the scan of a track that is not in
   `MediaCache` fails until then); move it and `ScanDriver::prioritize` onto `StreamEngine::open(r,

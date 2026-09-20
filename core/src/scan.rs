@@ -152,7 +152,7 @@ impl ScanMode {
 
 /// A `MediaCache` hit, or (unless `mode` is `CacheOnly`) a live fetch via
 /// the source's `MediaProvider`, or `Player::open_for_scan` for a source
-/// with no `MediaProvider` (e.g. Spotify). `None` when nothing can supply
+/// with no `MediaProvider`. `None` when nothing can supply
 /// bytes. `CacheOnly` never touches `media`/`players` at all — populating
 /// `MediaCache` is entirely someone else's job (see `ScanFetchMode::CacheOnly`'s
 /// doc), so a cache miss here is just "not materialized yet", not an error.

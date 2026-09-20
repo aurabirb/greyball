@@ -232,9 +232,7 @@ pub trait Player: Send + Sync {
 
     /// Best-effort seekable audio for offline analysis, independent of the
     /// live playback pipeline (starting a scan must never interrupt or race
-    /// what's currently playing). Default: unsupported. Spotify implements
-    /// this by porting the bpm-audio-dump branch's cache-first /
-    /// CDN-fallback / decrypt path.
+    /// what's currently playing). Default: unsupported.
     ///
     /// `mode`: see `crate::scan::ScanFetchMode`. `Full` drains the rest of
     /// the track after the plugin reads it so the backend commits the
