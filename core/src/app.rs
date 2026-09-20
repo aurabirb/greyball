@@ -1908,9 +1908,32 @@ impl Session {
         self.active_player().map(|p| p.levels()).unwrap_or([0.0; 5])
     }
 
-    /// Pasted raw URI/URL: first source whose `recognizes()` returns true.
+    /// Pasted raw URI/URL: a recognizing source, with the catch-all HTTP source only as the fallback.
     pub fn source_for_uri(&self, uri: &str) -> Option<&Arc<dyn Source>> {
-        self.sources.values().find(|s| s.recognizes(uri))
+        let http = SourceId::from("http");
+        let mut matches: Vec<_> = self.sources.iter().filter(|(_, s)| s.recognizes(uri)).collect();
+        matches.sort_by_key(|(id, _)| (**id == http, id.as_str().to_string()));
+        matches.first().map(|(_, s)| *s)
+    }
+
+    /// Blocking: the tracks a pasted URL points at (a whole collection when the source can browse it), capped at `ENQUEUE_CAP`.
+    pub fn import_url(source: &dyn Source, url: &str) -> Result<Vec<Track>> {
+        let Some(node) = source.browse_uri(url) else {
+            return source.resolve(url).map(|t| vec![t]);
+        };
+        let deadline = Instant::now() + ENQUEUE_TIMEOUT;
+        loop {
+            let page = source.browse(&node, ENQUEUE_CAP)?;
+            if !page.partial || page.tracks.len() >= ENQUEUE_CAP || Instant::now() >= deadline {
+                if page.tracks.is_empty() && page.errored {
+                    return Err(Error::Other(format!("could not load {url}")));
+                }
+                let mut tracks = page.tracks;
+                tracks.truncate(ENQUEUE_CAP);
+                return Ok(tracks);
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
     }
 
     // ---- internals ----
