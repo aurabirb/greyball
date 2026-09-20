@@ -53,6 +53,9 @@
   and wide-glyph titles on screen.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
+- [ ] SoundCloud tracks don't seem to get analyzed by the waveform scanner (`WaveformPlugin`,
+  `sources/waveform/src/lib.rs`) — no waveform `attrs` entry ever appears for them. Find out whether
+  the plugin skips them or their audio never reaches the media cache.
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
