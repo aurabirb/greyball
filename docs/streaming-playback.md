@@ -95,6 +95,7 @@ impl StreamHandle {
 }
 pub struct StreamInfo {
     pub ranges: Vec<Range<u64>>,              // what is on disk
+    pub prefix: u64,                          // contiguous bytes from offset 0 (what in-order consumers need)
     pub len: Option<u64>,
     pub jumpable: bool,                       // the producer honors `want`s (may turn true later)
     pub state: Connecting | Fetching | Buffering | Done | Failed(String) | Cancelled,
@@ -111,7 +112,9 @@ impl StreamWriter {
 ```
 - `StreamReader::read` at a missing offset records a `want`, waits on the condvar (wakes on data,
   cancel, fail), and returns what is available; reads inside a filled range never wait. `seek` is
-  plain positioning (`End` needs a known length).
+  plain positioning (`End` needs a known length). Only the playback reader (`Intent::Play`) posts
+  `want`s; a `Fetch` or `Peek` (analyzer) reader that hits a hole just waits for the range, so it
+  can never pull the producer away from where the listener is.
 - Helper in core, used by anything that is a `Read + Seek`: `fill_from_seekable(src, writer)` —
   fills from 0, jumps when `next_want()` says so, then backfills the gaps, done when the ranges
   cover `len`. Spotify's `AudioFile` and the shared HTTP reader below both use it. HLS writes
@@ -227,6 +230,13 @@ show a "downloading" mark from `engine.status`.
   `read_all` fallback. BPM (60 s prefix) starts as soon as the prefix exists; the waveform consumes
   progressively (the "progressive waveform" TODO item). `Player::open_for_scan`,
   `scan_fetch_paused` and `MediaProvider::materialize` are removed.
+- Analyzers consume the contiguous prefix (`StreamInfo.prefix`) as it grows. After a scrub jump the
+  file has islands beyond the gap; an in-order analyzer simply waits at the gap until the backfill
+  closes it. Analyzing arbitrary chunks as they land (out of order) is out of scope: a decoder needs
+  framing and setup state (mp3/Ogg resync at frame/page boundaries, fMP4 needs the init segment plus
+  a whole fragment, known to the source), so it would need format-aware chunk decoding in the
+  analyzer layer plus a plugin-facing "new chunk" API. The `ranges` list and independent reader
+  cursors are the extension point; nothing in the stream layer would change.
 
 ### Spotify becomes a normal `MediaProvider` (deleting `SpotifyPlayer`)
 - `SpotifyMediaProvider::open` returns `Media::Reader` over the decrypted, header-skipped Ogg
