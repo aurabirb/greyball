@@ -63,9 +63,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Restore the Help menu's layout while keeping its current content: one blank line between
-  items, and Tab / Shift-Tab jumping between sections. The vertical compaction has gone too far —
-  bring back the breathing room between items without wasting more space than the old layout did.
 - [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
   `browse_uri` that resolves the URL through `/resolve` to a playlist id and lists it with
   `playlist_tracks` (`sources/soundcloud/src/client.rs`); `TrackRef::parse` (`uri.rs`) currently
