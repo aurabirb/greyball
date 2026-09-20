@@ -70,7 +70,7 @@ matcher takes `(&Track, &Track)`. The source fills `Rendition.link`/`added_at`.
 New `Source` method, default returns nothing:
 
 ```rust
-fn search_collections(&self, q: &SearchQuery, kind: ItemKind) -> Result<Vec<(String, BrowseNode)>>;
+fn search_collections(&self, q: &SearchQuery, kind: ItemKind, sink: &mut dyn FnMut(String, BrowseNode)) -> Result<()>;
 ```
 
 The kind is a property of the query, not of the result. Spotify calls its search endpoint with
@@ -86,10 +86,17 @@ generation in the same change (fixes the mixed-results bug in TODO.md).
 
 ### 3. Albums view
 
-A Playlists window gets an `ItemKind` filter (All / Albums / Playlists) applied in `top_rows`;
-"Albums" is the same window with the filter set, so it docks/tabs like any other. Saved albums come
-from a source listing them as folders (Spotify: `/me/albums`, node `album:<id>`). Local playlists
-are always `Playlist`.
+A Playlists window at its top level shows the same kind bar as Search with segments All / Albums /
+Playlists (`KindFilter::COLLECTIONS`; `f` cycles them). `TopRow::Remote` carries its `ItemKind`, set by
+the listing that produced the row, and the window's filter is applied to `top_rows` in `TrackList::top`;
+"Albums" is the same window with the filter set, so it docks/tabs like any other. Local playlists are
+always `Playlist`; album rows read `[album] [source] Artist – Title`.
+
+Saved albums come from a new default-empty `Source::saved_albums(&self, want: usize) -> Result<BrowsePage>`
+(the albums are `BrowsePage.folders`; Spotify pages `/me/albums` into nodes `album:<id>`).
+`ViewCache::ensure_remote_playlists` fetches it beside the playlist folders in the same single-flight
+background walk into `remote_albums`, persisted in the same store table under the key `<source>#albums`,
+read with `Session::remote_albums(source)`; `remote_playlists_gen` covers both lists.
 
 ### 4. Queue
 
@@ -174,5 +181,5 @@ to break one, report it back instead of working around it.
 1. `SearchHit` → `Track`; `ItemKind` cleanup. (done)
 2. Search generation tags on events. (done)
 3. `search_collections` + kind bar + prefix rows. (done)
-4. Playlists-window kind filter + saved-albums listing.
+4. Playlists-window kind filter + saved-albums listing. (done)
 5. `Entry` queue + enqueue action + pseudo-track row.

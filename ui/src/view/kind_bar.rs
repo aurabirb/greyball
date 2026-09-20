@@ -20,9 +20,12 @@ pub(super) enum KindFilter {
 impl KindFilter {
     pub(super) const ALL: [Self; 4] = [Self::All, Self::Songs, Self::Albums, Self::Playlists];
 
-    pub(super) fn next(self) -> Self {
-        let at = Self::ALL.iter().position(|&k| k == self).unwrap_or(0);
-        Self::ALL[(at + 1) % Self::ALL.len()]
+    pub(super) const COLLECTIONS: [Self; 3] = [Self::All, Self::Albums, Self::Playlists];
+
+    /// The kind after `self` in `among`, wrapping.
+    pub(super) fn next(self, among: &[Self]) -> Self {
+        let at = among.iter().position(|&k| k == self).unwrap_or(0);
+        among[(at + 1) % among.len()]
     }
 
     fn title(self) -> &'static str {

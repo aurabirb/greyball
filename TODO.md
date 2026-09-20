@@ -174,13 +174,6 @@
     detected skipped, a short summary of what will happen before the final step, re-runnable from
     Settings, advanced options (custom host, manual login) only when asked for.
 
-### Album support
-Design: `docs/collections.md`.
-- [ ] Albums are collections (`(String, BrowseNode)`), `ItemKind::Album` covers album/EP/single. Add
-  an `ItemKind` filter (All / Albums / Playlists) to the Playlists window's `top_rows`, and a
-  saved-albums listing for Spotify. `BrowsePage.subtitle` carries "Album · year · N tracks" into the
-  list title line.
-
 ### Queue
 Design: `docs/collections.md`.
 - [ ] Queue entries become `Entry::{Track, Remote}` so a remote album/playlist can be enqueued as one
