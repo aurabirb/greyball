@@ -63,6 +63,15 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Spotify setup logs in against ncspot's client id by default: make the flow behind
+  `:spotify addlogin` (`Auth::add_login`, `sources/spotify/src/auth.rs`, defaults to
+  `NCSPOT_CLIENT_ID` with loopback-any-port redirect) the one `Plugin::setup` (`plugin.rs`) runs for the
+  Web API credential, and remove the bespoke login it replaces — medley's own `WEBAPI_CLIENT_ID` app,
+  its fixed `WEBAPI_REDIRECT_URI`/`SPOTIFY_WEBAPI_REDIRECT_URI` override and whatever in `Auth::login`
+  or the `403` fallback (`fallback_webapi_token`) only served it — plus the docs/Help/setup-prompt text
+  that describe it. The librespot playback credential (`MUSIC_CLIENT_ID`) is a separate login: keep it
+  and check it still happens in the same setup. Report if removing the own-app path breaks a call
+  ncspot's id can't make.
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
