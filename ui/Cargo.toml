@@ -16,5 +16,6 @@ workspace = true
 core = { path = "../core" }
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 fuzzy-matcher = "0.3"
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 log = "0.4"
 unicode-width = "0.2"

@@ -65,7 +65,7 @@ impl Notice {
                 log::info!("copied link: {url}");
                 let msg = match super::clipboard::copy(url).as_str() {
                     "OSC 52" => format!("Sent to terminal clipboard (OSC 52): {url}"),
-                    tool => format!("Copied ({tool}): {url}"),
+                    method => format!("Copied ({method}): {url}"),
                 };
                 Some(Notice::Flash(msg))
             }

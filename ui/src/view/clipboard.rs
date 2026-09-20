@@ -1,6 +1,5 @@
 use std::io::Write;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, OnceLock};
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -15,61 +14,20 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
-type Tool = (&'static str, &'static [&'static str]);
+static SYSTEM: OnceLock<Option<Mutex<arboard::Clipboard>>> = OnceLock::new();
 
-fn tools() -> Vec<Tool> {
-    let mut t: Vec<Tool> = Vec::new();
-    if cfg!(target_os = "macos") {
-        t.push(("pbcopy", &[]));
-    }
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        t.push(("wl-copy", &[]));
-    }
-    if std::env::var_os("DISPLAY").is_some() {
-        t.push(("xclip", &["-selection", "clipboard"]));
-        t.push(("xsel", &["--clipboard", "--input"]));
-    }
-    t.push(("clip.exe", &[]));
-    t
+// Linux clipboard contents vanish when the owning handle drops, so it lives for the process.
+fn system_copy(text: &str) -> bool {
+    let cb = SYSTEM.get_or_init(|| arboard::Clipboard::new().ok().map(Mutex::new));
+    let Some(cb) = cb else { return false };
+    let Ok(mut cb) = cb.lock() else { return false };
+    cb.set_text(text).is_ok()
 }
 
-fn run(cmd: &str, args: &[&str], text: &str) -> bool {
-    let Ok(mut child) = Command::new(cmd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return false;
-    };
-    if let Some(mut stdin) = child.stdin.take()
-        && stdin.write_all(text.as_bytes()).is_err()
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    }
-    let deadline = Instant::now() + Duration::from_millis(500);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-}
-
-/// Copies via a system clipboard tool, else the terminal (OSC 52, works over SSH); returns the method.
+/// Copies via the system clipboard, else the terminal (OSC 52, works over SSH); returns the method.
 pub(super) fn copy(text: &str) -> String {
-    for (cmd, args) in tools() {
-        if run(cmd, args, text) {
-            return cmd.to_string();
-        }
+    if system_copy(text) {
+        return "system clipboard".to_string();
     }
     let mut out = std::io::stdout();
     let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
