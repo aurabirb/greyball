@@ -35,26 +35,24 @@ pub(super) const SHUFFLE_ICON: &str = "ϟ";
 
 pub(super) const LIKED_ICON: &str = "♥";
 
-pub(super) const UNLIKED_ICON: &str = "♡";
-
 /// Gap on either side of the top-bar transport cluster.
 pub(super) const TRANSPORT_GAP: usize = 2;
 
 /// The transport buttons' text, space-padded like `tab_label`.
-pub(super) fn transport_labels(state: &PlayerState, liked: Option<bool>) -> [(Transport, String); 5] {
+pub(super) fn transport_labels(state: &PlayerState) -> [(Transport, String); 5] {
     [
         (Transport::Shuffle, format!(" {SHUFFLE_ICON} ")),
         (Transport::Prev, format!(" {PREV_ICON} ")),
         (Transport::PlayPause, format!(" {} ", player_action_glyph(state))),
         (Transport::Next, format!(" {NEXT_ICON} ")),
-        (Transport::Like, format!(" {} ", if liked.is_some() { LIKED_ICON } else { UNLIKED_ICON })),
+        (Transport::Like, format!(" {LIKED_ICON} ")),
     ]
 }
 
 /// Transport buttons' start column and width, packed left-to-right from `start` with no gap between them.
-pub(super) fn transport_layout(start: usize, state: &PlayerState, liked: Option<bool>) -> Vec<(Transport, usize, usize)> {
+pub(super) fn transport_layout(start: usize, state: &PlayerState) -> Vec<(Transport, usize, usize)> {
     let mut x = start;
-    transport_labels(state, liked)
+    transport_labels(state)
         .into_iter()
         .map(|(button, label)| {
             let w = label.width();

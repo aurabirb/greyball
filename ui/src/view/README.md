@@ -38,7 +38,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   companion it goes Docked → Screen → Floating → Docked and never closes (Esc closes it, as any window that is not tabbed).
 - The tab bar is `MedleyView::tabs`: the `Tabbed` windows in startup order, a window moved to `Tabbed`
   appended, never empty. `active` is the one shown; when it moves away its right neighbour takes over.
-  After the tabs come the transport buttons (`transport_layout`, shared by drawing and `TabBar::click`): shuffle (red when on), prev, play/pause, next, and a heart for the playing track (red when liked, italic while a like is in flight, dim otherwise); a click runs `Transport::action`, the heart being `Action::LikePlaying` (same as `=`: `Command::Like` on the playing track, asking first to unlike). The buttons drop out together when they don't fit.
+  After the tabs come the transport buttons (`transport_layout`, shared by drawing and `TabBar::click`): shuffle (red when on), prev, play/pause, next, and a `♥` for the playing track (dim, red when liked, italic while a like is in flight); a click runs `Transport::action`, the heart being `Action::LikePlaying` (same as `=`: `Command::Like` on the playing track, asking first to unlike). The buttons drop out together when they don't fit.
   `1`-`9` and a tab click select by position (`Action::Tab`) and focus that tab's window, whatever had focus; `tab_names` labels them by kind. `MedleyView::open` lists the open non-tab windows, oldest first, which is both dock
   order and z-order, each with the focus it opened over. `show(id)` brings any window into view (its
   tab, else opened and focused) and is what `/`, `:hist`, `:search` and `:open <playlist link>` use; `toggle_window`
