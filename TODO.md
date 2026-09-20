@@ -74,12 +74,18 @@
 ### Features
 - [ ] Bind `v` to toggle the visualizer pane (`BuiltinAction::ToggleVis`, the `:vis` command) by
   default, as a normal rebindable key with its Help row.
-- [ ] Rearrange the Help window (`Section`s in `ui/src/items.rs`): the section that holds the help
-  key (`?`) comes first, with `?` at the top of it; next the player keys — play/pause, `n`/`p`, `s`,
-  `e`, `w` and the new `v` (the owner's shorthand: map these to the actual keys/rows); then the playlist
-  hotkeys section, opening with a 2-line description of how playlist hotkeys work and then the `` ` ``
-  key; the Commands section comes last. Where the other sections (Movement, Windows, Tracks) fall in
-  between is not specified: keep their current relative order after the player keys, or report back.
+- [ ] Rearrange the Help window (`Section`s in `ui/src/items.rs`), in this order: (1) Player first,
+  including the shuffle key and the new `v`, with each description on one line in the Movement
+  section's style, the key in the text ("next track (>)"); (2) a custom-playlist-hotkeys section,
+  opening with a short explanation of how playlist hotkeys work, then the `` ` `` key; (3) Tracks and
+  playlists, with `+` moved into it; (4) Windows, holding `?`, `M`, `P` and the rest of the window
+  keys; Commands stays last. Where Movement falls is not specified: keep it after Windows, or report
+  back. Then review the content: every bound key is listed, and descriptions are trimmed to take as
+  little vertical space as possible.
+- [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
+  hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
+  that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
+  can't.
 - [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
   ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
   clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
