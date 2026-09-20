@@ -174,6 +174,13 @@
     detected skipped, a short summary of what will happen before the final step, re-runnable from
     Settings, advanced options (custom host, manual login) only when asked for.
 
+### Album support
+Design: `docs/collections.md`.
+- [ ] Opened collection title line: add `subtitle: Option<String>` to `BrowsePage` (filled by the
+  source, e.g. "Album · 2019 · 12 tracks") and show it on the list window's existing title line, with
+  `release_label(track_count)` (single ≤3, EP 4–7, else album) once the list is loaded. Also make the
+  Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
+
 ### Queue
 Design: `docs/collections.md`.
 - [ ] Queue entries become `Entry::{Track, Remote}` so a remote album/playlist can be enqueued as one
