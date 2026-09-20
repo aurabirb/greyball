@@ -23,7 +23,8 @@ that serves them, not the more elegant internal.
   scrubbing, cache-only scans, scan analysis of cached files.
 - **New sources are cheap.** A future source (e.g. YouTube) only writes a small provider; the
   simplest returns a CDN link (`Media::Url`) and playback, scrubbing, caching, analysis and status
-  come for free. A source with special needs returns a `Reader` or a `Stream` instead.
+  come for free. A source with special needs returns a `Stream` (with `Media::from_reader` when it
+  has a `Read + Seek`).
 Priorities for agents, in order: perceived latency and never freezing the UI; clean abandon (no
 files, threads or closures left); playback, scrub and analysis working from one download; small,
 consistent API. Do not spend effort on things no feature above needs.
@@ -124,7 +125,7 @@ impl StreamWriter {
   server has no `Accept-Ranges`. `options` carries what a source may need (headers, client,
   retry/refresh hook for signed URLs); `Default` is what a plain CDN link needs. It is the one HTTP
   implementation: the engine uses it for `Media::Url`, and a source with special needs imports it
-  to build its own `Media::Reader`. Built by generalizing `core/src/http_fetch.rs` (`start_get`, the
+  to wrap its own reader with `Media::from_reader`. Built by generalizing `core/src/http_fetch.rs` (`start_get`, the
   shared client) and the player's `stream_body_to_file`; the whole-body helpers are deleted once
   nothing uses them.
 - Decoder mode follows the handle: `len` known and `jumpable`, or `Done` -> built with a byte
@@ -151,17 +152,20 @@ pub enum Intent { Play, Fetch, Peek }   // Play: grace period after release; Fet
   constant) unless re-claimed; it checks between chunks, so there is no timer thread. `Peek`
   readers hold `Weak` only, so an analyzer can never keep a skipped download alive.
 - Providers stay simple: `open(&Rendition) -> Media` where
-  `Media { Path(PathBuf), Url(String), Reader(Box<dyn ReadSeek + Send>), Stream(Box<dyn FnOnce(StreamWriter) + Send>) }`.
-  Four ways to hand over audio, cheapest first, so simple sources stay minimal and reuse the
-  default machinery:
-  - `Url`: "here is a CDN link, you play it" — the engine opens it with a default `RangeReader` and
-    `fill_from_seekable`. The HTTP source and SoundCloud's progressive path stay exactly as they
-    are today.
-  - `Path`: an existing local file (complete stream, nothing to fetch).
-  - `Reader`: a `Read + Seek` the source built itself (Spotify's `AudioFile`; an HTTP source that
-    needs custom headers or URL refresh builds its own `RangeReader`) — engine runs
-    `fill_from_seekable`.
-  - `Stream`: a closure that appends pieces itself (HLS segments), run on a core-owned thread.
+  `Media { Path(PathBuf), Url(String), Stream(Box<dyn FnOnce(StreamWriter) + Send>) }`.
+  One primitive (`Stream`), two conveniences, so simple sources stay minimal and reuse the default
+  machinery:
+  - `Stream`: a closure that gets the `StreamWriter` and fetches and appends pieces itself (HLS
+    segments; anything custom), run on a core-owned thread. This is the only primitive the engine
+    runs.
+  - `Url`: "here is a CDN link, you play it" — sugar for a `Stream` that runs
+    `fill_from_seekable(RangeReader::open(url, default options), writer)`. The HTTP source and
+    SoundCloud's progressive path stay exactly as they are today.
+  - `Path`: an existing local file (a complete stream, nothing to fetch).
+  - `Media::from_reader(reader)` is a plain constructor, not a variant: it returns a `Stream` that
+    runs `fill_from_seekable(reader, writer)` for any `Read + Seek` (Spotify's `AudioFile`; an HTTP
+    source that needs custom headers or URL refresh wraps its own `RangeReader`). Random access,
+    jumps, backfill and cancel behave identically for `Url`, `from_reader` and hand-written streams.
   Provider `open` does its cheap setup synchronously (HLS: resolve + parse the playlist), so setup errors return
   `Err` (SoundCloud then falls back to its progressive transcoding, as today), and it may return a
   retryable error that the engine retries with backoff until the user's claim is gone.
@@ -239,8 +243,8 @@ show a "downloading" mark from `engine.status`.
   cursors are the extension point; nothing in the stream layer would change.
 
 ### Spotify becomes a normal `MediaProvider` (deleting `SpotifyPlayer`)
-- `SpotifyMediaProvider::open` returns `Media::Reader` over the decrypted, header-skipped Ogg
-  (`AudioFile`: random-access, known length -> scrubs during download via `fill_from_seekable`),
+- `SpotifyMediaProvider::open` returns `Media::from_reader(..)` over the decrypted, header-skipped
+  Ogg (`AudioFile`: random-access, known length -> scrubs during download via `fill_from_seekable`),
   at the best bitrate (320 needs Premium; fall back down), never the drain-on-drop reader.
 - It waits (cancellably, internally) for a live session instead of returning `Unsupported`.
 - The plugin keeps the connection: `Link` (session, backoff, `generation`, `died_streak`,
@@ -324,7 +328,7 @@ design.
 - Old: `SpotifyPlayer` hands the URI to librespot's `Player`, which fetches, decrypts, decodes and
   outputs by itself; `Link` handles the session; `spawn_materialize_to_cache` later copies the
   decrypted Ogg into `MediaCache`; scan uses a separate `open_for_scan` fetch.
-- New: `SpotifyMediaProvider::open` returns `Media::Reader` over the decrypted Ogg; `RodioPlayer`
+- New: `SpotifyMediaProvider::open` returns `Media::from_reader(..)` over the decrypted Ogg; `RodioPlayer`
   plays it like any other source; scrubbing jumps through `AudioFile` seeks; the cache fills on
   `Done`; `Link` is unchanged and supplies the session; analyzers `Peek` the same stream.
 
@@ -347,7 +351,8 @@ design.
    seekable one blocks), then a real stitched SoundCloud file; confirm before building. Then: the
    stream module, engine, `Media::Stream`, `MediaCache::persist_file` + sweep, events/status, the
    player integration and its status-line display, `core::http::RangeReader` (default options for
-   `Media::Url`, importable for sources that need more), the `Url`/`Reader`/`Path` wrapping, the
+   `Media::Url`, importable for sources that need more), `Media::from_reader`, the `Url`/`Path`
+   handling (the enum loses `Reader`; its one user, Spotify's scan path, is replaced in stage 2), the
    SoundCloud HLS producer (sequential, retries, `Rendition.duration_ms`), and deletion of every
    old path listed above (`Media::Url` stays; the HTTP source and SoundCloud progressive keep
    returning it). Sources that stop compiling or working (Spotify, scan, anything using
