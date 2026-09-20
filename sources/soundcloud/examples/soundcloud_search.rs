@@ -24,12 +24,12 @@ fn main() {
     }
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
-        println!("  {} — {}  [{}]  {}ms", h.artists.join(", "), h.title, h.renditions[0].uri, h.duration_ms);
+        println!("  {} — {}  [{}]  {}ms", h.artists.join(", "), h.title, h.rendition().uri, h.duration_ms);
     }
 
     if let Some(first) = hits.first() {
-        match src.open(&first.renditions[0]) {
-            Ok(Media::Url(u)) => println!("\nstream for {}: {u}", first.renditions[0].uri),
+        match src.open(first.rendition()) {
+            Ok(Media::Url(u)) => println!("\nstream for {}: {u}", first.rendition().uri),
             Ok(_) => println!("\nstream: unexpected non-URL Media variant"),
             Err(e) => eprintln!("\nopen failed: {e}"),
         }

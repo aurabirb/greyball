@@ -29,6 +29,6 @@ fn main() {
     }
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
-        println!("  {} — {}  [{}]  {}ms  {:?}", h.artists.join(", "), h.title, h.renditions[0].uri, h.duration_ms, h.renditions[0].quality);
+        println!("  {} — {}  [{}]  {}ms  {:?}", h.artists.join(", "), h.title, h.rendition().uri, h.duration_ms, h.rendition().quality);
     }
 }

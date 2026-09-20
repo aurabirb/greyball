@@ -28,3 +28,9 @@ pub use uri::{recognizes, SpotifyRef};
 fn source_id() -> core::SourceId {
     core::SourceId::from("spotify")
 }
+
+// Spotify streams are Ogg Vorbis/AAC, lossy, bitrate negotiated at playback.
+fn track(title: String, artists: Vec<String>, isrc: Option<String>, album: Option<String>, uri: String, duration_ms: u32) -> core::Track {
+    let rendition = core::Rendition::fresh(source_id(), uri, duration_ms, core::Quality::Lossy { kbps: None });
+    core::Track { isrc, album, ..core::Track::fresh(title, artists, rendition) }
+}

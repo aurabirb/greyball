@@ -144,19 +144,25 @@ impl Rendition {
 
 impl Track {
     /// A not-yet-ingested track carrying exactly one rendition.
-    pub fn fresh(title: String, artists: Vec<String>, isrc: Option<String>, album: Option<String>, rendition: Rendition) -> Self {
+    pub fn fresh(title: String, artists: Vec<String>, rendition: Rendition) -> Self {
         Self {
             id: TrackId::new(),
             title,
             artists,
             duration_ms: rendition.duration_ms,
-            isrc,
-            album,
+            isrc: None,
+            album: None,
             year: None,
             attrs: Default::default(),
             tags: vec![],
             renditions: vec![rendition],
         }
+    }
+
+    /// The single rendition of a source-output track.
+    pub fn rendition(&self) -> &Rendition {
+        debug_assert_eq!(self.renditions.len(), 1);
+        &self.renditions[0]
     }
 
     pub fn display_artist(&self) -> String {

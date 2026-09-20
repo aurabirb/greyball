@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Quality, RateLimiter, RemotePage, Rendition, Track};
+use core::{RateLimiter, RemotePage, Track};
 use serde::Deserialize;
 
 const API: &str = "https://api.spotify.com/v1";
@@ -206,9 +206,17 @@ struct SeveralTracks {
 }
 
 impl ApiTrack {
-    fn into_hit(self) -> Option<Track> {
+    fn into_track(self) -> Option<Track> {
         let id = self.id?;
-        Some(Track::fresh(self.name, self.artists.into_iter().map(|a| a.name).collect(), self.external_ids.isrc, self.album.map(|a| a.name), Rendition::fresh(crate::source_id(), format!("spotify:track:{id}"), self.duration_ms.min(u32::MAX as u64) as u32, Quality::Lossy { kbps: None })))
+        let artists = self.artists.into_iter().map(|a| a.name).collect();
+        Some(crate::track(
+            self.name,
+            artists,
+            self.external_ids.isrc,
+            self.album.map(|a| a.name),
+            format!("spotify:track:{id}"),
+            self.duration_ms.min(u32::MAX as u64) as u32,
+        ))
     }
 }
 
@@ -376,7 +384,7 @@ impl WebApi {
             .tracks
             .items
             .into_iter()
-            .filter_map(ApiTrack::into_hit)
+            .filter_map(ApiTrack::into_track)
             .collect())
     }
 
@@ -384,7 +392,7 @@ impl WebApi {
     pub fn track(&self, id: &str) -> Result<Track, String> {
         let url = format!("{API}/tracks/{id}");
         let body: ApiTrack = self.get(&url)?.json().map_err(|e| e.to_string())?;
-        body.into_hit().ok_or_else(|| "track has no id".to_string())
+        body.into_track().ok_or_else(|| "track has no id".to_string())
     }
 
     /// One page of the current user's playlists (owned + followed), as
@@ -433,7 +441,7 @@ impl WebApi {
                         .items
                         .into_iter()
                         .filter_map(|item| item.item)
-                        .filter_map(ApiTrack::into_hit)
+                        .filter_map(ApiTrack::into_track)
                         .collect(),
                 })
             }
@@ -493,7 +501,7 @@ impl WebApi {
                     body.tracks
                         .into_iter()
                         .flatten()
-                        .filter_map(ApiTrack::into_hit)
+                        .filter_map(ApiTrack::into_track)
                         .collect()
                 }
                 // Same Development Quota Mode gap as the initial `/tracks`
@@ -558,7 +566,7 @@ impl WebApi {
         let url = format!("{API}/me/tracks?limit={limit}&offset={offset}");
         let body: SavedTracks = self.get(&url)?.json().map_err(|e| e.to_string())?;
         // `consumed` must be the raw item count, not `hits.len()` — a saved
-        // track with no `track` payload (removed/local) or no id (`into_hit`
+        // track with no `track` payload (removed/local) or no id (`into_track`
         // needs one) is filtered out below, but the API still counted it
         // toward `offset`/`total`. Using the filtered count here would drift
         // every later page's offset by however many got dropped.
@@ -570,7 +578,7 @@ impl WebApi {
                 .items
                 .into_iter()
                 .filter_map(|item| item.track)
-                .filter_map(ApiTrack::into_hit)
+                .filter_map(ApiTrack::into_track)
                 .collect(),
         })
     }

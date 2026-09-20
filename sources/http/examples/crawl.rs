@@ -30,12 +30,12 @@ fn main() {
                 hit.artists.join(", ")
             },
             hit.title,
-            match hit.renditions[0].quality {
+            match hit.rendition().quality {
                 core::Quality::Lossless { .. } => "lossless",
                 core::Quality::Lossy { .. } => "lossy",
                 core::Quality::Unknown => "unknown",
             },
-            hit.renditions[0].uri,
+            hit.rendition().uri,
         );
     });
 

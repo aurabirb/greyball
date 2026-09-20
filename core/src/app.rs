@@ -2250,13 +2250,15 @@ impl Session {
 
             let mut canonical: Option<TrackId> = None;
             for spec in &specs {
-                let hit = Track::fresh(
-                    title.clone(),
-                    artists.clone(),
-                    entry.meta.isrc.clone(),
-                    entry.meta.album.clone(),
-                    Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), dur_ms, spec.quality.clone()),
-                );
+                let hit = Track {
+                    isrc: entry.meta.isrc.clone(),
+                    album: entry.meta.album.clone(),
+                    ..Track::fresh(
+                        title.clone(),
+                        artists.clone(),
+                        Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), dur_ms, spec.quality.clone()),
+                    )
+                };
                 let tid = self.catalog.ingest(hit)?;
                 canonical.get_or_insert(tid);
             }
@@ -2376,8 +2378,6 @@ impl Session {
             let tid = self.catalog.ingest(Track::fresh(
                 title,
                 artists,
-                None,
-                None,
                 Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), 0, spec.quality.clone()),
             ))?;
             match &mut pl {

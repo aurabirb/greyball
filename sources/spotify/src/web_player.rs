@@ -5,7 +5,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use core::{Quality, RemotePage, Rendition, Track};
+use core::{RemotePage, Track};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha1::Sha1;
@@ -294,7 +294,7 @@ fn track_from_item(item: &Value) -> Option<Track> {
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32;
-    Some(Track::fresh(title, artists, None, album, Rendition::fresh(crate::source_id(), uri, duration_ms, Quality::Lossy { kbps: None })))
+    Some(crate::track(title, artists, None, album, uri, duration_ms))
 }
 
 fn query_album(
@@ -371,7 +371,7 @@ fn track_from_album_item(item: &Value, album_name: Option<&str>) -> Option<Track
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32;
-    Some(Track::fresh(title, artists, None, album_name.map(str::to_string), Rendition::fresh(crate::source_id(), uri, duration_ms, Quality::Lossy { kbps: None })))
+    Some(crate::track(title, artists, None, album_name.map(str::to_string), uri, duration_ms))
 }
 
 /// Standard TOTP (HMAC-SHA1, 30s step, 6 digits) at unix time `t`, matching

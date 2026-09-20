@@ -224,7 +224,7 @@ impl SoundcloudSource {
         let v = self.api_get(&format!("/playlists/{id}"), &[("representation", "full")])?;
         let playlist: ApiPlaylistDetail =
             serde_json::from_value(v).map_err(|e| src_err(format!("playlist {id}: {e}")))?;
-        Ok(playlist.tracks.into_iter().filter_map(ApiTrack::into_hit).collect())
+        Ok(playlist.tracks.into_iter().filter_map(ApiTrack::into_track).collect())
     }
 
     /// One page of `/me/track_likes`, for `core::PagedList`.
@@ -244,7 +244,7 @@ impl SoundcloudSource {
             .into_iter()
             .filter_map(|item| serde_json::from_value::<ApiLike>(item).ok())
             .filter_map(|l| l.track)
-            .filter_map(ApiTrack::into_hit)
+            .filter_map(ApiTrack::into_track)
             .collect();
         // api-v2 doesn't report a total on this endpoint the way Spotify's
         // `/me/tracks` does — an empty page is the only "done" signal, so
@@ -394,7 +394,7 @@ impl Source for SoundcloudSource {
             let Ok(t) = serde_json::from_value::<ApiTrack>(item.clone()) else {
                 continue;
             };
-            if let Some(hit) = t.into_hit() {
+            if let Some(hit) = t.into_track() {
                 sink(hit);
             }
         }
@@ -404,7 +404,7 @@ impl Source for SoundcloudSource {
     fn resolve(&self, uri: &str) -> Result<Track> {
         let r = TrackRef::parse(uri).ok_or_else(|| src_err(format!("not a SoundCloud track: {uri:?}")))?;
         self.track_ref(&r)?
-            .into_hit()
+            .into_track()
             .ok_or_else(|| src_err("track has no playable stream"))
     }
 
@@ -590,7 +590,7 @@ struct ApiFormat {
 }
 
 impl ApiTrack {
-    fn into_hit(self) -> Option<Track> {
+    fn into_track(self) -> Option<Track> {
         if self.media.transcodings.is_empty() {
             return None;
         }
@@ -605,6 +605,7 @@ impl ApiTrack {
             .publisher_metadata
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
-        Some(Track::fresh(title, artists, isrc, None, Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None })))
+        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None });
+        Some(Track { isrc, ..Track::fresh(title, artists, rendition) })
     }
 }

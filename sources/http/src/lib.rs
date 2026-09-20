@@ -124,10 +124,10 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Build a `Track` from an absolute audio URL (no network).
-fn hit_from_url(u: &Url) -> Track {
+fn track_from_url(u: &Url) -> Track {
     let stem = stem_of(u);
     let (artists, title) = core::parse_artist_title(&stem);
-    Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), u.to_string(), 0, quality_for(u)))
+    Track::fresh(title, artists, Rendition::fresh(source_id(), u.to_string(), 0, quality_for(u)))
 }
 
 /// Extract every usable link from a listing body, resolved against `base`.
@@ -233,7 +233,7 @@ impl Source for HttpDirSource {
                 if !tokens.iter().all(|t| hay.contains(t.as_str())) {
                     continue;
                 }
-                sink(hit_from_url(&link));
+                sink(track_from_url(&link));
                 emitted += 1;
                 if emitted >= limit {
                     break;
@@ -255,7 +255,7 @@ impl Source for HttpDirSource {
             src: source_id(),
             message: format!("bad url {uri:?}: {e}"),
         })?;
-        Ok(hit_from_url(&u))
+        Ok(track_from_url(&u))
     }
 
     fn browse(&self, node: &BrowseNode, _want: usize) -> Result<BrowsePage> {
@@ -290,7 +290,7 @@ impl Source for HttpDirSource {
                         let name = percent_decode(last_segment(&link));
                         folders.push((name, BrowseNode::Path(link.to_string())));
                     } else if is_audio(&link) {
-                        tracks.push(hit_from_url(&link));
+                        tracks.push(track_from_url(&link));
                     }
                 }
                 Ok(BrowsePage {

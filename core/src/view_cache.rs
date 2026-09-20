@@ -914,7 +914,7 @@ impl ViewCache {
                         let cache_guard = deps.cache.lock().unwrap();
                         let cached = &cache_guard.get(&key).expect("just inserted/read above").tracks;
                         page.tracks.iter().take(compare_len).enumerate().any(|(i, hit)| {
-                            !cached[i].renditions.iter().any(|r| r.source == key.0 && r.uri == hit.renditions[0].uri)
+                            !cached[i].renditions.iter().any(|r| r.source == key.0 && r.uri == hit.rendition().uri)
                         })
                     };
                 if stale {

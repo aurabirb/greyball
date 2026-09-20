@@ -138,7 +138,7 @@ impl Source for SoulseekSource {
                 if count >= MAX_RESULTS {
                     return Ok(());
                 }
-                if let Some(hit) = file_to_hit(resp, file) {
+                if let Some(hit) = track_from_file(resp, file) {
                     sink(hit);
                     count += 1;
                 }
@@ -155,7 +155,8 @@ impl Source for SoulseekSource {
         if artists.is_empty() {
             artists.push(track.username.clone());
         }
-        Ok(Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), uri.to_string(), 0, quality_for(&extension(&track.filename), None, None, None))))
+        let quality = quality_for(&extension(&track.filename), None, None, None);
+        Ok(Track::fresh(title, artists, Rendition::fresh(source_id(), uri.to_string(), 0, quality)))
     }
 
     fn browse(&self, node: &BrowseNode, _want: usize) -> Result<BrowsePage> {
@@ -284,7 +285,7 @@ fn quality_for(ext: &str, bit_rate: Option<u32>, bit_depth: Option<u32>, sample_
     }
 }
 
-fn file_to_hit(resp: &SearchResponse, file: &SearchFile) -> Option<Track> {
+fn track_from_file(resp: &SearchResponse, file: &SearchFile) -> Option<Track> {
     let track = TrackRef { username: resp.username.clone(), filename: file.filename.clone(), size: file.size };
     let (mut artists, title) = core::parse_artist_title(&stem(&file.filename));
     if title.trim().is_empty() {
@@ -293,5 +294,7 @@ fn file_to_hit(resp: &SearchResponse, file: &SearchFile) -> Option<Track> {
     if artists.is_empty() {
         artists.push(resp.username.clone());
     }
-    Some(Track::fresh(title, artists, None, None, Rendition::fresh(source_id(), track.to_uri(), file.length.unwrap_or(0).saturating_mul(1000), quality_for(&file.extension.to_lowercase(), file.bit_rate, file.bit_depth, file.sample_rate))))
+    let duration_ms = file.length.unwrap_or(0).saturating_mul(1000);
+    let quality = quality_for(&file.extension.to_lowercase(), file.bit_rate, file.bit_depth, file.sample_rate);
+    Some(Track::fresh(title, artists, Rendition::fresh(source_id(), track.to_uri(), duration_ms, quality)))
 }

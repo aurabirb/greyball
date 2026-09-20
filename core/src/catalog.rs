@@ -77,9 +77,9 @@ impl Catalog {
     /// Fold a fresh track into the library. Returns the id of the track it belongs to.
     pub fn ingest(&self, hit: Track) -> Result<TrackId> {
         let _guard = self.lock.lock().unwrap();
-        let (source, uri) = (hit.renditions[0].source.clone(), hit.renditions[0].uri.clone());
+        let r = hit.rendition();
         // 1. exact rendition dedupe
-        if let Some(t) = self.store.track_by_rendition(&source, &uri)? {
+        if let Some(t) = self.store.track_by_rendition(&r.source, &r.uri)? {
             return Ok(t.id);
         }
 
@@ -117,7 +117,7 @@ impl Catalog {
     }
 
     fn append_rendition(&self, t: &mut Track, hit: &Track, reason: LinkReason) {
-        let mut r = hit.renditions[0].clone();
+        let mut r = hit.rendition().clone();
         r.link = reason;
         merge_rendition(&mut t.renditions, r);
         merge_metadata(t, hit.isrc.clone(), hit.duration_ms, hit.album.clone());
