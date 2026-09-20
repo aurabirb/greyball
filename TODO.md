@@ -33,6 +33,10 @@
   Help/Log go through the one scrollbar function; the marker input is optional so windows with no
   playing row draw exactly as before.
 ### Bugs
+- [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
+  loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
+  keep reflecting the audio that is actually playing, and switch only when the new track's audio
+  starts. Decide what the readout shows if the new track fails to load.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
@@ -78,6 +82,9 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
+  ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
+  clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
 - [ ] Let the bottom status line's scrubber grow leftward into spare width instead of staying a fixed
   `BAR_WIDTH` (24, `ui/src/view/status_line.rs`). Today `StatusLine::layout` reserves the fixed bar and
   hands every spare column to the title field (`name_w`), which `pad`s a short title with
