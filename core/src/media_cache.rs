@@ -34,7 +34,7 @@
 //! nested inside it). The filename is a readability nicety for anyone
 //! `ls`-ing the cache dir; the redb index is the actual source of truth
 //! mapping it back to `(source, uri)`, and every lookup here still goes
-//! through `(source, uri)`, never the filename. Extra `<name>*.redb` files beside the index are merged at startup.
+//! through `(source, uri)`, never the filename. Extra `<name>[-_. ]*.redb` files beside the index are merged at startup.
 //!
 //! Resolving a display name needs a `Track`, which `MediaCache` doesn't
 //! otherwise have — it takes a `Store` handle solely to look one up
@@ -400,7 +400,7 @@ impl MediaCache {
     }
 }
 
-/// Merges sibling `<cache dir name>*.redb` files into the live index (existing keys win), then deletes them.
+/// Merges sibling `<cache dir name>[-_. ]*.redb` files into the live index (existing keys win), then deletes them.
 fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Database {
     let (Some(parent), Some(stem), Some(live_name)) = (index_path.parent(), dir.file_name(), index_path.file_name())
     else {
@@ -413,7 +413,11 @@ fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Datab
         .filter(|e| {
             let name = e.file_name();
             let n = name.to_string_lossy();
-            name != live_name && n.starts_with(&stem) && n.ends_with(".redb") && e.path().is_file()
+            let sep_rest = n
+                .strip_suffix(".redb")
+                .and_then(|s| s.strip_prefix(stem.as_str()))
+                .is_some_and(|r| r.starts_with(['-', '_', '.', ' ']));
+            name != live_name && sep_rest && e.path().is_file()
         })
         .map(|e| e.path())
         .collect();
@@ -429,6 +433,7 @@ fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Datab
         return index;
     }
 
+    let mut merged = Vec::new();
     for extra in extras {
         let incoming = match (|| -> Result<Database, Box<dyn std::error::Error>> {
             let db = Database::open(&extra)?;
@@ -444,24 +449,31 @@ fn ingest_extra_indexes(index: Database, dir: &Path, index_path: &Path) -> Datab
         match merge_index(&incoming, &index) {
             Ok((inserted, skipped)) => {
                 drop(incoming);
-                match std::fs::remove_file(&extra) {
-                    Ok(()) => log::info!(
-                        "media_cache: ingested {}: inserted {inserted}, skipped {skipped}",
-                        extra.display()
-                    ),
-                    Err(e) => log::warn!("media_cache: ingested {} but could not delete it: {e}", extra.display()),
-                }
+                log::info!("media_cache: ingested {}: inserted {inserted}, skipped {skipped}", extra.display());
+                merged.push(extra);
             }
             Err(e) => {
                 log::warn!("media_cache: ingest of {} failed, restoring backup: {e}", extra.display());
                 drop(incoming);
                 drop(index);
-                std::fs::copy(&bak, index_path)
-                    .unwrap_or_else(|e| panic!("media cache index restore {}: {e}", bak.display()));
+                let mut tmp = index_path.as_os_str().to_owned();
+                tmp.push(".restore.tmp");
+                let tmp = PathBuf::from(tmp);
+                if let Err(e) = std::fs::copy(&bak, &tmp) {
+                    let _ = std::fs::remove_file(&tmp);
+                    panic!("media cache index restore {}: {e}", bak.display());
+                }
+                std::fs::rename(&tmp, index_path)
+                    .unwrap_or_else(|e| panic!("media cache index restore {}: {e}", index_path.display()));
                 let restored = Database::create(index_path)
                     .unwrap_or_else(|e| panic!("media cache index {}: {e}", index_path.display()));
                 return restored;
             }
+        }
+    }
+    for extra in merged {
+        if let Err(e) = std::fs::remove_file(&extra) {
+            log::warn!("media_cache: ingested {} but could not delete it: {e}", extra.display());
         }
     }
     index
