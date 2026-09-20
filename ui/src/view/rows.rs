@@ -305,7 +305,7 @@ const SOURCE_MIN_LIST_W: usize = 80;
 const ROW_MARK_W: usize = 2;
 
 /// Column a row's title text starts at (after the liked-marker slot) — what the title row is indented by.
-fn main_col_start(content_w: usize) -> usize {
+pub(super) fn main_col_start(content_w: usize) -> usize {
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
     ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start + LIKED_MARK_W)
 }

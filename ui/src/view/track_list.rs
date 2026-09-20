@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cursive::{Printer, Rect};
+use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
 
 use fuzzy_matcher::FuzzyMatcher;
@@ -15,7 +16,8 @@ use crate::row::RowItem;
 use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
-use super::rows::{BACK_LABEL, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
+use super::text::{in_span, scroll_title};
+use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -88,6 +90,8 @@ enum KindFilter {
 }
 
 impl KindFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Songs, Self::Albums, Self::Playlists];
+
     fn next(self) -> Self {
         match self {
             Self::All => Self::Songs,
@@ -97,12 +101,30 @@ impl KindFilter {
         }
     }
 
+    fn title(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Songs => "Songs",
+            Self::Albums => "Albums",
+            Self::Playlists => "Playlists",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::All => "all",
             Self::Songs => "songs",
             Self::Albums => "albums",
             Self::Playlists => "playlists",
+        }
+    }
+
+    fn short(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Songs => "Songs",
+            Self::Albums => "Alb",
+            Self::Playlists => "Pl",
         }
     }
 
@@ -157,7 +179,12 @@ pub(super) struct ListFrame {
     pub(super) assignable: bool,
     /// The row under the cursor already has a key.
     keyed: bool,
+    /// Search results per kind, in `KindFilter::ALL` order.
+    kind_counts: Option<[usize; 4]>,
 }
+
+/// Room the query keeps in a Search title row before the kind bar gives ground.
+const QUERY_MIN: usize = 12;
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
 pub(super) struct TrackList {
@@ -239,11 +266,59 @@ impl TrackList {
     }
 
     pub(super) fn cycle_kinds(&mut self) {
-        if self.kind == ListKind::Search && matches!(self.open, Open::TopLevel) {
-            self.kinds = self.kinds.next();
+        self.set_kinds(self.kinds.next());
+    }
+
+    fn set_kinds(&mut self, kinds: KindFilter) {
+        if self.kind == ListKind::Search && matches!(self.open, Open::TopLevel) && kinds != self.kinds {
+            self.kinds = kinds;
             self.state = ListState::default();
             self.view_gen += 1;
         }
+    }
+
+    fn kind_counts(&self, s: &Session) -> Option<[usize; 4]> {
+        if self.kind != ListKind::Search || !matches!(self.open, Open::TopLevel) {
+            return None;
+        }
+        let hits = s.search_collections();
+        let of = |kind| hits.iter().filter(|hit| hit.1 == kind).count();
+        let (songs, albums, playlists) = (s.results_len(), of(ItemKind::Album), of(ItemKind::Playlist));
+        Some([songs + albums + playlists, songs, albums, playlists])
+    }
+
+    /// The kind bar's segments as `(kind, start, width, text)` right-aligned in a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks.
+    fn kind_bar(&self, content_w: usize, counts: [usize; 4]) -> Vec<(KindFilter, usize, usize, String)> {
+        let room = content_w.saturating_sub(main_col_start(content_w) + QUERY_MIN);
+        let seg = |kind: KindFilter, n: usize, short: bool, count: bool| {
+            let name = if short { kind.short() } else { kind.title() };
+            if count { format!(" {name} {n} ") } else { format!(" {name} ") }
+        };
+        let tiers = [(false, true), (false, false), (true, false)];
+        let all = KindFilter::ALL.into_iter().enumerate();
+        let mut segs: Vec<(KindFilter, String)> = Vec::new();
+        for (short, count) in tiers {
+            segs = all.clone().map(|(i, kind)| (kind, seg(kind, counts[i], short, count))).collect();
+            if segs.iter().map(|(_, t)| t.chars().count()).sum::<usize>() <= room {
+                break;
+            }
+        }
+        let width = |segs: &[(KindFilter, String)]| segs.iter().map(|(_, t)| t.chars().count()).sum::<usize>();
+        if width(&segs) > room {
+            let i = KindFilter::ALL.iter().position(|&k| k == self.kinds).unwrap_or(0);
+            segs = vec![(self.kinds, seg(self.kinds, counts[i], true, true))];
+        }
+        if width(&segs) > room {
+            return Vec::new();
+        }
+        let mut x = content_w - width(&segs);
+        segs.into_iter()
+            .map(|(kind, text)| {
+                let w = text.chars().count();
+                x += w;
+                (kind, x - w, w, text)
+            })
+            .collect()
     }
 
     pub(super) fn is_search(&self) -> bool {
@@ -552,7 +627,7 @@ impl TrackList {
                 ))],
                 None => vec![],
             },
-            (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
+            (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results - click All above", self.kinds.label()))],
             (ListKind::Search, _) => {
                 let tracks = self.search_tracks(s);
                 let mut rows = if offset < tracks { track_rows(s.results_window(offset, limit)) } else { vec![] };
@@ -620,6 +695,7 @@ impl TrackList {
                 loading: self.loading(s),
                 unit: self.unit(total),
                 assignable,
+                kind_counts: self.kind_counts(s),
                 keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
@@ -671,8 +747,21 @@ impl TrackList {
 
     /// `marked` brackets the title, the focus marker docked windows use.
     pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame) {
-        let title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
+        let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
+        let content_w = printer.size.x.saturating_sub(1);
+        let bar = frame.kind_counts.map(|counts| self.kind_bar(content_w, counts)).unwrap_or_default();
+        if let Some(&(_, start, ..)) = bar.first() {
+            title = scroll_title(&title, start.saturating_sub(main_col_start(content_w) + 1), 0);
+        }
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state.offset, self.state.cursor, frame.total);
+        for (kind, start, _, text) in bar {
+            if kind == self.kinds {
+                let style = ColorStyle::new(Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
+                printer.with_color(style, |p| p.print((start, 0), &text));
+            } else {
+                printer.print((start, 0), &text);
+            }
+        }
     }
 
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
@@ -707,6 +796,14 @@ impl TrackList {
                 return WindowOutcome::Ignored;
             }
             let local = *position - *offset - rect.top_left();
+            if matches!(mouse, MouseEvent::Press(MouseButton::Left)) && local.y == 0 {
+                let content_w = rect.width().saturating_sub(1);
+                let bar = self.kind_counts(s).map(|counts| self.kind_bar(content_w, counts)).unwrap_or_default();
+                if let Some(&(kind, ..)) = bar.iter().find(|&&(_, start, w, _)| in_span(local.x, (start, w))) {
+                    self.set_kinds(kind);
+                    return WindowOutcome::Consumed;
+                }
+            }
             let back = !matches!(self.open, Open::TopLevel) && back_button_fits(rect.width().saturating_sub(1));
             if back && matches!(mouse, MouseEvent::Press(MouseButton::Left)) && local.y == 0 && local.x < BACK_LABEL.len() {
                 self.show_top(None);
