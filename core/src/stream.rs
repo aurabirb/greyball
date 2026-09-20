@@ -357,9 +357,9 @@ impl StreamWriter {
             }
             let end = st.ranges.last().map_or(0, |r| r.end);
             let len = st.len.unwrap_or(end);
-            let complete = if len == 0 { st.ranges.is_empty() } else { st.ranges.len() == 1 && st.ranges[0] == (0..len) };
-            if !complete {
-                let why = format!("incomplete: {} of {len} bytes", downloaded(&st.ranges));
+            // An empty source is a failure, never a cache hit.
+            if st.ranges.len() != 1 || st.ranges[0] != (0..len) {
+                let why = if len == 0 { "empty".to_string() } else { format!("incomplete: {} of {len} bytes", downloaded(&st.ranges)) };
                 self.shared.set_phase(&mut st, StreamState::Failed(why));
                 return;
             }

@@ -79,7 +79,7 @@ impl RangeReader {
         let client = this.client.clone();
         let resp = this.send(&client, Some((start, start + CHUNK - 1)))?;
         if resp.status().as_u16() == 206 {
-            this.len = total_from_content_range(&resp);
+            this.len = content_range(&resp, start)?;
             let chunk = resp.bytes().map_err(io::Error::other)?.to_vec();
             this.mode = Mode::Ranged { chunk, chunk_start: start };
         } else {
@@ -125,6 +125,7 @@ impl RangeReader {
         let resp = self.send(&client, Some((pos, pos + CHUNK - 1)))?;
         match resp.status().as_u16() {
             206 => {
+                content_range(&resp, pos)?;
                 let bytes = resp.bytes().map_err(io::Error::other)?.to_vec();
                 self.mode = Mode::Ranged { chunk: bytes, chunk_start: pos };
             }
@@ -138,8 +139,17 @@ impl RangeReader {
     }
 }
 
-fn total_from_content_range(resp: &Response) -> Option<u64> {
-    resp.headers().get(CONTENT_RANGE)?.to_str().ok()?.rsplit('/').next()?.parse().ok()
+/// The total length a 206 reports, after checking it really starts at `start` (a shifted range would corrupt the cache).
+fn content_range(resp: &Response, start: u64) -> io::Result<Option<u64>> {
+    let header = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let (span, total) = header
+        .strip_prefix("bytes ")
+        .and_then(|h| h.split_once('/'))
+        .ok_or_else(|| io::Error::other(format!("206 with Content-Range {header:?}")))?;
+    if span.split_once('-').and_then(|(first, _)| first.parse().ok()) != Some(start) {
+        return Err(io::Error::other(format!("range from {start} answered with Content-Range {header:?}")));
+    }
+    Ok(total.parse().ok())
 }
 
 impl Read for RangeReader {

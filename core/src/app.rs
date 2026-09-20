@@ -1210,7 +1210,7 @@ impl Session {
                                     self.advance(false);
                                 } else {
                                     self.load_failures = 0;
-                                    self.queue.stop();
+                                    self.stop_playback();
                                     self.shown.write().now_playing = None;
                                     self.warn("playback", &format!("stopped: {MAX_LOAD_FAILURES} tracks in a row failed to load"));
                                 }
@@ -1970,6 +1970,10 @@ impl Session {
     /// (see `cache_rendition`); `false` when nothing is cached or no player takes it.
     fn play_from_cache(&mut self, track: &Track, record: bool) -> bool {
         let Some(r) = cache_rendition(&self.media_cache, track) else { return false };
+        // The cache entry that just failed to load must not be retried forever.
+        if self.failed_playback_sources.contains(&r.source) {
+            return false;
+        }
         let Some(p) = self.pick_player(&r) else { return false };
         self.start_playback(track, &r, p, record);
         true
@@ -2014,6 +2018,15 @@ impl Session {
         }
         if self.play_next_in_context() {
             return;
+        }
+        self.stop_playback();
+    }
+
+    /// Nothing left to play: silence the player (it may still be on the previous track) and clear `current`.
+    fn stop_playback(&mut self) {
+        if let Some(p) = self.now_playing_player.take() {
+            log::debug!("player: nothing left to play, stopping the player");
+            p.stop();
         }
         self.queue.stop();
     }
