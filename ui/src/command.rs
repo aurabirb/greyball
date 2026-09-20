@@ -33,9 +33,10 @@ pub enum Parsed {
     ExportM3u { name: String, path: Option<PathBuf> },
     /// `open <url-or-path>` — unifies the old `addfile`/`playlist`/`import`
     /// commands; classified against the live `Session` in
-    /// `view::MedleyView::open_arg` (a recognized source URI opens a
-    /// playlist link, a `.m3u`/`.m3u8` path imports, anything else local is
-    /// added to the currently open playlist).
+    /// `view::MedleyView::open_arg` (a playlist/album URL opens as a remote
+    /// list, a track URL is added to the open playlist or the queue, a
+    /// `.m3u`/`.m3u8` path imports, anything else local is added to the
+    /// currently open playlist).
     Open(String),
     /// `open` with no arguments — open the modal filesystem browser.
     OpenBrowse,
