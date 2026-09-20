@@ -141,9 +141,11 @@
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
 - [ ] Make sure the local filter (`/`) works in every panel that shows a track list — Now Playing,
-  Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
-  every placement (tab, docked, floating), filtering that window's own list through the same
-  `TrackList` path. List the panels where it does nothing or acts on the wrong window, then fix them.
+  Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — and in
+  Log, in every placement (tab, docked, floating), filtering that window's own list through the same
+  `TrackList` path (Log through its existing filter). `/` on a window that has its own filter filters
+  that window; it jumps to the Search window only from a window with nothing to filter (e.g. Settings).
+  List the panels where it does nothing or acts on the wrong window, then fix them.
 
 - [ ] Fewer steps in the Soulseek (slskd) setup, and a proper setup dialog for every plugin.
   Today a plugin's setup is a run of one-line prompts inside the warnings panel
