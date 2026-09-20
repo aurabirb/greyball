@@ -246,6 +246,81 @@ show a "downloading" mark from `engine.status`.
     rodio path; volume is the rodio sink volume; the visualizer tap is rodio's `Tapped`;
     `spawn_materialize_to_cache`/`is_materialized` are replaced by the engine's cache-on-`Done`.
 
+## Before and after: worked examples
+"Old" is how the code works today (from reading it; verify anything you rely on). "New" is this
+design.
+
+### 1. Play an uncached progressive MP3 (HTTP source, SoundCloud progressive)
+- Old: the provider returns `Media::Url`; `open_media` -> `open_streaming_url` calls
+  `core::start_get`. With a `Content-Length` it preallocates a tempfile, spawns
+  `stream_body_to_file`, and returns a `StreamingReader`; the decoder is built with the byte length.
+  Without a `Content-Length` the whole body downloads first. Bytes arrive strictly in order. On
+  completion `cache_fetched` copies the file into `MediaCache` (`put_file`) and `Materialized` fires.
+- New: the provider returns `Media::Reader(RangeReader::open(url, ..))`. `engine.open(r, Play)`
+  starts `fill_from_seekable` on a core thread; the load thread waits for the first bytes and builds
+  the decoder; on `Done` the file is renamed into `MediaCache` and `Stream{Done}` fires. No
+  `Content-Length` needed for the range mode.
+
+### 2. Scrub in that MP3 while it is still downloading
+- Old: `try_seek` succeeds; the next `read` blocks on the condvar until the sequential download
+  reaches that offset. Scrubbing to 90% of a 60 MB file waits for the first 90%.
+- New: the decoder seeks, the reader stalls on the gap and records a `want`; the producer jumps
+  there with a `Range` request, the state shows `Buffering`, playback resumes as soon as that
+  region is on disk; the rest backfills afterwards.
+
+### 3. Play an uncached SoundCloud HLS track (a long set)
+- Old: `open_hls` fetches the playlist, then the init segment and every media segment one blocking
+  request at a time, appends to a tempfile, `keep()`s it, and returns `Media::Path`; `open_media`
+  `link_local`s it. Sound starts only after the last segment; a multi-hour set waits for hundreds
+  of requests. The header duration is 0 until `duration_patch` runs on the finished file.
+- New: `open_hls` parses the playlist synchronously and returns `Media::Stream`; the closure appends
+  segments as they arrive. Sound starts after the first segment; the decoder is non-seekable while
+  the stream is unfinished; the duration comes from `Rendition.duration_ms`; a scrub click is
+  ignored until `Done`, after which the file (renamed into the cache) seeks with `duration_patch`.
+  No stray `/tmp` file.
+
+### 4. Skip to the next track mid-download
+- Old (verify): the sink is dropped, but the download thread has no cancel path and runs to the end
+  of the body; the tempfile lives until its handle drops. Nothing tells the UI or scan anything.
+- New: the `Play` claim is released; after `GRACE` the producer stops between chunks, the state
+  becomes `Cancelled` (`Stream{Cancelled}`), and the tempfile is removed with the last handle.
+  Analyzer `Peek` readers get an error, which the plugin maps to `Retry`.
+
+### 5. Press play on the same uncached track three times in a row
+- Old: each load misses `MediaCache` (the file is only cached after a full download) and starts a
+  fresh download.
+- New: `engine.open` finds the running stream for the key and returns the same handle (a new
+  `Claim`); still one fetch. Going A -> B -> A within `GRACE` re-claims A's download.
+
+### 6. The playing track gets its BPM and waveform
+- Old: `Playing` -> `prioritize`; the priority attempt is `CacheOnly`, so it fails until the track
+  is fully cached; `Materialized` re-prioritizes it and the plugin decodes the finished file.
+  Non-playing tracks go through `MediaProvider::materialize` (a whole GET) or, for Spotify,
+  `Player::open_for_scan` (a second fetch of the same audio).
+- New: `Playing` -> `prioritize` -> `engine.open(r, Peek)` returns a reader on the running stream;
+  BPM starts as soon as its 60 s prefix is on disk, the waveform consumes progressively; both finish
+  with one `Catalog::patch` -> `TrackUpdated`. Background walks use `engine.open(r, Fetch)`.
+
+### 7. Play a Spotify track
+- Old: `SpotifyPlayer` hands the URI to librespot's `Player`, which fetches, decrypts, decodes and
+  outputs by itself; `Link` handles the session; `spawn_materialize_to_cache` later copies the
+  decrypted Ogg into `MediaCache`; scan uses a separate `open_for_scan` fetch.
+- New: `SpotifyMediaProvider::open` returns `Media::Reader` over the decrypted Ogg; `RodioPlayer`
+  plays it like any other source; scrubbing jumps through `AudioFile` seeks; the cache fills on
+  `Done`; `Link` is unchanged and supplies the session; analyzers `Peek` the same stream.
+
+### 8. The network drops mid-track
+- Old: a read error ends the decoder, the sink empties, `tick` sends `Finished`, and the queue
+  advances as if the track had ended normally (verify).
+- New: the producer retries the chunk 3 times, then `fail`s; the state is `Failed`, and the player
+  reports `LoadFailed`/`BackgroundFailure` instead of `Finished`. (The generic "resume after
+  failure" is a follow-up TODO item.)
+
+### 9. What the user sees while a track loads
+- Old: nothing between pressing play and sound; for HLS a long silent wait; no buffering state.
+- New: `Loading`, then `Stream{Connecting/Fetching}`; the status line shows "buffering" or a
+  download percent; an underrun pauses with "buffering" and resumes by itself.
+
 ## Stages
 1. **Remove old, write the new infrastructure.** First a short spike (no repo changes): synthetic
    fMP4 with `ffmpeg` (`-movflags frag_keyframe+empty_moov+default_base_moof`), truncated, into a
