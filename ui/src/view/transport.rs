@@ -11,7 +11,6 @@ pub(super) enum Transport {
     PlayPause,
     Next,
     Shuffle,
-    Like,
 }
 
 impl Transport {
@@ -21,7 +20,6 @@ impl Transport {
             Transport::PlayPause => Command::PlayPause,
             Transport::Next => Command::Next,
             Transport::Shuffle => Command::ToggleShuffle,
-            Transport::Like => return Action::LikePlaying,
         })
     }
 }
@@ -39,13 +37,12 @@ pub(super) const LIKED_ICON: &str = "♥";
 pub(super) const TRANSPORT_GAP: usize = 2;
 
 /// The transport buttons' text, space-padded like `tab_label`.
-pub(super) fn transport_labels(state: &PlayerState) -> [(Transport, String); 5] {
+pub(super) fn transport_labels(state: &PlayerState) -> [(Transport, String); 4] {
     [
         (Transport::Shuffle, format!(" {SHUFFLE_ICON} ")),
         (Transport::Prev, format!(" {PREV_ICON} ")),
         (Transport::PlayPause, format!(" {} ", player_action_glyph(state))),
         (Transport::Next, format!(" {NEXT_ICON} ")),
-        (Transport::Like, format!(" {LIKED_ICON} ")),
     ]
 }
 

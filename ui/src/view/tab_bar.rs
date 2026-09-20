@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::memo::Memo;
 use super::status_line::StatusLine;
 use super::text::{active_style, in_span, scroll_title};
-use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
+use super::transport::{LIKED_ICON, TRANSPORT_GAP, Transport, transport_labels, transport_layout};
 
 /// The resampled waveform of the last (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
@@ -23,6 +23,12 @@ const WAVE_MIN_BAR: usize = 80;
 
 /// The least the title keeps when a waveform shares its room.
 const TITLE_MIN: usize = 16;
+
+/// The heart's column plus the gap before the title.
+const HEART_W: usize = 2;
+
+/// The least title columns that must remain for the heart to show.
+const HEART_TITLE_MIN: usize = 4;
 
 /// Bars from one to eight eighths tall.
 const GLYPHS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
@@ -54,6 +60,7 @@ pub(super) enum TabBarHit {
     /// The tab at this index of `TabBar::tabs`.
     Tab(usize),
     Transport(Transport),
+    Like,
     /// A seek along the waveform, or along the title when there is none.
     Seek(Command),
 }
@@ -74,6 +81,8 @@ struct Layout {
     tabs: Vec<(usize, usize, usize)>,
     /// Empty when the buttons don't fit.
     transport: Vec<(Transport, usize, usize)>,
+    /// Column of the like heart, one gap left of the title; none when nothing plays or there is no room.
+    heart: Option<usize>,
     /// `(start, width)` of the title, right-aligned in the room right of the buttons.
     title: (usize, usize),
     /// `(start, width)` of the waveform, when there is an envelope and room for it.
@@ -119,13 +128,16 @@ impl TabBar<'_> {
         } else {
             (Vec::new(), transport_start)
         };
-        let detail_w = content_w.saturating_sub(detail_start);
+        let room = content_w.saturating_sub(detail_start);
+        let has_heart = self.status.now_playing_id.is_some() && room >= HEART_W + HEART_TITLE_MIN;
+        let detail_w = room.saturating_sub(if has_heart { HEART_W } else { 0 });
         let want = self.status.now_playing.width();
         let has_wave = total_w >= WAVE_MIN_BAR && !self.status.waveform.is_empty() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
         let title_w = if has_wave { want.min((detail_w / 2).max(TITLE_MIN)).min(detail_w - TRANSPORT_GAP - WAVE_MIN) } else { want.min(detail_w) };
         let wave = has_wave.then(|| (detail_start, detail_w - title_w - if title_w > 0 { TRANSPORT_GAP } else { 0 }));
-        let title = (detail_start + detail_w - title_w, title_w);
-        Layout { collapsed, tabs, transport, title, wave }
+        let title = (detail_start + room - title_w, title_w);
+        let heart = has_heart.then(|| detail_start + detail_w - title_w);
+        Layout { collapsed, tabs, transport, heart, title, wave }
     }
 
     /// The visible title and its start column, clipped to the layout's title width.
@@ -156,17 +168,19 @@ impl TabBar<'_> {
                     printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| p.print((start, 0), label));
                 }
                 Transport::Shuffle => printer.with_effect(Effect::Dim, |p| p.print((start, 0), label)),
-                Transport::Like => match self.status.liked {
-                    Some(pending) => printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| {
-                        if pending {
-                            p.with_effect(Effect::Italic, |p| p.print((start, 0), label));
-                        } else {
-                            p.print((start, 0), label);
-                        }
-                    }),
-                    None => printer.with_effect(Effect::Dim, |p| p.print((start, 0), label)),
-                },
                 _ => printer.print((start, 0), label),
+            }
+        }
+        if let Some(x) = layout.heart {
+            match self.status.liked {
+                Some(pending) => printer.with_color(ColorStyle::front(Color::Dark(BaseColor::Red)), |p| {
+                    if pending {
+                        p.with_effect(Effect::Italic, |p| p.print((x, 0), LIKED_ICON));
+                    } else {
+                        p.print((x, 0), LIKED_ICON);
+                    }
+                }),
+                None => printer.with_effect(Effect::Dim, |p| p.print((x, 0), LIKED_ICON)),
             }
         }
         let (start, text) = self.title(&layout);
@@ -221,6 +235,9 @@ impl TabBar<'_> {
         let layout = self.layout(total_w);
         if let Some(&(button, ..)) = layout.transport.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Transport(button));
+        }
+        if layout.heart == Some(x) {
+            return Some(TabBarHit::Like);
         }
         if let Some(&(i, ..)) = layout.tabs.iter().find(|&&(_, s, w)| in_span(x, (s, w))) {
             return Some(TabBarHit::Tab(i));

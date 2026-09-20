@@ -578,6 +578,9 @@ impl MedleyView {
                 if let Some(TabBarHit::Transport(button)) = hit {
                     return self.handle_action(button.action());
                 }
+                if let Some(TabBarHit::Like) = hit {
+                    return self.handle_action(Action::LikePlaying);
+                }
                 if let Some(TabBarHit::Seek(cmd)) = hit {
                     return self.run(cmd);
                 }
