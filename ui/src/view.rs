@@ -419,7 +419,7 @@ impl MedleyView {
 
 impl View for MedleyView {
     fn draw(&self, printer: &Printer) {
-        if let Some(modal) = &self.modal {
+        if let Some(modal) = self.modal.as_ref().filter(|m| m.covers_screen()) {
             self.draw_modal(modal, printer);
             return;
         }
@@ -488,6 +488,9 @@ impl View for MedleyView {
                 let style = if self.focus == Focus::Warnings { ColorStyle::new(bg, fg) } else { ColorStyle::new(fg, bg) };
                 printer.windowed(rect).with_color(style, |p| p.print((0, 0), &warnings_label(chrome.warn_count)));
             }
+        }
+        if let Some(modal) = &self.modal {
+            self.draw_modal(modal, printer);
         }
     }
 

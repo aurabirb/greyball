@@ -19,8 +19,13 @@ pub(super) enum Modal {
 }
 
 impl Modal {
-    /// A modal covers the whole screen, so nothing may draw in a corner under or over it.
+    /// A modal takes all input, so nothing may draw in a corner under or over it.
     pub(super) const CORNERS: Corners = Corners::NONE;
+
+    /// Whether the main view is not drawn under it.
+    pub(super) fn covers_screen(&self) -> bool {
+        matches!(self, Modal::Warnings(_))
+    }
 }
 
 /// What an event meant to the open modal, for `MedleyView` to act on.
@@ -63,7 +68,7 @@ pub(super) fn draw_modal_frame<'a, 'b>(
 }
 
 impl MedleyView {
-    /// Every modal covers the whole screen today.
+    /// The picker sizes and places itself from the screen; the warnings modal covers it.
     fn modal_rect(&self) -> Rect {
         Rect::from_size((0, 0), self.last_screen_size)
     }
@@ -82,7 +87,7 @@ impl MedleyView {
         let s = session.lock().unwrap();
         match &mut self.modal {
             Some(Modal::Warnings(m)) => m.relayout(resized, rect, &Warnings::read(&s)),
-            Some(Modal::Picker(picker)) => picker.relayout(resized, rect, &s),
+            Some(Modal::Picker(picker)) => picker.relayout(resized, self.last_screen_size, &s),
             None => {}
         }
     }
@@ -102,7 +107,7 @@ impl MedleyView {
                 });
                 m.draw(printer, rect, &warnings, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
             }
-            Modal::Picker(picker) => picker.draw(printer, rect),
+            Modal::Picker(picker) => picker.draw(printer, printer.size),
         }
     }
 
@@ -112,7 +117,7 @@ impl MedleyView {
         let outcome = match &mut self.modal {
             None => return EventResult::Ignored,
             Some(Modal::Warnings(m)) => m.on_event(event, rect, &Warnings::read(&session.lock().unwrap())),
-            Some(Modal::Picker(picker)) => picker.on_event(event, rect),
+            Some(Modal::Picker(picker)) => picker.on_event(event, self.last_screen_size),
         };
         match outcome {
             ModalOutcome::Stay => {}

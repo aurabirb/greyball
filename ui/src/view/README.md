@@ -301,7 +301,7 @@ stamp and re-reads in place from `relayout_modal` — never `draw` — only when
 is open: the picker keeps its cursor on the same playlist. `draw_modal_frame(
 printer, rect, title, footer)` draws the title bar and footer hint and returns the body printer;
 `modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`; the
-warnings modal splits its list rows once more (`WarningsModal::areas`) into the list and the message
+picker is a floating box (`draw_float_frame`, `float_body`) sized to its playlists and centred over the still-drawn main view, and a left press outside it closes it; the warnings modal covers the whole screen (`Modal::covers_screen`) and splits its list rows once more (`WarningsModal::areas`) into the list and the message
 area that wraps the selected row's full text.
 
 ## Adding a component
