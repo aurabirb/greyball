@@ -63,8 +63,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Bind `v` to toggle the visualizer pane (`BuiltinAction::ToggleVis`, the `:vis` command) by
-  default, as a normal rebindable key with its Help row.
 - [ ] Rearrange the Help window (`Section`s in `ui/src/items.rs`), in this order: (1) Player first,
   including the shuffle key and the new `v`, with each description on one line in the Movement
   section's style, the key in the text ("next track (>)"); (2) a custom-playlist-hotkeys section,

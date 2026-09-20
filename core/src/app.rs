@@ -125,7 +125,7 @@ impl BuiltinAction {
         (BuiltinAction::RevealPlaying, Some('0')),
         (BuiltinAction::ToggleLog, None),
         (BuiltinAction::ToggleSettings, None),
-        (BuiltinAction::ToggleVis, None),
+        (BuiltinAction::ToggleVis, Some('v')),
         (BuiltinAction::ToggleQueue, None),
         (BuiltinAction::ToggleHistory, None),
         (BuiltinAction::ShowHistory, None),
