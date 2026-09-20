@@ -22,7 +22,7 @@ use crate::types::{Rendition, SourceId, Track};
 /// Wraps a `Box<dyn ReadSeek + Send>` (not `Sync`) so symphonia's
 /// `MediaSource` (which requires `Sync`) accepts it. Sound because the
 /// decode below only ever touches it from the single thread that owns it.
-struct SourceAdapter<R>(R);
+struct SourceAdapter<R>(R, Option<u64>);
 
 unsafe impl<R> Sync for SourceAdapter<R> {}
 
@@ -44,14 +44,16 @@ impl<R: Read + Seek + Send> MediaSource for SourceAdapter<R> {
     }
 
     fn byte_len(&self) -> Option<u64> {
-        None
+        self.1
     }
 }
 
 /// Streams `audio` as stereo f32 frames in decoder-sized blocks, auto-detecting the container/codec;
 /// `on_block` returns `false` to stop early. The sample rate, or `None` when nothing could be decoded.
-pub fn decode_blocks(audio: Box<dyn ReadSeek + Send>, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Option<u32> {
-    let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio)), Default::default());
+pub fn decode_blocks(mut audio: Box<dyn ReadSeek + Send>, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Option<u32> {
+    let len = audio.seek(SeekFrom::End(0)).ok();
+    audio.seek(SeekFrom::Start(0)).ok()?;
+    let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio, len)), Default::default());
     let probed = symphonia::default::get_probe()
         .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
         .ok()?;
