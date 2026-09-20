@@ -5,6 +5,28 @@ approximate; function names are the anchor. The Rust here is a sketch of shape, 
 Refactors, trait changes and new event types are approved; legacy code is deleted, not kept as a
 fallback (this is a pre-release project). A design review has been folded in.
 
+## Motivation: what the user gets (focus on this)
+The internals below serve these user-visible features. When a trade-off appears, pick the option
+that serves them, not the more elegant internal.
+- **Instant playback.** Pressing play on a track that is not cached (a multi-hour SoundCloud set,
+  an HTTP file, a Spotify track) starts sound within seconds, not after the whole download.
+- **Scrubbing anywhere.** Jumping around a track works while it is still loading wherever the source
+  allows it (progressive MP3, Spotify), and never breaks playback where it does not (HLS until done).
+- **Listening and analysis at the same time.** The BPM column, the waveform overview and the
+  "similar tracks" feature (see `TODO.md`) fill in while a track plays or downloads, from the same
+  download, so they cost no extra bandwidth.
+- **Visible progress.** The user can tell "buffering", "downloading" and "failed" apart instead of
+  staring at a frozen player or a silent skip.
+- **Skipping is free.** Mashing next, skipping mid-download or replaying the same track never
+  wastes bandwidth, never leaves partial files behind, and never freezes the UI.
+- **Nothing gets worse.** Everything that works today keeps working: Spotify reconnect and resume,
+  scrubbing, cache-only scans, scan analysis of cached files.
+- **New sources are cheap.** A future source (e.g. YouTube) only writes a small provider that
+  returns a readable thing; playback, scrubbing, caching, analysis and status come for free.
+Priorities for agents, in order: perceived latency and never freezing the UI; clean abandon (no
+files, threads or closures left); playback, scrub and analysis working from one download; small,
+consistent API. Do not spend effort on things no feature above needs.
+
 ## Goals
 - Playback starts after the first few seconds have arrived, for every source.
 - Scrubbing keeps working, especially on non-HLS tracks (progressive MP3, Spotify Ogg), and
@@ -91,9 +113,14 @@ impl StreamWriter {
   plain positioning (`End` needs a known length).
 - Helper in core, used by anything that is a `Read + Seek`: `fill_from_seekable(src, writer)` —
   fills from 0, jumps when `next_want()` says so, then backfills the gaps, done when the ranges
-  cover `len`. Spotify's `AudioFile` and an HTTP `Range` reader (`Range` GETs of <=256 KiB, so a
-  cancel takes effect within one request; sequential fill if the server has no `Accept-Ranges`)
-  both use it. HLS writes sequentially with `write_at` and does not set `jumpable`.
+  cover `len`. Spotify's `AudioFile` and the shared HTTP reader below both use it. HLS writes
+  sequentially with `write_at` and does not set `jumpable`.
+- Shared HTTP helper (library code sources import, not engine knowledge): `core::http::RangeReader::
+  open(url, options)`, a `Read + Seek` over `Range` GETs of <=256 KiB, so a cancel takes effect
+  within one request, with sequential fill when the server has no `Accept-Ranges`. `options`
+  carries what a source needs (headers, client, retry/refresh hook for signed URLs). Built by
+  generalizing `core/src/http_fetch.rs` (`start_get`, the shared client) and the player's
+  `stream_body_to_file`; those whole-body helpers are deleted once nothing uses them.
 - Decoder mode follows the handle: `len` known and `jumpable`, or `Done` -> built with a byte
   length (seekable, as today); otherwise built without (non-seekable, starts from the first
   fragment/frame). Scrub on a jumpable stream: the decoder seeks, the reader stalls on the gap,
@@ -118,9 +145,11 @@ pub enum Intent { Play, Fetch, Peek }   // Play: grace period after release; Fet
   constant) unless re-claimed; it checks between chunks, so there is no timer thread. `Peek`
   readers hold `Weak` only, so an analyzer can never keep a skipped download alive.
 - Providers stay simple: `open(&Rendition) -> Media` where
-  `Media { Path(PathBuf), Url(String), Reader(Box<dyn ReadSeek + Send>), Stream(Box<dyn FnOnce(StreamWriter) + Send>) }`.
-  The engine wraps `Path` (complete), `Url` (ranged HTTP producer), `Reader`
-  (`fill_from_seekable`) and runs `Stream` closures (HLS) on a core-owned thread. Provider `open`
+  `Media { Path(PathBuf), Reader(Box<dyn ReadSeek + Send>), Stream(Box<dyn FnOnce(StreamWriter) + Send>) }`.
+  `Media::Url` is removed: the HTTP source and SoundCloud's progressive path return
+  `Media::Reader(RangeReader::open(..))` themselves. The engine knows nothing about HTTP; it wraps
+  `Path` (complete), `Reader` (`fill_from_seekable`) and runs `Stream` closures (HLS) on a
+  core-owned thread. Provider `open`
   does its cheap setup synchronously (HLS: resolve + parse the playlist), so setup errors return
   `Err` (SoundCloud then falls back to its progressive transcoding, as today), and it may return a
   retryable error that the engine retries with backoff until the user's claim is gone.
@@ -223,9 +252,10 @@ show a "downloading" mark from `engine.status`.
    non-seekable `rodio::Decoder` (start, `total_duration`, `try_seek`, read `Err` mid-decode; a
    seekable one blocks), then a real stitched SoundCloud file; confirm before building. Then: the
    stream module, engine, `Media::Stream`, `MediaCache::persist_file` + sweep, events/status, the
-   player integration and its status-line display, the HTTP/`Url`/`Reader`/`Path` wrapping, the
-   SoundCloud HLS producer (sequential, retries, `Rendition.duration_ms`), and deletion of every
-   old path listed above. Sources that stop compiling or working (Spotify, scan, anything using
+   player integration and its status-line display, `core::http::RangeReader`, the `Reader`/`Path`
+   wrapping, removal of `Media::Url` (the HTTP source and SoundCloud progressive move to
+   `RangeReader`), the SoundCloud HLS producer (sequential, retries, `Rendition.duration_ms`), and
+   deletion of every old path listed above. Sources that stop compiling or working (Spotify, scan, anything using
    `open_for_scan`/`materialize`) may be stubbed to fail loudly until stage 2. Land in several
    commits; verify on real SoundCloud (long set starts in seconds; skip mid-download leaves
    nothing; replaying one track does one fetch; buffering shows; scrolling stays smooth; scrub on a
