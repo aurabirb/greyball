@@ -110,12 +110,10 @@ impl MedleyView {
                     return EventResult::consumed();
                 }
                 if parsed == command::Parsed::OpenBrowse {
-                    let session = self.session.clone();
-                    let start =
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                    return EventResult::with_cb(move |siv| {
-                        crate::filebrowser::open(siv, session.clone(), open, start.clone());
-                    });
+                    if let Some(id) = self.windows.named(crate::screen::FILES) {
+                        self.show(id);
+                    }
+                    return EventResult::consumed();
                 }
                 if let command::Parsed::Open(arg) = parsed {
                     return self.open_arg(arg, open);

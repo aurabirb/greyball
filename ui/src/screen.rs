@@ -6,6 +6,7 @@ pub enum Kind {
     Settings,
     Vis,
     Help,
+    Files,
 }
 
 impl Kind {
@@ -16,6 +17,7 @@ impl Kind {
             Kind::Settings => "Settings",
             Kind::Vis => "Vis",
             Kind::Help => "Help",
+            Kind::Files => "Files",
         }
     }
 }
@@ -149,8 +151,11 @@ const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str)
 /// The window the `OpenHelp` key and `:help` open as a tab; closed, it sits floating.
 pub const HELP: &str = "help";
 
+/// The file browser window `:open` opens; closed, it sits floating.
+pub const FILES: &str = "files";
+
 /// Every window startup builds, tabs first in tab order; each tab has a companion instance.
-pub const WINDOWS: [Startup; 14] = [
+pub const WINDOWS: [Startup; 15] = [
     startup("now-playing", Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
@@ -165,4 +170,5 @@ pub const WINDOWS: [Startup; 14] = [
     companion("history", Kind::List(ListKind::History), Home::Pane, "history-tab"),
     Startup { keyed_first: true, ..companion("playlist-keys", Kind::List(ListKind::Playlists), Home::Float, "playlists") },
     startup(HELP, Kind::Help, Home::Float),
+    startup(FILES, Kind::Files, Home::Float),
 ];

@@ -104,7 +104,7 @@ pub const ITEMS: &[Item] = &[
         &["open", "o"],
         "[<url-or-path>]",
         "open a playlist link, an M3U file or local audio files",
-        "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: a file browser.",
+        "A link opens as a playlist, an M3U file is imported, audio files are added to the open playlist. Without an argument: the files window (a file browser).",
     ),
     command(Cmd::Export, BuiltinAction::PromptExport, &["export", "ex"], "<playlist> [path]", "export a playlist to M3U", ""),
     action(BuiltinAction::ToggleLog, &["log", "l"], "toggle the log pane", ""),
@@ -119,7 +119,7 @@ pub const ITEMS: &[Item] = &[
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
-        "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, queue, history (the panes), playlist-keys, help.",
+        "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, queue, history (the panes), playlist-keys, help, files.",
     ),
     command(
         Cmd::Panes,

@@ -13,6 +13,7 @@ use crate::screen::{Corners, Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
 
 use super::Chrome;
+use super::files::FilesPane;
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
@@ -59,6 +60,8 @@ pub(super) enum WindowOutcome {
     ToggleSetting(usize),
     Bind(HotkeyTarget, char),
     Unbind(HotkeyTarget),
+    /// Add this file to the open playlist, else the queue.
+    AddFile(std::path::PathBuf),
 }
 
 /// A window's session-derived draw data, taken under the frame's one lock.
@@ -76,6 +79,7 @@ enum Body {
     Settings(SettingsPane),
     Vis(Arc<Vis>),
     Help(HelpPane),
+    Files(FilesPane),
 }
 
 /// A window's own last row: the last bind result and whether it was a refusal, else the flash, else the component's hints.
@@ -181,6 +185,7 @@ impl Window {
         match &mut self.body {
             Body::List(list) => list.relayout(resized, s, rect),
             Body::Help(help) => help.relayout(rect, s),
+            Body::Files(files) => files.relayout(rect),
             _ => {}
         }
     }
@@ -211,7 +216,7 @@ impl Window {
             Body::List(list) => WindowFrame::List(list.frame(ctx, self.content())),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
-            Body::Log(_) | Body::Vis(_) => WindowFrame::Live,
+            Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
     }
 
@@ -226,6 +231,7 @@ impl Window {
             (Body::Help(help), WindowFrame::Help(built)) => help.idle(built, placement, status),
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
+            (Body::Files(files), _) => pane(files.idle()),
             _ => pane(""),
         }
     }
@@ -238,6 +244,7 @@ impl Window {
             (Body::List(list), WindowFrame::List(frame)) => list.draw(content, focused, frame),
             (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(content, entries, focused),
             (Body::Log(log), _) => log.draw(content, focused),
+            (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
@@ -279,6 +286,9 @@ impl Window {
         let rect = self.content();
         if let Body::Help(help) = &mut self.body {
             return help.on_event(event, ctx.s, rect);
+        }
+        if let Body::Files(files) = &mut self.body {
+            return files.on_event(event, rect);
         }
         if let Body::List(list) = &mut self.body {
             return list.on_event(event, ctx, rect);
@@ -340,6 +350,7 @@ impl Windows {
             Kind::Settings => Body::Settings(SettingsPane::default()),
             Kind::Vis => Body::Vis(self.vis.clone()),
             Kind::Help => Body::Help(HelpPane::default()),
+            Kind::Files => Body::Files(FilesPane::new(std::env::current_dir().unwrap_or_else(|_| ".".into()))),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),
         };
         self.items.push(Window { kind, body, rect: Rect::from_size((0, 0), (0, 0)), status: StatusRow::default() });

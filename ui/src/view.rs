@@ -29,6 +29,7 @@ use warnings::warnings_label;
 use window::{Ctx, StatusCtx, WindowId, WindowOutcome, Windows};
 
 mod corners;
+mod files;
 mod frame;
 mod help;
 mod hotkeys;
@@ -297,6 +298,10 @@ impl MedleyView {
             WindowOutcome::Ignored => EventResult::Ignored,
             WindowOutcome::Consumed => EventResult::consumed(),
             WindowOutcome::Run(cmd) => self.run(cmd),
+            WindowOutcome::AddFile(path) => {
+                let playlist = self.active_list().and_then(TrackList::open_local);
+                self.run(core::Command::AddFilesToPlaylist { playlist, paths: vec![path] })
+            }
             WindowOutcome::ToggleSetting(row) => {
                 self.toggle_setting(row);
                 EventResult::consumed()
@@ -608,7 +613,7 @@ impl MedleyView {
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()
             && !self.over_view(ids[0])
-            && !matches!(self.windows[ids[0]].kind, Kind::List(_) | Kind::Help);
+            && !matches!(self.windows[ids[0]].kind, Kind::List(_) | Kind::Help | Kind::Files);
         let alone = closing || ids[0] == ids[1] || !through;
         // Tab and Shift-Tab are a window's own only over the view; in it they cycle focus.
         let cycles = matches!(event, Event::Key(Key::Tab) | Event::Shift(Key::Tab)) && !self.over_view(ids[0]);

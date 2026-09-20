@@ -23,7 +23,6 @@ use cursive::{Cursive, CursiveRunner};
 use core::{CoreEvent, LastPlayed, Layout, LogBuf, Session};
 
 pub mod command;
-mod filebrowser;
 pub mod items;
 pub mod keybindings;
 pub mod theme;

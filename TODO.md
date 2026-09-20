@@ -156,11 +156,6 @@
   Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
   every placement (tab, docked, floating), filtering that window's own list through the same
   `TrackList` path. List the panels where it does nothing or acts on the wrong window, then fix them.
-- [ ] Make the `:open` file browser a dockable window like the other panes. Today `:open` with no
-  argument (`Parsed::OpenBrowse`, `ui/src/view/input.rs`) pops the modal `crate::filebrowser::open`
-  dialog; instead it should open (or focus) a file-browser window that can be a tab, docked or
-  floating, through the same window/placement paths as the other windows. `:open <path>` is
-  unchanged.
 
 ### Audits / cleanup tasks
 - [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
