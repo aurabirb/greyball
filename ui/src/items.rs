@@ -140,7 +140,7 @@ pub const ITEMS: &[Item] = &[
     fixed(Section::Movement, "J/K", "move a page", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),
     fixed(Section::Movement, "Esc", "clear the filter, leave the playlist, close a window that is not a tab", ""),
-    fixed(Section::Movement, "/", "search, or fuzzy-filter the current list outside Search", ""),
+    fixed(Section::Movement, "/", "search at the Search results, fuzzy-filter the current list anywhere else (an opened album or playlist included)", ""),
     fixed(Section::Movement, ":", "open the command line", ""),
     fixed(Section::Movement, "1-9", "switch to that tab", ""),
     fixed(Section::Movement, "Tab", "focus the next window", ""),
@@ -155,7 +155,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
     builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs), or unlike it when it is already liked", "Confirms before removing."),
     builtin(Section::Tracks, BuiltinAction::ExportPlaylist, "export the selected or open local playlist as M3U", ""),
-    builtin(Section::Tracks, BuiltinAction::CycleKindFilter, "cycle what the Search results show: all, songs, albums, playlists", ""),
+    builtin(Section::Tracks, BuiltinAction::CycleKindFilter, "cycle which kinds of items the list shows: all, songs, albums, playlists", ""),
     fixed(
         Section::Tracks,
         "any key",

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cursive::{Printer, Rect};
-use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
 
 use fuzzy_matcher::FuzzyMatcher;
@@ -16,7 +15,8 @@ use crate::row::RowItem;
 use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
-use super::text::{in_span, scroll_title};
+use super::kind_bar::{self, KindFilter};
+use super::text::scroll_title;
 use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
@@ -79,69 +79,6 @@ pub(super) fn top_rows(s: &Session) -> Vec<TopRow> {
 /// A Search result collection and its kind.
 type Collection = (ItemKind, TopRow);
 
-/// Which result kinds a Search window shows.
-#[derive(Clone, Copy, Default, PartialEq)]
-enum KindFilter {
-    #[default]
-    All,
-    Songs,
-    Albums,
-    Playlists,
-}
-
-impl KindFilter {
-    const ALL: [Self; 4] = [Self::All, Self::Songs, Self::Albums, Self::Playlists];
-
-    fn next(self) -> Self {
-        match self {
-            Self::All => Self::Songs,
-            Self::Songs => Self::Albums,
-            Self::Albums => Self::Playlists,
-            Self::Playlists => Self::All,
-        }
-    }
-
-    fn title(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Songs => "Songs",
-            Self::Albums => "Albums",
-            Self::Playlists => "Playlists",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Songs => "songs",
-            Self::Albums => "albums",
-            Self::Playlists => "playlists",
-        }
-    }
-
-    fn short(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Songs => "Songs",
-            Self::Albums => "Alb",
-            Self::Playlists => "Pl",
-        }
-    }
-
-    fn shows_tracks(self) -> bool {
-        matches!(self, Self::All | Self::Songs)
-    }
-
-    fn admits(self, kind: ItemKind) -> bool {
-        match self {
-            Self::All => true,
-            Self::Songs => false,
-            Self::Albums => kind == ItemKind::Album,
-            Self::Playlists => kind == ItemKind::Playlist,
-        }
-    }
-}
-
 /// Where a window is: a Playlists window at its top level or in a playlist, a Search window in an opened collection; every other kind stays at `TopLevel`.
 #[derive(Default)]
 enum Open {
@@ -180,11 +117,8 @@ pub(super) struct ListFrame {
     /// The row under the cursor already has a key.
     keyed: bool,
     /// Search results per kind, in `KindFilter::ALL` order.
-    kind_counts: Option<[usize; 4]>,
+    kind_counts: Option<Vec<usize>>,
 }
-
-/// Room the query keeps in a Search title row before the kind bar gives ground.
-const QUERY_MIN: usize = 12;
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
 pub(super) struct TrackList {
@@ -201,6 +135,8 @@ pub(super) struct TrackList {
     keyed_first: bool,
     /// The playlist whose top-level row the next layout pass puts the cursor on.
     select: Option<HotkeyTarget>,
+    /// Search only: the collection under the cursor, the cursor row and list identity it was read at; results streaming in shift its row.
+    anchor: Option<(u64, usize, HotkeyTarget)>,
     /// Keyed-first only: the unkeyed playlist a key was just pressed for, and the playlist listed after it.
     assigned: Option<(HotkeyTarget, HotkeyTarget)>,
     /// When and on which row the last left click landed.
@@ -220,6 +156,7 @@ impl TrackList {
             kind,
             keyed_first,
             select: None,
+            anchor: None,
             assigned: None,
             top: Memo::default(),
             collections: Memo::default(),
@@ -270,58 +207,29 @@ impl TrackList {
     }
 
     fn set_kinds(&mut self, kinds: KindFilter) {
-        if self.kind == ListKind::Search && matches!(self.open, Open::TopLevel) && kinds != self.kinds {
+        if self.has_kind_bar() && kinds != self.kinds {
             self.kinds = kinds;
             self.state = ListState::default();
             self.view_gen += 1;
         }
     }
 
-    fn kind_counts(&self, s: &Session) -> Option<[usize; 4]> {
-        if self.kind != ListKind::Search || !matches!(self.open, Open::TopLevel) {
+    fn kind_counts(&self, s: &Session) -> Option<Vec<usize>> {
+        if !self.has_kind_bar() {
             return None;
         }
         let hits = s.search_collections();
         let of = |kind| hits.iter().filter(|hit| hit.1 == kind).count();
         let (songs, albums, playlists) = (s.results_len(), of(ItemKind::Album), of(ItemKind::Playlist));
-        Some([songs + albums + playlists, songs, albums, playlists])
+        Some(vec![songs + albums + playlists, songs, albums, playlists])
     }
 
-    /// The kind bar's segments as `(kind, start, width, text)` right-aligned in a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks.
-    fn kind_bar(&self, content_w: usize, counts: [usize; 4]) -> Vec<(KindFilter, usize, usize, String)> {
-        let room = content_w.saturating_sub(main_col_start(content_w) + QUERY_MIN);
-        let seg = |kind: KindFilter, n: usize, short: bool, count: bool| {
-            let name = if short { kind.short() } else { kind.title() };
-            if count { format!(" {name} {n} ") } else { format!(" {name} ") }
-        };
-        let tiers = [(false, true), (false, false), (true, false)];
-        let all = KindFilter::ALL.into_iter().enumerate();
-        let mut segs: Vec<(KindFilter, String)> = Vec::new();
-        for (short, count) in tiers {
-            segs = all.clone().map(|(i, kind)| (kind, seg(kind, counts[i], short, count))).collect();
-            if segs.iter().map(|(_, t)| t.chars().count()).sum::<usize>() <= room {
-                break;
-            }
-        }
-        let width = |segs: &[(KindFilter, String)]| segs.iter().map(|(_, t)| t.chars().count()).sum::<usize>();
-        if width(&segs) > room {
-            let i = KindFilter::ALL.iter().position(|&k| k == self.kinds).unwrap_or(0);
-            segs = vec![(self.kinds, seg(self.kinds, counts[i], true, true))];
-        }
-        if width(&segs) > room {
-            return Vec::new();
-        }
-        let mut x = content_w - width(&segs);
-        segs.into_iter()
-            .map(|(kind, text)| {
-                let w = text.chars().count();
-                x += w;
-                (kind, x - w, w, text)
-            })
-            .collect()
+    fn bar(&self, counts: Option<&[usize]>, content_w: usize) -> Vec<kind_bar::Segment> {
+        counts.map(|counts| kind_bar::layout(content_w, &KindFilter::ALL, counts, self.kinds)).unwrap_or_default()
     }
 
-    pub(super) fn is_search(&self) -> bool {
+    /// A Search window at its top level: the title row carries the kind bar and the list mixes tracks and collections.
+    pub(super) fn has_kind_bar(&self) -> bool {
         self.kind == ListKind::Search && matches!(self.open, Open::TopLevel)
     }
 
@@ -473,7 +381,7 @@ impl TrackList {
     }
 
     fn top_row(&self, s: &Session) -> Option<TopRow> {
-        if self.kind == ListKind::Search {
+        if self.has_kind_bar() {
             let at = self.state.cursor.checked_sub(self.search_tracks(s))?;
             return self.collections(s).get(at).map(|(_, row)| row.clone());
         }
@@ -566,7 +474,7 @@ impl TrackList {
 
     fn unit(&self, count: usize) -> &'static str {
         let playlists = self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel);
-        let results = self.kind == ListKind::Search && matches!(self.open, Open::TopLevel);
+        let results = self.has_kind_bar();
         match (playlists, results, count == 1) {
             (true, _, true) => "playlist",
             (true, _, false) => "playlists",
@@ -627,15 +535,14 @@ impl TrackList {
                 ))],
                 None => vec![],
             },
-            (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results - click All above", self.kinds.label()))],
+            (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
             (ListKind::Search, _) => {
                 let tracks = self.search_tracks(s);
                 let mut rows = if offset < tracks { track_rows(s.results_window(offset, limit)) } else { vec![] };
                 let room = limit.saturating_sub(rows.len());
                 let collections = self.collections(s);
                 rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|(kind, row)| {
-                    let label = if *kind == ItemKind::Album { "album" } else { "playlist" };
-                    plain_row(format!("[{label}] {}", top_row_name(row, &[])))
+                    plain_row(format!("[{}] {}", kind_bar::noun(*kind), top_row_name(row, &[])))
                 }));
                 rows
             }
@@ -749,19 +656,12 @@ impl TrackList {
     pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame) {
         let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
-        let bar = frame.kind_counts.map(|counts| self.kind_bar(content_w, counts)).unwrap_or_default();
-        if let Some(&(_, start, ..)) = bar.first() {
+        let bar = self.bar(frame.kind_counts.as_deref(), content_w);
+        if let Some(start) = kind_bar::start(&bar) {
             title = scroll_title(&title, start.saturating_sub(main_col_start(content_w) + 1), 0);
         }
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state.offset, self.state.cursor, frame.total);
-        for (kind, start, _, text) in bar {
-            if kind == self.kinds {
-                let style = ColorStyle::new(Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
-                printer.with_color(style, |p| p.print((start, 0), &text));
-            } else {
-                printer.print((start, 0), &text);
-            }
-        }
+        kind_bar::draw(printer, &bar, self.kinds);
     }
 
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
@@ -771,12 +671,17 @@ impl TrackList {
         if let Some((_, next)) = self.assigned.take_if(|(bound, _)| s.playlist_hotkey(bound).is_some()) {
             self.select = Some(next);
         }
-        let selected = self.select.take().and_then(|target| match self.kind {
+        let anchored = self.anchor.take().filter(|(generation, at, _)| *generation == self.view_gen && *at == self.state.cursor);
+        let explicit = self.select.take();
+        let follow = explicit.is_some();
+        let target = explicit.or(anchored.map(|(.., target)| target));
+        let selected = target.and_then(|target| match self.kind {
             ListKind::Search => self.collections(s).iter().position(|(_, row)| row.target() == target).map(|at| at + self.search_tracks(s)),
             _ => self.top(s).iter().position(|row| row.target() == target),
         });
         self.state.cursor = selected.unwrap_or(self.state.cursor).min(len.saturating_sub(1));
-        self.state.relayout(resized || selected.is_some(), len, Self::body(rect).height());
+        self.state.relayout(resized || (selected.is_some() && follow), len, Self::body(rect).height());
+        self.anchor = self.top_row(s).filter(|_| self.has_kind_bar()).map(|row| (self.view_gen, self.state.cursor, row.target()));
     }
 
     /// Brings the scroll window back around the cursor.
@@ -798,8 +703,9 @@ impl TrackList {
             let local = *position - *offset - rect.top_left();
             if matches!(mouse, MouseEvent::Press(MouseButton::Left)) && local.y == 0 {
                 let content_w = rect.width().saturating_sub(1);
-                let bar = self.kind_counts(s).map(|counts| self.kind_bar(content_w, counts)).unwrap_or_default();
-                if let Some(&(kind, ..)) = bar.iter().find(|&&(_, start, w, _)| in_span(local.x, (start, w))) {
+                let frame = self.frame(ctx, rect);
+                let bar = self.bar(frame.kind_counts.as_deref(), content_w);
+                if let Some(kind) = kind_bar::hit(&bar, local.x) {
                     self.set_kinds(kind);
                     return WindowOutcome::Consumed;
                 }

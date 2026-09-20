@@ -34,6 +34,7 @@ mod frame;
 mod help;
 mod hotkeys;
 mod input;
+mod kind_bar;
 mod log;
 mod memo;
 mod modal;

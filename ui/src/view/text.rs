@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use cursive::theme::{BaseColor, Color, ColorStyle};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Left-aligns `s` in a `width`-column field by display width, so wide codepoints don't shift what follows.
@@ -119,6 +120,11 @@ pub fn scroll_title(full: &str, width: usize, offset: usize) -> String {
         window[width - 1] = '…';
     }
     window.into_iter().collect()
+}
+
+/// The active tab and the active kind-bar segment; everything else stays unstyled.
+pub(super) fn active_style() -> ColorStyle {
+    ColorStyle::new(Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red))
 }
 
 /// `true` if column `x` falls inside `(start, width)`.

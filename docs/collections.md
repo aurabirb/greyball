@@ -18,8 +18,9 @@ What this enables:
 - Do all of that for any source, since a collection is just a `BrowseNode` the source understands.
 
 Scenarios to build and check against:
-1. Search "some artist": Songs, Albums and Playlists sections appear; the kind key hides all but
-   Albums; Enter opens an album, whose title line reads "Album · year · N tracks", and it plays like
+1. Search "some artist": albums and playlists are listed after the songs as `[album] …` / `[playlist] …`
+   rows, and a kind bar (All, Songs, Albums, Playlists, with counts) in the title row, clickable or
+   cycled by `f`, filters them; Enter opens an album, whose title line reads "Album · year · N tracks", and it plays like
    a playlist.
 2. A 2-track single, a 5-track EP and a 12-track album each get the right label once opened.
 3. Playlists window filtered to Albums shows only saved albums; docked next to Now Playing it keeps
@@ -77,10 +78,10 @@ The kind is a property of the query, not of the result. Spotify calls its search
 search plus one `search_collections` per requested kind and reports collections through a new
 `CoreEvent::SearchCollection { kind, source, name, node }`.
 
-The Search window shows sections — Songs, Albums, Playlists — and a key cycles the kind filter
-(which sections are visible, no refetch). Collection rows are rendered as the existing
-`TopRow::Remote` rows (`ui/src/view/track_list.rs`), so Enter/open/hotkey-bind/queue reuse the
-Playlists window's paths. Tag `SearchHit`/`SearchCollection`/`SearchDone` events with the search
+The Search window shows a kind bar (All, Songs, Albums, Playlists) in its title row; a click or the
+kind key cycles which kinds are listed (no refetch). Songs come first, then `[album] …` and
+`[playlist] …` rows. Collection rows are still `TopRow::Remote`, drawn through `plain_row` with a kind
+prefix, so Enter/open/hotkey-bind/queue reuse the Playlists window's paths. Tag `SearchHit`/`SearchCollection`/`SearchDone` events with the search
 generation in the same change (fixes the mixed-results bug in TODO.md).
 
 ### 3. Albums view
@@ -159,9 +160,10 @@ to break one, report it back instead of working around it.
 - **The pseudo-track row is derived, never stored.** It is built in `queue_window` from
   `PlaybackContext`; it is not an `Entry`, is not persisted, and can't be removed or reordered.
 - **UI changes stay in the touched windows.** Search, the Playlists window and the Queue window
-  change; nothing else does. Collection rows render through the existing `TopRow::Remote` /
-  `plain_row` path and metadata through `BrowsePage.subtitle` on the existing title line — no new
-  row kind, no new drawing code.
+  change; nothing else does. Search shares `Open::Remote` with Playlists for an opened collection.
+  Collection rows render through the existing `TopRow::Remote` / `plain_row` path and metadata
+  through `BrowsePage.subtitle` on the existing title line — no new row kind. The one dedicated
+  drawing code is the title row's kind bar (`ui/src/view/kind_bar.rs`).
 - **`Catalog::ingest` decides identity.** Sources hand over `Track`s with throwaway ids and never
   merge or dedupe themselves.
 - **No compatibility shims.** The saved queue and any changed persisted shape are dropped, not
@@ -169,8 +171,8 @@ to break one, report it back instead of working around it.
 
 ## Order
 
-1. `SearchHit` → `Track`; `ItemKind` cleanup.
-2. Search generation tags on events.
-3. `search_collections` + Search sections + kind filter.
+1. `SearchHit` → `Track`; `ItemKind` cleanup. (done)
+2. Search generation tags on events. (done)
+3. `search_collections` + kind bar + prefix rows. (done)
 4. Playlists-window kind filter + saved-albums listing.
 5. `Entry` queue + enqueue action + pseudo-track row.

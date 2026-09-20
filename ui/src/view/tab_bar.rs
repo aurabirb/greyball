@@ -1,5 +1,5 @@
 use cursive::Printer;
-use cursive::theme::{BaseColor, Color, ColorStyle, Effect};
+use cursive::theme::{ColorStyle, Effect};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -9,11 +9,8 @@ use std::sync::Arc;
 
 use super::memo::Memo;
 use super::status_line::StatusLine;
-use super::text::{in_span, scroll_title};
+use super::text::{active_style, in_span, scroll_title};
 use super::transport::{TRANSPORT_GAP, Transport, transport_labels, transport_layout};
-
-/// Background for the active tab only — every other tab uses the terminal's default colors, unstyled.
-const ACTIVE_TAB_BG: Color = Color::Dark(BaseColor::Red);
 
 /// The resampled waveform of the last (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
@@ -147,7 +144,7 @@ impl TabBar<'_> {
         for &(i, start, w) in &layout.tabs {
             let text: String = tab_label(i + 1, &self.tabs[i], layout.collapsed).chars().take(w).collect();
             if i == self.active {
-                let style = ColorStyle::new(Color::Dark(BaseColor::White), ACTIVE_TAB_BG);
+                let style = active_style();
                 printer.with_color(style, |p| p.print((start, 0), &text));
             } else {
                 printer.print((start, 0), &text);

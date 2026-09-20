@@ -239,7 +239,7 @@ impl MedleyView {
             // A list that can't be filtered locally sends `/` to the Search window's input instead.
             Action::FocusSearch => {
                 let id = self.active_list_id();
-                match self.windows[id].list().map(TrackList::is_search) {
+                match self.windows[id].list().map(TrackList::has_kind_bar) {
                     Some(false) => {
                         self.editing = Editing::Filter;
                         self.buffer.clear();
