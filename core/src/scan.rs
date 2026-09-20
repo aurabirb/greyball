@@ -664,8 +664,8 @@ impl Worker {
                     // A real fetch may have cached audio even with nothing to report — announce it.
                     self.catalog.announce(track.id);
                 }
-                Outcome::Retry if !wanted() || stream.as_ref().is_some_and(|h| h.info().state == StreamState::Cancelled) => {
-                    // Skipped, paused or preempted mid-analysis: not a failure, tried again later.
+                Outcome::Retry if !wanted() || stream.as_ref().is_some_and(|h| matches!(h.info().state, StreamState::Cancelled | StreamState::Connecting)) => {
+                    // Skipped, paused, preempted mid-analysis or still waiting on the source's link: not a failure, tried again later.
                     log::debug!("scan[{}]: \"{}\" ({:?}) abandoned, trying again later", plugin.id(), track.title, track.id);
                     self.inner.status.lock().unwrap().remove(&key);
                 }

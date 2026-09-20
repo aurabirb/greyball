@@ -62,7 +62,7 @@ impl SoulseekSource {
 
     /// Downloads `track` (blocking) and returns its local path, first
     /// checking (then populating) `downloaded`.
-    fn fetch(&self, uri: &str, track: &TrackRef) -> Result<PathBuf> {
+    fn fetch(&self, uri: &str, track: &TrackRef, wanted: &dyn Fn() -> bool) -> Result<PathBuf> {
         let lock = self.in_flight.lock().unwrap().entry(uri.to_string()).or_default().clone();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let cached = self.downloaded.lock().unwrap().get(uri).cloned();
@@ -91,6 +91,10 @@ impl SoulseekSource {
                 }
                 Ok(_) => {}
                 Err(e) => log::warn!("soulseek: polling download {batch_id}: {e}"),
+            }
+            if !wanted() {
+                self.client.cancel_download(&track.username, batch_id);
+                return Err(src_err("no longer wanted while downloading"));
             }
             if Instant::now() >= deadline {
                 self.client.cancel_download(&track.username, batch_id);
@@ -181,9 +185,9 @@ impl MediaProvider for SoulseekSource {
         source_id()
     }
 
-    fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
+    fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media> {
         let track = TrackRef::parse(&r.uri).ok_or_else(|| src_err(format!("not a soulseek track: {:?}", r.uri)))?;
-        let path = self.fetch(&r.uri, &track)?;
+        let path = self.fetch(&r.uri, &track, wanted)?;
         Ok(Media::Path(path))
     }
 }

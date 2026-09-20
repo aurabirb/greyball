@@ -49,7 +49,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 const START_BYTES: u64 = 256 * 1024;
 /// Playback pauses to buffer when the contiguous bytes past the read position fall below this.
 const LOW_WATER: u64 = 64 * 1024;
-/// How long a load waits for the first bytes once connected; `Connecting` is bounded by the provider.
+/// How long a load waits for the first bytes once connected; `Connecting` is unbounded here (providers own their limits, a skip supersedes the load).
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum Cmd {

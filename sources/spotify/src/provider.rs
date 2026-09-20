@@ -20,6 +20,7 @@ const OGG_FORMATS: [AudioFileFormat; 3] =
     [AudioFileFormat::OGG_VORBIS_320, AudioFileFormat::OGG_VORBIS_160, AudioFileFormat::OGG_VORBIS_96];
 
 const RETRY_PAUSE: Duration = Duration::from_millis(200);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a mid-download reopen waits for a live session before giving up.
 const REOPEN_WAIT: Duration = Duration::from_secs(30);
 
@@ -51,7 +52,17 @@ fn open_with_retry(slot: &Slot, uri: &str, wanted: &dyn Fn() -> bool) -> Result<
         let Some(live) = slot.wait_live(wanted) else {
             return Err(Error::Other("spotify: no longer wanted while waiting for a session".into()));
         };
-        match live.handle.block_on(open_audio(&live.session, uri)) {
+        let opened = live.handle.block_on(async {
+            tokio::select! {
+                r = tokio::time::timeout(OPEN_TIMEOUT, open_audio(&live.session, uri)) => {
+                    r.unwrap_or_else(|_| Err(Error::Other("spotify: opening the audio timed out".into())))
+                }
+                () = async { while wanted() { tokio::time::sleep(Duration::from_millis(250)).await } } => {
+                    Err(Error::Other("spotify: no longer wanted while opening".into()))
+                }
+            }
+        });
+        match opened {
             Ok(audio) => {
                 slot.succeeded();
                 return Ok(audio);
@@ -61,7 +72,9 @@ fn open_with_retry(slot: &Slot, uri: &str, wanted: &dyn Fn() -> bool) -> Result<
                 std::thread::sleep(RETRY_PAUSE);
             }
             Err(e) => {
-                slot.failed(&live);
+                if wanted() {
+                    slot.failed(&live);
+                }
                 return Err(e);
             }
         }
