@@ -310,7 +310,7 @@ impl SoundcloudSource {
                     return;
                 }
                 offset += bytes.len() as u64;
-                w.set_checkpoint(i + 1, offset);
+                w.set_checkpoint(i + 1);
                 w.set_progress((i + 1) as f32 / urls.len() as f32);
             }
             w.finish();

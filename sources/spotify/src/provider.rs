@@ -43,6 +43,7 @@ impl MediaProvider for SpotifyMediaProvider {
     }
 }
 
+/// The wait for a live session is not counted against the engine's resume budget.
 /// Waits for a live session and opens the audio on it; a failure only because the link died under
 /// it is retried once reconnected, other failures count toward recycling a wedged session.
 fn open_with_retry(slot: &Slot, uri: &str, wanted: &dyn Fn() -> bool) -> Result<Subfile> {

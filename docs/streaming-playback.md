@@ -174,10 +174,12 @@ pub enum Intent { Play, Fetch, Peek }   // Play: grace period after release; Fet
   writes the redb index, so never from the UI or audio thread). One `Fetching -> Committing`
   transition under the `Shared` lock makes cancel-vs-commit race-free. A startup sweep removes stray
   temp files left by a crash.
-- Failed chunk/segment: retry 3 times with backoff, then `fail`. A failed run of a started download is
-  re-run by `produce` (fresh `provider.open`, state `Buffering` meanwhile, exponential backoff) while a claim
-  exists; the sparse file keeps its ranges so only gaps are refetched, and a `Media::Stream` producer
-  continues from `StreamWriter::checkpoint`. The stream fails after `RESUMES` restarts without new bytes.
+- Failed HLS segment: retry 3 times with backoff, then `fail`. A failed run of a started download is
+  re-run by `produce` (fresh `provider.open`, state `Buffering` meanwhile, 2/4/8/16/16/16 s backoff) while a claim
+  exists; the sparse file keeps its ranges so only gaps are refetched, and a sequential `Media::Stream`
+  producer continues from `StreamWriter::checkpoint`. A resume must get the same media kind and length as
+  the first run, else that attempt fails. The stream fails after `RESUMES` restarts without new bytes
+  (about 85-100 s with open time). Spotify's wait for a live session inside `open` is not counted.
 
 ### What callers see
 - `StreamInfo` (above) is a cheap snapshot: state, ranges, length, jumpable. Progress is read live

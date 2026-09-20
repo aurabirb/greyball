@@ -487,7 +487,7 @@ fn open_and_decode(
         match handle.info().state {
             StreamState::Failed(why) => return Err(core::Error::Other(format!("stream failed: {why}"))),
             StreamState::Cancelled => return Err(core::Error::Other("stream cancelled".into())),
-            StreamState::Connecting => deadline = Instant::now() + START_TIMEOUT,
+            StreamState::Connecting | StreamState::Buffering => deadline = Instant::now() + START_TIMEOUT,
             _ => {}
         }
         if Instant::now() >= deadline {

@@ -177,7 +177,6 @@ pub struct MediaCache {
 impl MediaCache {
     pub fn new(dir: PathBuf, store: Arc<dyn Store>) -> Self {
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(dir.join(STREAM_DIR));
         let index_path = dir.with_extension("redb");
         let index = Database::create(&index_path)
             .unwrap_or_else(|e| panic!("media cache index {}: {e}", index_path.display()));
@@ -187,6 +186,8 @@ impl MediaCache {
             w.open_table(INDEX).expect("media cache index: open_table");
             w.commit().expect("media cache index: commit");
         }
+        // Holding the index lock means no other instance runs on this cache, so its temp files are stale.
+        let _ = std::fs::remove_dir_all(dir.join(STREAM_DIR));
         let index = ingest_extra_indexes(index, &dir, &index_path);
         let index_cache = {
             let r = index.begin_read().expect("media cache index: begin_read");
