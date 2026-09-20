@@ -44,9 +44,7 @@ impl AudioTap {
     }
 
     /// Publish a window of mono samples — normally called only from
-    /// [`Tapped`]'s own per-sample forwarding, but public so a player with no
-    /// `rodio::Source` to wrap (e.g. `SpotifyPlayer`, which taps librespot's
-    /// `Sink` layer directly instead) can still feed the same `AudioTap`.
+    /// [`Tapped`]'s own per-sample forwarding.
     pub fn publish(&self, window: &[f32], sample_rate: u32) {
         let mut buf = self.latest.lock().unwrap();
         buf.clear();

@@ -5,7 +5,7 @@ use cursive::theme::ColorStyle;
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, PlayerState, Session, TrackId, waveform};
+use core::{Command, PlayerState, PlayerStatus, Session, TrackId, waveform};
 
 use crate::screen::Corners;
 
@@ -54,6 +54,10 @@ pub(super) struct StatusLine {
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
     pub(super) duration_ms: u32,
+    /// Playback waits on the download.
+    pub(super) buffering: bool,
+    /// The share downloaded, while the track is still coming in.
+    pub(super) download_pct: Option<u8>,
     pub(super) bpm_tag: ScanTag,
     pub(super) shuffle: bool,
     /// The playing track's `Session::liked_mark`.
@@ -77,18 +81,20 @@ impl StatusLine {
         let st = s.player_status();
         let bpm_tag = bpm_status_tag(s, core.now_playing_id);
         let liked = core.now_playing_id.and_then(|id| s.liked_mark(id));
-        Self::assemble(&core, st.position_ms, st.duration_ms, bpm_tag, liked)
+        Self::assemble(&core, &st, bpm_tag, liked)
     }
 
     /// Combines a cached `StatusCore` with this frame's freshly-read per-tick data.
-    pub(super) fn assemble(core: &StatusCore, position_ms: u32, duration_ms: u32, bpm_tag: ScanTag, liked: Option<bool>) -> Self {
+    pub(super) fn assemble(core: &StatusCore, ps: &PlayerStatus, bpm_tag: ScanTag, liked: Option<bool>) -> Self {
         Self {
             now_playing: core.now_playing.clone(),
             now_playing_id: core.now_playing_id,
             waveform: core.waveform.clone(),
             state: core.state,
-            position_ms,
-            duration_ms,
+            position_ms: ps.position_ms,
+            duration_ms: ps.duration_ms,
+            buffering: ps.buffering,
+            download_pct: ps.download_pct,
             bpm_tag,
             shuffle: core.shuffle,
             liked,
@@ -117,13 +123,24 @@ impl StatusLine {
         Layout { name_w, prev, playpause, next, scrubber }
     }
 
+    /// "buffering" or the download percent, ahead of the title.
+    pub(super) fn progress_tag(&self) -> String {
+        match (self.buffering, self.download_pct) {
+            (true, Some(p)) => format!("[buffering {p}%] "),
+            (true, None) => "[buffering] ".to_string(),
+            (false, Some(p)) => format!("[{p}%] "),
+            (false, None) => String::new(),
+        }
+    }
+
     /// Draws the line across row 0 of `printer`; the track name scrolls by `marquee_offset` when it doesn't fit.
     pub(super) fn draw(&self, printer: &Printer, marquee_offset: usize) {
         let name_w = self.layout(printer.size.x).name_w;
+        let tag = self.progress_tag();
         let status = format!(
             "{PREV_ICON} {} {NEXT_ICON}  {}  {} {} {}",
             player_action_glyph(&self.state),
-            pad(&scroll_title(&self.now_playing, name_w, marquee_offset), name_w),
+            pad(&format!("{tag}{}", scroll_title(&self.now_playing, name_w.saturating_sub(tag.width()), marquee_offset)), name_w),
             ms(self.position_ms),
             progress_bar(self.position_ms, self.duration_ms, BAR_WIDTH),
             self.total_time(),

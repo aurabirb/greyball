@@ -2,15 +2,17 @@
 //! registered plugins compute per-track metadata (bpm, later genre/mood/...)
 //! into the generic `Track::attrs` map.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
 use crate::media_cache::MediaCache;
-use crate::traits::{MediaProvider, Player, ReadSeek, Store};
+use crate::stream::{Claim, Intent, StreamEngine, StreamHandle, StreamState};
+use crate::traits::{Error, Store};
 use crate::types::{Rendition, SourceId, Track, TrackId};
 
 /// One background-scan extension point (bpm, later genre-ml, ...). A new
@@ -20,39 +22,19 @@ pub trait ScanPlugin: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
 
-    /// Cheap, no I/O: does this track still need this plugin's data? The
-    /// driver calls this to skip already-scanned tracks on every walk.
+    /// Cheap, no I/O: does this track still need this plugin's data?
     fn needs(&self, track: &Track) -> bool;
 
-    /// Blocking analysis of one track. `audio` lazily opens this track's raw
-    /// bytes via `open_scan_audio` (paired with whichever `Rendition` they
-    /// actually came from) — call it only on a `media_cache` miss, since
-    /// invoking it is what actually fetches/decrypts over the network; it
-    /// returns `None` when nothing could supply bytes for this track's
-    /// source, in which case return `Outcome::Skip` rather than erroring,
-    /// since that isn't this plugin's fault. `media_cache` is the shared
-    /// decoded-audio cache: a plugin that decodes `audio` itself should
-    /// populate it (`audio_decode::decode_and_cache`) so a later analyzer,
-    /// and playback itself, never re-fetch/re-decode the same bytes.
-    fn analyze(
-        &self,
-        track: &Track,
-        audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
-        media_cache: &MediaCache,
-    ) -> Outcome;
+    /// Blocking analysis of one track. `audio` opens the track's stream (a cached file is a complete
+    /// one, a download in progress is read as it grows); `Err` is the outcome to return when there is
+    /// none. A stream that fails or is cancelled under the decode is `Outcome::Retry`, never `Skip`;
+    /// so is a decode abandoned because `wanted` turned false (poll it between blocks).
+    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome;
 
     /// Minimum spacing between this plugin's own background fetches — keeps
     /// a slow/rate-limited source from being hammered.
     fn min_interval(&self) -> Duration {
         Duration::from_secs(15)
-    }
-
-    /// Whether this plugin wants the whole track's audio rather than just
-    /// whatever it happens to read, so `scan_one` should fetch with
-    /// `ScanFetchMode::Full` on the background walk regardless of
-    /// `ScanConfig::cache_full`. Default: no.
-    fn wants_full_audio(&self) -> bool {
-        false
     }
 }
 
@@ -85,37 +67,23 @@ pub enum ScanStatus {
     Skipped,
 }
 
-/// How a scan fetch is allowed to touch the network. Replaces a plain
-/// `cache_full: bool` so the prioritized now-playing path can forbid
-/// fetching outright rather than merely skipping the post-read drain.
+/// How an attempt may reach a track's audio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScanFetchMode {
-    /// Fetch if needed; once obtained, keep draining to the end so the
-    /// backend commits the whole file to its on-disk cache. Used, per
-    /// `ScanConfig::cache_full`, for the general background walk's
-    /// per-plugin fetches.
-    Full,
-    /// Fetch if needed, but don't force a drain beyond what the plugin
-    /// itself reads.
-    Partial,
-    /// Never touch a `MediaProvider`/`Player` at all — only ever a
-    /// `MediaCache` hit. Used for the prioritized now-playing path and for
-    /// `ScanMode::CacheOnly`: something else (an active-mode scan, or a
-    /// source's own playback-triggered materializer, e.g. Spotify's) is
-    /// responsible for ever getting a track's audio into `MediaCache` in
-    /// the first place.
-    CacheOnly,
+enum Access {
+    /// Start a download if the track is not cached (the driver keeps it alive to `Done`).
+    Fetch,
+    /// Only a cached file or a stream that is already running; never starts a fetch.
+    Peek,
 }
 
 /// The driver's overall on/off/how-hard state, cycled by `B`/`:togglescan`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScanMode {
-    /// Fetch new audio as needed, per `ScanConfig::cache_full`.
+    /// Start downloads for tracks that are not cached.
     Active,
-    /// Walk the library but only ever read what's already in `MediaCache` —
-    /// never originate a fetch. See `ScanFetchMode::CacheOnly`.
+    /// Walk the library but only ever read what is already cached or downloading — never start a fetch.
     CacheOnly,
-    /// Walk thread does nothing.
+    /// Both workers do nothing.
     Disabled,
 }
 
@@ -150,81 +118,33 @@ impl ScanMode {
     }
 }
 
-/// A `MediaCache` hit, or (unless `mode` is `CacheOnly`) a live fetch via
-/// the source's `MediaProvider`, or `Player::open_for_scan` for a source
-/// with no `MediaProvider` (e.g. Spotify). `None` when nothing can supply
-/// bytes. `CacheOnly` never touches `media`/`players` at all — populating
-/// `MediaCache` is entirely someone else's job (see `ScanFetchMode::CacheOnly`'s
-/// doc), so a cache miss here is just "not materialized yet", not an error.
-pub fn open_scan_audio(
-    rendition: &Rendition,
-    media: &HashMap<SourceId, Arc<dyn MediaProvider>>,
-    players: &HashMap<SourceId, Arc<dyn Player>>,
-    media_cache: &MediaCache,
-    mode: ScanFetchMode,
-) -> Option<Box<dyn ReadSeek + Send>> {
-    if let Some(p) = media_cache.cached_path(&rendition.source, &rendition.uri) {
-        return match std::fs::File::open(&p) {
-            Ok(f) => Some(Box::new(f) as Box<dyn ReadSeek + Send>),
-            Err(e) => {
-                log::warn!("scan: cached file {} unreadable: {e}", p.display());
-                None
-            }
-        };
-    }
-    if mode == ScanFetchMode::CacheOnly {
-        log::debug!(
-            "scan: {} {} not yet materialized, skipping (CacheOnly)",
-            rendition.source,
-            rendition.uri
-        );
-        return None;
-    }
-    let source = &rendition.source;
-    if let Some(mp) = media.get(source) {
-        match mp.materialize(rendition) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                log::warn!("scan: {source} media provider couldn't materialize {}: {e}", rendition.uri);
-                None
-            }
-        }
-    } else if let Some(p) = players.get(source) {
-        match p.open_for_scan(rendition, mode) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                log::warn!("scan: {source} player couldn't open {} for scan: {e}", rendition.uri);
-                None
-            }
-        }
-    } else {
-        log::debug!("scan: no media provider or player registered for source {source}");
-        None
-    }
-}
-
-/// How often the walk thread wakes.
-const TICK: Duration = Duration::from_millis(400);
-
-/// A track that has failed (`Outcome::Retry`) this many times in a row for
-/// the same plugin gets put on `FAILURE_COOLDOWN` instead of being retried
-/// on every walk — distinct from a plugin's flat `min_interval`, which isn't
-/// failure-count-aware and would otherwise keep spending a walk slot on a
-/// permanently-broken track (e.g. no fetchable audio) forever.
+/// A track that has failed (`Outcome::Retry`) this many times in a row for the same plugin waits
+/// `FAILURE_COOLDOWN` instead of `RETRY_SPACING` before the next try, so a permanently-broken track
+/// (e.g. no fetchable audio) stops spending walk slots.
 const FAILURE_THRESHOLD: u32 = 3;
+const RETRY_SPACING: Duration = Duration::from_secs(15);
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 
-/// Once a full walk pass finds nothing to scan, back off to this interval
-/// instead of re-checking the same fully-analyzed list every `TICK`.
-const IDLE_BACKOFF: Duration = Duration::from_secs(10);
+/// Two walk passes are at least this far apart: a burst of track updates (a crawl ingesting hits)
+/// costs one pass, not one per update.
+const PASS_SPACING: Duration = Duration::from_secs(1);
 
-/// How long the now-playing fast path (`ScanDriver::prioritize`) keeps
-/// retrying a track every tick before giving up and letting the general
-/// walk's own (idle-backed-off) cadence take over instead. Bounds the cost
-/// of a source with no way to ever materialize this track under
-/// `CacheOnly` (no playback-triggered materializer, e.g. SoundCloud/HTTP)
-/// busy-looping every `TICK` forever.
+/// How long the now-playing worker keeps retrying a track whose stream cannot be opened yet (not
+/// playing, not cached) before leaving it to the walk's own cadence, and how often it retries.
 const PRIORITY_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+const PRIORITY_RETRY_TICK: Duration = Duration::from_millis(500);
+
+/// How long a stream may take to deliver its first byte before the attempt is a `Retry`.
+const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// After a failed fetch a source is left alone for `SOURCE_BACKOFF << (failures - 1)`, capped at
+/// `SOURCE_BACKOFF_MAX`, so a run of bad tracks cannot hammer it (Spotify recycles its session after
+/// two failed opens in a row, which would interrupt playback).
+const SOURCE_BACKOFF: Duration = Duration::from_secs(60);
+const SOURCE_BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
+
+/// One plugin's claim on one track.
+type Job = (&'static str, TrackId);
 
 /// The order + position the UI's current view reports via
 /// `ScanDriver::follow_view` — the walk's primary traversal order once set.
@@ -234,97 +154,102 @@ struct ViewOrder {
     highlighted: usize,
 }
 
-struct Inner {
-    /// Grows via `ScanDriver::register_plugin` as sources finish async
-    /// setup. Cloned fresh each tick rather than locked across `analyze`.
-    plugins: Mutex<Vec<Arc<dyn ScanPlugin>>>,
-    /// `ScanConfig::cache_full` — applied to background-walk fetches only;
-    /// the prioritized now-playing path always uses `ScanFetchMode::CacheOnly`
-    /// regardless, never `Full`/`Partial`.
-    cache_full: bool,
-    mode: AtomicU8,
-    /// Track ids that jumped the queue (currently-playing), oldest first,
-    /// paired with when each was first prioritized — see
-    /// `PRIORITY_RETRY_TIMEOUT`.
-    priority: Mutex<VecDeque<(TrackId, Instant)>>,
-    last_run: Mutex<HashMap<&'static str, Instant>>,
-    /// Per-(plugin, track) live status, for `ScanDriver::status` — cleared on
-    /// `Outcome::Done` since a resolved value already lives in `Track::attrs`
-    /// at that point and needs no separate "done" bookkeeping here.
-    status: Mutex<HashMap<(&'static str, TrackId), ScanStatus>>,
-    /// The UI's current view/selection, see `ScanDriver::follow_view`. `None`
-    /// while no view has reported one yet, or the last-reported view had no
-    /// tracks — the walk falls back to `store.all_tracks()` in that case.
-    view: Mutex<Option<ViewOrder>>,
-    /// Set once a full pass over the current walk list (whichever list
-    /// `resolve_walk_list` returned) found nothing to scan; cleared as soon
-    /// as the list being walked changes. Guards against busy-looping a
-    /// fully-analyzed list every `TICK`.
-    idle_since: Mutex<Option<(Vec<TrackId>, Instant)>>,
-    /// Consecutive `Outcome::Retry` count per (plugin, track), for the
-    /// failure cooldown — reset to 0 on `Outcome::Done`.
-    failures: Mutex<HashMap<(&'static str, TrackId), u32>>,
-    /// Tracks currently serving out a `FAILURE_COOLDOWN`, and when it ends.
-    failure_cooldown: Mutex<HashMap<(&'static str, TrackId), Instant>>,
-    /// Shared with the session and player; `players` is kept current by `update_wiring`. Re-read every tick.
-    media: crate::plugin::SharedMedia,
-    players: Mutex<HashMap<SourceId, Arc<dyn Player>>>,
+/// What the walk thread has been told since it last woke.
+#[derive(Default)]
+struct WalkInbox {
+    woken: bool,
+    /// Tracks to re-read from the store (updated, added or removed).
+    dirty: Vec<TrackId>,
+    /// Re-read the whole library (a plugin was registered).
+    rebuild: bool,
 }
 
-/// One background thread, shared by every registered plugin.
+struct Inner {
+    /// Grows via `ScanDriver::register_plugin` as sources finish async
+    /// setup. Cloned fresh per pass rather than locked across `analyze`.
+    plugins: Mutex<Vec<Arc<dyn ScanPlugin>>>,
+    mode: AtomicU8,
+    /// Now-playing tracks, newest first, each with when it was first prioritized.
+    priority: Mutex<VecDeque<(TrackId, Instant)>>,
+    priority_wake: Condvar,
+    walk: Mutex<WalkInbox>,
+    walk_wake: Condvar,
+    last_run: Mutex<HashMap<&'static str, Instant>>,
+    /// Per-(plugin, track) live status, for `ScanDriver::status` — cleared on `Outcome::Done` since a
+    /// resolved value already lives in `Track::attrs`. `Downloading` is also the in-flight marker
+    /// that keeps the two workers off the same (plugin, track).
+    status: Mutex<HashMap<Job, ScanStatus>>,
+    /// The UI's current view/selection, see `ScanDriver::follow_view`. `None`
+    /// while no view has reported one yet, or the last-reported view had no
+    /// tracks — the walk covers the whole library in that case.
+    view: Mutex<Option<ViewOrder>>,
+    /// Consecutive `Outcome::Retry` count per (plugin, track) and when the last one happened;
+    /// removed on `Outcome::Done`.
+    failures: Mutex<HashMap<Job, (u32, Instant)>>,
+    /// Background fetches the driver keeps alive until they finish, so a walk download runs to `Done`.
+    held: Mutex<Vec<(StreamHandle, Claim)>>,
+    /// Per source: consecutive failed fetches and when it may be fetched from again.
+    source_backoff: Mutex<HashMap<SourceId, (u32, Instant)>>,
+}
+
+impl Inner {
+    fn mode(&self) -> ScanMode {
+        ScanMode::from_u8(self.mode.load(Ordering::Relaxed))
+    }
+
+    fn wake_walk(&self) {
+        self.walk.lock().unwrap().woken = true;
+        self.walk_wake.notify_one();
+    }
+}
+
+/// Two threads shared by every registered plugin: the walk (background, one download at a time)
+/// and the now-playing worker, which only ever peeks at a running or cached stream so it never
+/// waits behind a long background analysis.
 pub struct ScanDriver {
     inner: Arc<Inner>,
 }
 
 impl ScanDriver {
-    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>, cache_full: bool, media: crate::plugin::SharedMedia) -> Self {
+    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 plugins: Mutex::new(plugins),
-                cache_full,
                 mode: AtomicU8::new(ScanMode::Active.to_u8()),
                 priority: Mutex::new(VecDeque::new()),
+                priority_wake: Condvar::new(),
+                walk: Mutex::new(WalkInbox { woken: true, dirty: Vec::new(), rebuild: true }),
+                walk_wake: Condvar::new(),
                 last_run: Mutex::new(HashMap::new()),
                 status: Mutex::new(HashMap::new()),
                 view: Mutex::new(None),
-                idle_since: Mutex::new(None),
                 failures: Mutex::new(HashMap::new()),
-                failure_cooldown: Mutex::new(HashMap::new()),
-                media,
-                players: Mutex::new(HashMap::new()),
+                held: Mutex::new(Vec::new()),
+                source_backoff: Mutex::new(HashMap::new()),
             }),
         }
     }
 
-    /// Spawns the walk thread. Writes go through `catalog` (`Catalog::patch`,
-    /// see the lock on `Catalog` itself) rather than `Store` directly, so a
-    /// scan result can never race a concurrent UI-thread `ingest`/`patch`
-    /// (M3U import, `link`/`unlink`, ...) into a lost update — both paths
-    /// serialize on the same lock. `store` is still passed separately since
-    /// only reads (`all_tracks`/`get_track`) are needed off it; those don't
-    /// need to be under the lock, they just pick which track to look at
-    /// next, and `patch`'s own read (inside the lock) is what actually
-    /// decides what gets merged.
+    /// Spawns both workers. Writes go through `catalog` (`Catalog::patch`, see the lock on `Catalog`
+    /// itself) so a scan result can never race a concurrent UI-thread `ingest`/`patch` into a lost
+    /// update; `store` only serves reads that pick what to look at next.
     pub fn spawn(
         &self,
         catalog: Arc<Catalog>,
         store: Arc<dyn Store>,
-        players: HashMap<SourceId, Arc<dyn Player>>,
+        engine: StreamEngine,
         media_cache: Arc<MediaCache>,
     ) {
-        *self.inner.players.lock().unwrap() = players;
-        let inner = self.inner.clone();
+        let walk = Worker { inner: self.inner.clone(), catalog: catalog.clone(), store: store.clone(), engine: engine.clone(), media_cache: media_cache.clone() };
         thread::Builder::new()
             .name("scan-driver".into())
-            .spawn(move || run(inner, catalog, store, media_cache))
+            .spawn(move || walk.run_walk())
             .expect("failed to spawn scan-driver thread");
-    }
-
-    /// Registers a source's newly-available player after startup (`Session::apply_wiring`).
-    pub fn update_wiring(&self, id: SourceId, player: Option<Arc<dyn Player>>) {
-        if let Some(p) = player {
-            self.inner.players.lock().unwrap().insert(id, p);
-        }
+        let priority = Worker { inner: self.inner.clone(), catalog, store, engine, media_cache };
+        thread::Builder::new()
+            .name("scan-priority".into())
+            .spawn(move || priority.run_priority())
+            .expect("failed to spawn scan-priority thread");
     }
 
     /// Adds a plugin to the already-running driver, for one whose
@@ -332,48 +257,65 @@ impl ScanDriver {
     /// construction time.
     pub fn register_plugin(&self, plugin: Arc<dyn ScanPlugin>) {
         self.inner.plugins.lock().unwrap().push(plugin);
+        self.inner.walk.lock().unwrap().rebuild = true;
+        self.inner.wake_walk();
     }
 
-    /// The currently-playing track jumps the walk order for every plugin
-    /// that still `needs()` it. Call from wherever `Session` reacts to
-    /// `PlayerEvent::Playing`.
+    /// The currently-playing track goes to the now-playing worker for every plugin that still
+    /// `needs()` it, preempting whatever that worker was analyzing. Call from wherever `Session`
+    /// reacts to `PlayerEvent::Playing` and `Stream{Done}`.
     pub fn prioritize(&self, track: TrackId) {
         let mut q = self.inner.priority.lock().unwrap();
-        // A fresh call (e.g. `PlayerEvent::Materialized` firing after
-        // `Playing` already queued it) resets the retry window rather than
-        // being a no-op, since it's new evidence there's something worth
-        // trying again for.
+        // A fresh call (e.g. `Stream{Done}` after `Playing` already queued it) restarts the retry window.
         q.retain(|(t, _)| *t != track);
         q.push_front((track, Instant::now()));
+        self.inner.priority_wake.notify_one();
+    }
+
+    /// `track` was written, added or removed: the walk re-reads it.
+    pub fn track_changed(&self, track: TrackId) {
+        let mut walk = self.inner.walk.lock().unwrap();
+        walk.dirty.push(track);
+        walk.woken = true;
+        self.inner.walk_wake.notify_one();
+    }
+
+    /// A stream reached a terminal state: a held fetch may be over, so the walk can start the next.
+    pub fn stream_ended(&self) {
+        self.inner.wake_walk();
     }
 
     /// Reports "the list the user is currently looking at, and which row is
     /// highlighted" — the walk then proceeds from `highlighted`, forward,
-    /// wrapping to the start, instead of `store.all_tracks()`'s arbitrary
-    /// order. Call whenever the UI's active screen/selection changes (or
-    /// every redraw, which is cheap — this just replaces a small shared
-    /// value). An empty `tracks` clears it, falling back to the full-library
-    /// walk (e.g. a screen with no track list, like Playlists' own folder
-    /// view).
+    /// wrapping to the start, instead of the whole library in arbitrary
+    /// order. Call whenever the UI's active screen/selection changes. An empty `tracks` clears it,
+    /// falling back to the full-library walk (e.g. a screen with no track list, like Playlists' own
+    /// folder view).
     pub fn follow_view(&self, tracks: Vec<TrackId>, highlighted: usize) {
+        let next = if tracks.is_empty() { None } else { Some(ViewOrder { tracks, highlighted }) };
         let mut view = self.inner.view.lock().unwrap();
-        *view = if tracks.is_empty() { None } else { Some(ViewOrder { tracks, highlighted }) };
+        if *view != next {
+            *view = next;
+            drop(view);
+            self.inner.wake_walk();
+        }
     }
 
-    /// Sets the driver's mode (`B` / `:togglescan` cycles it). Switching to
-    /// `Disabled` drains `priority` and clears any in-flight `Downloading`
-    /// status so it fully inhibits the scanner rather than just skipping
-    /// the next tick.
+    /// Sets the driver's mode (`B` / `:togglescan` cycles it). Leaving `Active` drops the held
+    /// fetch claims so a background download stops; `Disabled` also drains `priority` and makes
+    /// every running analysis give up.
     pub fn set_mode(&self, mode: ScanMode) {
         self.inner.mode.store(mode.to_u8(), Ordering::Relaxed);
         if mode == ScanMode::Disabled {
             self.inner.priority.lock().unwrap().clear();
-            self.inner.status.lock().unwrap().retain(|_, v| *v != ScanStatus::Downloading);
         }
+        reap_held(&self.inner, mode);
+        self.inner.wake_walk();
+        self.inner.priority_wake.notify_one();
     }
 
     pub fn mode(&self) -> ScanMode {
-        ScanMode::from_u8(self.inner.mode.load(Ordering::Relaxed))
+        self.inner.mode()
     }
 
     /// Live status of `plugin_id`'s last/current attempt at `track`. `None`
@@ -384,345 +326,381 @@ impl ScanDriver {
     }
 }
 
-/// The per-track-independent resources `scan_one` needs, bundled so its own
-/// signature stays under clippy's argument-count limit.
-struct ScanCtx<'a> {
-    media: &'a HashMap<SourceId, Arc<dyn MediaProvider>>,
-    players: &'a HashMap<SourceId, Arc<dyn Player>>,
-    media_cache: &'a MediaCache,
+/// What one attempt at a track came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// A plugin ran.
+    Attempted,
+    /// Blocked by a timer (cooldown, backoff, `min_interval`) until then.
+    NotBefore(Instant),
+    /// Blocked on an event: another download is held, the other worker has it, or no stream exists yet.
+    Waiting,
+    /// No plugin has anything left to do for this track.
+    Nothing,
 }
 
-fn run(
+/// Everything a worker thread needs; one per thread.
+struct Worker {
     inner: Arc<Inner>,
     catalog: Arc<Catalog>,
     store: Arc<dyn Store>,
+    engine: StreamEngine,
     media_cache: Arc<MediaCache>,
-) {
-    loop {
-        thread::sleep(TICK);
-        let mode = ScanMode::from_u8(inner.mode.load(Ordering::Relaxed));
-        if mode == ScanMode::Disabled {
-            continue;
-        }
+}
 
-        // Cloned fresh every tick (cheap: `Arc` clones) rather than a
-        // snapshot moved in at spawn time, so a source wired up after
-        // startup (`ScanDriver::update_wiring`) is visible on the very next
-        // tick instead of never.
-        let media = inner.media.snapshot();
-        let players = inner.players.lock().unwrap().clone();
-        let plugins = inner.plugins.lock().unwrap().clone();
-        let ctx = ScanCtx { media: &media, players: &players, media_cache: &media_cache };
-
-        let prio = inner.priority.lock().unwrap().pop_front();
-        if let Some((id, started)) = prio {
-            match store.get_track(id) {
-                Ok(Some(track)) => {
-                    // Always attempted with `ScanFetchMode::CacheOnly` (see
-                    // `scan_one`), which never blocks on a plugin's
-                    // `min_interval` — so this either resolves the track or
-                    // finds it not materialized yet. Either way, re-check
-                    // `needs()` and requeue if there's still something to
-                    // do, so a not-yet-materialized now-playing track keeps
-                    // getting retried every tick instead of just once — but
-                    // only up to `PRIORITY_RETRY_TIMEOUT`, since a source
-                    // with nothing that will ever materialize this track
-                    // under `CacheOnly` would otherwise retry forever.
-                    let attempted = scan_one(&inner, &plugins, &catalog, &ctx, &track, true, mode);
-                    if any_plugin_needs(&inner, &plugins, &track) {
-                        if started.elapsed() < PRIORITY_RETRY_TIMEOUT {
-                            inner.priority.lock().unwrap().push_front((id, started));
-                        } else {
-                            log::debug!(
-                                "scan: priority track {id:?} still unresolved after {PRIORITY_RETRY_TIMEOUT:?}, \
-                                 falling back to the general walk's own cadence"
-                            );
-                        }
-                    } else {
-                        log::debug!("scan: priority track {id:?} has nothing left to do");
+impl Worker {
+    /// The background walk: sleeps until told something changed (or a timer runs out), then makes
+    /// one pass over the candidates in view order and attempts the first one that can go.
+    fn run_walk(&self) {
+        // Every track some plugin still `needs()`; kept in memory and patched per `track_changed`.
+        let mut candidates: HashMap<TrackId, Track> = HashMap::new();
+        let mut next_at: Option<Instant> = None;
+        let mut earliest = Instant::now();
+        loop {
+            let inbox = self.wait_walk(next_at, earliest);
+            let mode = self.inner.mode();
+            reap_held(&self.inner, mode);
+            let plugins = self.inner.plugins.lock().unwrap().clone();
+            let needed = |t: &Track| plugins.iter().any(|p| p.needs(t));
+            if inbox.rebuild {
+                candidates.clear();
+                if !plugins.is_empty() {
+                    match self.store.all_tracks() {
+                        Ok(all) => candidates.extend(all.into_iter().filter(|t| needed(t)).map(|t| (t.id, t))),
+                        Err(e) => log::warn!("scan: listing the library failed: {e}"),
                     }
-                    if attempted {
-                        continue;
-                    }
+                    log::debug!("scan: {} track(s) still need analysis", candidates.len());
                 }
-                Ok(None) => log::debug!("scan: priority track {id:?} not found in store"),
-                Err(e) => log::warn!("scan: priority lookup of {id:?} failed: {e}"),
+            }
+            for id in inbox.dirty {
+                match self.store.get_track(id) {
+                    Ok(Some(t)) if needed(&t) => {
+                        candidates.insert(id, t);
+                    }
+                    Ok(_) => {
+                        candidates.remove(&id);
+                    }
+                    Err(e) => log::warn!("scan: reading {id:?} failed: {e}"),
+                }
+            }
+            next_at = None;
+            earliest = Instant::now() + PASS_SPACING;
+            if mode == ScanMode::Disabled {
+                continue;
+            }
+            let mut done: Vec<TrackId> = Vec::new();
+            for id in self.walk_order(&candidates) {
+                let Some(track) = candidates.get(&id) else { continue };
+                match self.scan_one(&plugins, track, Access::from_mode(mode), &|| self.inner.mode() != ScanMode::Disabled) {
+                    Verdict::Attempted => {
+                        // Re-read what the attempt wrote before its `TrackUpdated` comes back, then pass again.
+                        self.inner.walk.lock().unwrap().dirty.push(id);
+                        self.inner.wake_walk();
+                        break;
+                    }
+                    Verdict::NotBefore(t) => next_at = Some(next_at.map_or(t, |n| n.min(t))),
+                    Verdict::Waiting => {}
+                    Verdict::Nothing => done.push(id),
+                }
+            }
+            for id in done {
+                candidates.remove(&id);
             }
         }
+    }
 
-        // MVP: an O(list) walk every tick rather than a persisted cursor —
-        // fine at MVP scale, and `needs()` makes an already-fully-scanned
-        // pass cheap (no I/O). `track` here is only ever used to decide
-        // *whether* and *what* to scan — the actual write
-        // (`scan_one` -> `Catalog::patch`) re-reads under its own lock, so a
-        // stale snapshot from this walk can't clobber a concurrent
-        // UI-thread edit made after the list was read.
-        //
-        // Every track is tried, not just the first that needs work: a
-        // track a plugin can never handle (permanent `Skip`/`Retry`, e.g.
-        // no fetchable audio) must not starve every track after it in the
-        // walk order — each plugin's own `min_interval` cooldown (plus the
-        // per-track failure cooldown) already bounds how much real I/O this
-        // does per tick.
-        let Some(tracks) = resolve_walk_list(&inner, &store, &plugins, &media_cache, mode) else {
-            continue;
+    /// Blocks until woken (not before `earliest`) or `next_at` passes; hands back what arrived.
+    fn wait_walk(&self, next_at: Option<Instant>, earliest: Instant) -> WalkInbox {
+        let mut walk = self.inner.walk.lock().unwrap();
+        loop {
+            let now = Instant::now();
+            if next_at.is_some_and(|t| t <= now) || (walk.woken && earliest <= now) {
+                walk.woken = false;
+                return std::mem::take(&mut walk);
+            }
+            let deadline = match (walk.woken, next_at) {
+                (true, Some(t)) => Some(earliest.min(t)),
+                (true, None) => Some(earliest),
+                (false, t) => t,
+            };
+            walk = match deadline {
+                Some(t) => self.inner.walk_wake.wait_timeout(walk, t - now).unwrap().0,
+                None => self.inner.walk_wake.wait(walk).unwrap(),
+            };
+        }
+    }
+
+    /// The candidates in the order the walk tries them: the UI-reported view from its highlighted
+    /// row, wrapping, if one is set; otherwise all of them.
+    fn walk_order(&self, candidates: &HashMap<TrackId, Track>) -> Vec<TrackId> {
+        match self.inner.view.lock().unwrap().as_ref() {
+            Some(view) => {
+                let n = view.tracks.len();
+                let start = view.highlighted % n;
+                let mut seen = HashSet::new();
+                (0..n)
+                    .map(|offset| view.tracks[(start + offset) % n])
+                    .filter(|id| candidates.contains_key(id) && seen.insert(*id))
+                    .collect()
+            }
+            None => candidates.keys().copied().collect(),
+        }
+    }
+
+    /// The now-playing worker: analyzes whatever `prioritize` queued, newest first, peeking at the
+    /// running or cached stream. A newer track preempts the analysis in progress.
+    fn run_priority(&self) {
+        loop {
+            let (id, since) = {
+                let mut q = self.inner.priority.lock().unwrap();
+                loop {
+                    if let Some(front) = q.pop_front() {
+                        break front;
+                    }
+                    q = self.inner.priority_wake.wait(q).unwrap();
+                }
+            };
+            let track = match self.store.get_track(id) {
+                Ok(Some(track)) => track,
+                Ok(None) => {
+                    log::debug!("scan: priority track {id:?} not found in store");
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!("scan: priority lookup of {id:?} failed: {e}");
+                    continue;
+                }
+            };
+            let plugins = self.inner.plugins.lock().unwrap().clone();
+            let wanted = || {
+                self.inner.mode() != ScanMode::Disabled && self.inner.priority.lock().unwrap().front().is_none_or(|(t, _)| *t == id)
+            };
+            let mut waiting = false;
+            for plugin in &plugins {
+                match self.scan_one(std::slice::from_ref(plugin), &track, Access::Peek, &wanted) {
+                    Verdict::Waiting => waiting = true,
+                    Verdict::Attempted if !wanted() => break,
+                    _ => {}
+                }
+            }
+            if !waiting || !wanted() {
+                continue;
+            }
+            if since.elapsed() >= PRIORITY_RETRY_TIMEOUT {
+                log::debug!("scan: priority track {id:?} still waiting after {PRIORITY_RETRY_TIMEOUT:?}, leaving it to the walk");
+                continue;
+            }
+            let mut q = self.inner.priority.lock().unwrap();
+            if q.is_empty() {
+                q.push_back((id, since));
+                drop(self.inner.priority_wake.wait_timeout(q, PRIORITY_RETRY_TICK).unwrap());
+            }
+        }
+    }
+
+    /// Whether a fetch for `track` may start now: no download is being kept alive (one at a time)
+    /// and one of its sources is not backed off. A cached or already-running rendition needs none.
+    fn fetchable(&self, track: &Track) -> Result<(), Verdict> {
+        let held = self.inner.held.lock().unwrap();
+        if track.renditions.iter().any(|r| held.iter().any(|(h, _)| *h.key() == (r.source.clone(), r.uri.clone()))) {
+            return Ok(());
+        }
+        if !held.is_empty() {
+            return Err(Verdict::Waiting);
+        }
+        let backoff = self.inner.source_backoff.lock().unwrap();
+        let now = Instant::now();
+        let mut soonest: Option<Instant> = None;
+        for r in &track.renditions {
+            match backoff.get(&r.source) {
+                Some((_, until)) if *until > now => soonest = Some(soonest.map_or(*until, |s| s.min(*until))),
+                _ => return Ok(()),
+            }
+        }
+        Err(soonest.map_or(Verdict::Nothing, Verdict::NotBefore))
+    }
+
+    /// Whether some rendition of `track` is cached or downloading right now.
+    fn has_stream(&self, track: &Track) -> bool {
+        track.renditions.iter().any(|r| {
+            self.media_cache.cached_path(&r.source, &r.uri).is_some() || self.engine.is_running(&(r.source.clone(), r.uri.clone()))
+        })
+    }
+
+    /// Opens `track`'s audio as a stream: a cached rendition first, else per `access`. Records the stream in `used`.
+    fn open_stream(&self, track: &Track, access: Access, used: &RefCell<Option<StreamHandle>>) -> Result<StreamHandle, Outcome> {
+        let mut renditions: Vec<&Rendition> = track.renditions.iter().collect();
+        renditions.sort_by_key(|r| self.media_cache.cached_path(&r.source, &r.uri).is_none());
+        for r in renditions {
+            let intent = if access == Access::Fetch { Intent::Fetch } else { Intent::Peek };
+            let (handle, claim) = match self.engine.open(r, intent) {
+                Ok(opened) => opened,
+                Err(Error::NotFound) => continue,
+                Err(e) => {
+                    log::warn!("scan: {} couldn't open {}: {e}", r.source, r.uri);
+                    continue;
+                }
+            };
+            *used.borrow_mut() = Some(handle.clone());
+            if intent == Intent::Fetch && handle.info().state != StreamState::Done {
+                self.inner.held.lock().unwrap().push((handle.clone(), claim));
+            }
+            if !handle.wait_range(0..1, FIRST_BYTE_TIMEOUT) {
+                self.inner.held.lock().unwrap().retain(|(h, _)| h.key() != handle.key());
+                return Err(Outcome::Retry);
+            }
+            return Ok(handle);
+        }
+        Err(Outcome::Skip)
+    }
+
+    /// A failed fetch backs its source off; a finished one clears it.
+    fn note_source(&self, source: &SourceId, failed: bool) {
+        let mut backoff = self.inner.source_backoff.lock().unwrap();
+        if !failed {
+            backoff.remove(source);
+            return;
+        }
+        let count = backoff.get(source).map_or(0, |(n, _)| *n) + 1;
+        let wait = (SOURCE_BACKOFF * 2u32.saturating_pow(count - 1)).min(SOURCE_BACKOFF_MAX);
+        log::debug!("scan: {source} fetch failed {count} time(s) in a row, leaving it alone for {wait:?}");
+        backoff.insert(source.clone(), (count, Instant::now() + wait));
+    }
+
+    /// Runs the first plugin that `needs()` `track` and can go right now; otherwise why none could.
+    fn scan_one(&self, plugins: &[Arc<dyn ScanPlugin>], track: &Track, access: Access, wanted: &dyn Fn() -> bool) -> Verdict {
+        let mut verdict = Verdict::Nothing;
+        let mut block = |v: Verdict| {
+            verdict = match (verdict, v) {
+                (Verdict::NotBefore(a), Verdict::NotBefore(b)) => Verdict::NotBefore(a.min(b)),
+                (Verdict::NotBefore(a), _) | (_, Verdict::NotBefore(a)) => Verdict::NotBefore(a),
+                (Verdict::Waiting, _) | (_, Verdict::Waiting) => Verdict::Waiting,
+                _ => Verdict::Nothing,
+            }
         };
-        let ids: Vec<TrackId> = tracks.iter().map(|t| t.id).collect();
-        {
-            let idle = inner.idle_since.lock().unwrap();
-            if let Some((idle_ids, since)) = idle.as_ref()
-                && *idle_ids == ids
-                && since.elapsed() < IDLE_BACKOFF
+        let has_stream = self.has_stream(track);
+        for plugin in plugins {
+            if !plugin.needs(track) {
+                continue;
+            }
+            let key = (plugin.id(), track.id);
+            match self.inner.status.lock().unwrap().get(&key) {
+                // A prior `Outcome::Skip` means "not this plugin's job" for the rest of this run.
+                Some(ScanStatus::Skipped) => continue,
+                Some(ScanStatus::Downloading) => {
+                    block(Verdict::Waiting);
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some((count, at)) = self.inner.failures.lock().unwrap().get(&key) {
+                let wait = if *count >= FAILURE_THRESHOLD { FAILURE_COOLDOWN } else { RETRY_SPACING };
+                if at.elapsed() < wait {
+                    block(Verdict::NotBefore(*at + wait));
+                    continue;
+                }
+            }
+            if !has_stream {
+                if access == Access::Peek {
+                    block(Verdict::Waiting);
+                    continue;
+                }
+                if let Err(v) = self.fetchable(track) {
+                    block(v);
+                    continue;
+                }
+            }
+            // `min_interval` spaces real downloads; a cached or running stream costs the source nothing.
+            let mut last_run: Option<MutexGuard<HashMap<&'static str, Instant>>> = None;
+            if !has_stream {
+                let guard = self.inner.last_run.lock().unwrap();
+                if let Some(t) = guard.get(plugin.id())
+                    && t.elapsed() < plugin.min_interval()
+                {
+                    block(Verdict::NotBefore(*t + plugin.min_interval()));
+                    continue;
+                }
+                last_run = Some(guard);
+            }
             {
-                continue;
-            }
-        }
-        let mut scanned = 0usize;
-        for track in &tracks {
-            if scan_one(&inner, &plugins, &catalog, &ctx, track, false, mode) {
-                scanned += 1;
-            }
-        }
-        if scanned > 0 {
-            log::debug!("scan: walk tick scanned {scanned}/{} track(s)", tracks.len());
-            inner.idle_since.lock().unwrap().take();
-        } else {
-            inner.idle_since.lock().unwrap().replace((ids, Instant::now()));
-        }
-    }
-}
-
-/// The list of tracks (and their order) `run`'s walk should try this tick:
-/// the UI-reported view (`ScanDriver::follow_view`), starting at its
-/// highlighted row and wrapping, if one is set; otherwise the full library
-/// in whatever order `store.all_tracks()` returns it. `None` only on a store
-/// read failure.
-///
-/// Under `CacheOnly`, also drops any track that isn't already in
-/// `MediaCache` (or that no plugin still `needs()`) — nothing will ever
-/// materialize it under this mode besides the priority now-playing path,
-/// which walks independently of this list, so there's no point revisiting
-/// it every tick just to log the same miss.
-fn resolve_walk_list(
-    inner: &Inner,
-    store: &Arc<dyn Store>,
-    plugins: &[Arc<dyn ScanPlugin>],
-    media_cache: &MediaCache,
-    mode: ScanMode,
-) -> Option<Vec<Track>> {
-    let tracks = if let Some(view) = inner.view.lock().unwrap().clone() {
-        let n = view.tracks.len();
-        let start = view.highlighted % n;
-        let mut out = Vec::with_capacity(n);
-        for offset in 0..n {
-            let id = view.tracks[(start + offset) % n];
-            if let Ok(Some(track)) = store.get_track(id) {
-                out.push(track);
-            }
-        }
-        out
-    } else {
-        store.all_tracks().ok()?
-    };
-
-    if mode != ScanMode::CacheOnly {
-        return Some(tracks);
-    }
-    Some(
-        tracks
-            .into_iter()
-            .filter(|t| {
-                any_plugin_needs(inner, plugins, t)
-                    && t.renditions.iter().any(|r| media_cache.cached_path(&r.source, &r.uri).is_some())
-            })
-            .collect(),
-    )
-}
-
-/// Whether any registered plugin still `needs()` `track` and hasn't
-/// permanently given up on it (`Outcome::Skip`) — used to decide whether a
-/// priority track that couldn't be scanned this tick is worth requeuing.
-fn any_plugin_needs(inner: &Inner, plugins: &[Arc<dyn ScanPlugin>], track: &Track) -> bool {
-    plugins.iter().any(|p| {
-        p.needs(track)
-            && inner.status.lock().unwrap().get(&(p.id(), track.id)) != Some(&ScanStatus::Skipped)
-    })
-}
-
-/// Whether a live fetch for `track` would go through a player that's asking scans to hold off.
-fn fetch_paused(ctx: &ScanCtx, track: &Track) -> bool {
-    track.renditions.iter().any(|r| {
-        !ctx.media.contains_key(&r.source)
-            && ctx.players.get(&r.source).is_some_and(|p| p.scan_fetch_paused())
-    })
-}
-
-/// Run the first plugin that both `needs()` `track` and is off its own
-/// `min_interval` cooldown. Returns whether a plugin was actually invoked.
-/// `priority`: this is the currently-playing-track fast path, which always
-/// fetches with `ScanFetchMode::CacheOnly` — never `Full`/`Partial` —
-/// so scanning never races the live player's own fetch of the same file.
-fn scan_one(
-    inner: &Inner,
-    plugins: &[Arc<dyn ScanPlugin>],
-    catalog: &Arc<Catalog>,
-    ctx: &ScanCtx,
-    track: &Track,
-    priority: bool,
-    driver_mode: ScanMode,
-) -> bool {
-    for plugin in plugins {
-        if !plugin.needs(track) {
-            continue;
-        }
-        // A prior `Outcome::Skip` means "not this plugin's job" — honour
-        // that for the rest of this run rather than re-attempting it every
-        // `min_interval`, which would otherwise waste a cooldown slot
-        // forever on a track this plugin will never handle. Never recorded
-        // for a `CacheOnly` miss in the first place (below) — that's "not
-        // materialized yet", not a verdict.
-        if inner.status.lock().unwrap().get(&(plugin.id(), track.id)) == Some(&ScanStatus::Skipped)
-        {
-            continue;
-        }
-        {
-            let mut cooldown = inner.failure_cooldown.lock().unwrap();
-            match cooldown.get(&(plugin.id(), track.id)) {
-                Some(since) if since.elapsed() < FAILURE_COOLDOWN => continue,
-                Some(_) => {
-                    cooldown.remove(&(plugin.id(), track.id));
+                let mut status = self.inner.status.lock().unwrap();
+                if status.get(&key) == Some(&ScanStatus::Downloading) {
+                    block(Verdict::Waiting);
+                    continue;
                 }
-                None => {}
+                status.insert(key, ScanStatus::Downloading);
             }
-        }
+            if let Some(mut guard) = last_run {
+                guard.insert(plugin.id(), Instant::now());
+            }
 
-        let mode = if priority || driver_mode == ScanMode::CacheOnly {
-            ScanFetchMode::CacheOnly
-        } else if fetch_paused(ctx, track) {
-            // No status recorded, so the track stays queued for the first walk after the pause lifts.
-            if !track.renditions.iter().any(|r| ctx.media_cache.cached_path(&r.source, &r.uri).is_some()) {
-                return false;
-            }
-            ScanFetchMode::CacheOnly
-        } else if inner.cache_full || plugin.wants_full_audio() {
-            ScanFetchMode::Full
-        } else {
-            ScanFetchMode::Partial
-        };
-
-        // `min_interval` only throttles a real fetch — a `CacheOnly`
-        // attempt never touches the network, so it's never worth delaying
-        // (this is what lets the now-playing fast path pick up a track
-        // within one tick of it being materialized, rather than waiting
-        // out the plugin's cooldown).
-        if mode != ScanFetchMode::CacheOnly {
-            let mut last_run = inner.last_run.lock().unwrap();
-            let ready = last_run
-                .get(plugin.id())
-                .is_none_or(|t| t.elapsed() >= plugin.min_interval());
-            if !ready {
-                continue;
-            }
-            last_run.insert(plugin.id(), Instant::now());
-        }
-
-        inner.status.lock().unwrap().insert((plugin.id(), track.id), ScanStatus::Downloading);
-
-        log::debug!(
-            "scan[{}]: attempting \"{}\" ({:?}, {mode:?}{})",
-            plugin.id(),
-            track.title,
-            track.id,
-            if priority { ", priority" } else { "" }
-        );
-        // Lazy: invoking this is what actually fetches/decrypts over the
-        // network, so a plugin should only call it on a `media_cache` miss —
-        // a cache hit must cost nothing beyond the disk read.
-        let open_audio = || -> Option<(Rendition, Box<dyn ReadSeek + Send>)> {
-            let found = track.renditions.iter().find_map(|r| {
-                open_scan_audio(r, ctx.media, ctx.players, ctx.media_cache, mode).map(|a| (r.clone(), a))
-            });
-            if found.is_none() {
-                log::debug!(
-                    "scan[{}]: no audio available for \"{}\" ({:?}) across {} rendition(s)",
-                    plugin.id(),
-                    track.title,
-                    track.id,
-                    track.renditions.len()
-                );
-            }
-            found
-        };
-        match plugin.analyze(track, &open_audio, ctx.media_cache) {
-            Outcome::Done(meta) => {
-                log::debug!(
-                    "scan[{}]: done with \"{}\" ({:?}): {:?}",
-                    plugin.id(),
-                    track.title,
-                    track.id,
-                    meta.attrs
-                );
-                // `patch` re-reads the track under `Catalog`'s lock and merges
-                // into whatever's current, not into this (possibly stale)
-                // `track` snapshot — see the comment on `Catalog::lock`.
-                let _ = catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
-                inner.status.lock().unwrap().remove(&(plugin.id(), track.id));
-                inner.failures.lock().unwrap().remove(&(plugin.id(), track.id));
-            }
-            Outcome::Skip if mode == ScanFetchMode::CacheOnly => {
-                // Not a verdict — just not materialized yet under a mode
-                // that was never allowed to fetch. Leave "waiting" (no
-                // status entry) so a later `Active` attempt gets a fresh
-                // try instead of finding this sticky-`Skipped`. And unlike
-                // every other outcome, nothing was actually accomplished —
-                // report "not scanned" so the general walk's idle backoff
-                // still engages instead of busy-looping every `TICK`
-                // forever on a track nothing will ever materialize under
-                // `CacheOnly` (e.g. no playback-triggered materializer).
-                log::debug!(
-                    "scan[{}]: \"{}\" ({:?}) not materialized yet (CacheOnly)",
-                    plugin.id(),
-                    track.title,
-                    track.id
-                );
-                inner.status.lock().unwrap().remove(&(plugin.id(), track.id));
-                return false;
-            }
-            Outcome::Skip => {
-                log::debug!(
-                    "scan[{}]: skipping \"{}\" ({:?}) — not applicable",
-                    plugin.id(),
-                    track.title,
-                    track.id
-                );
-                inner.status.lock().unwrap().insert((plugin.id(), track.id), ScanStatus::Skipped);
-                // A real fetch may have cached audio even with nothing to report — announce it.
-                catalog.announce(track.id);
-            }
-            Outcome::Retry => {
-                log::warn!(
-                    "scan[{}]: retrying \"{}\" ({:?}) later — transient failure",
-                    plugin.id(),
-                    track.title,
-                    track.id
-                );
-                inner.status.lock().unwrap().insert((plugin.id(), track.id), ScanStatus::Error);
-                let mut failures = inner.failures.lock().unwrap();
-                let count = failures.entry((plugin.id(), track.id)).or_insert(0);
-                *count += 1;
-                if *count >= FAILURE_THRESHOLD {
-                    // No track name, so every track that gives up shares one warnings row.
-                    catalog.warn(plugin.id(), "scan keeps failing for some tracks — see :log".to_string());
-                    inner
-                        .failure_cooldown
-                        .lock()
-                        .unwrap()
-                        .insert((plugin.id(), track.id), Instant::now());
+            log::debug!("scan[{}]: attempting \"{}\" ({:?}, {access:?})", plugin.id(), track.title, track.id);
+            let used: RefCell<Option<StreamHandle>> = RefCell::new(None);
+            let open_audio = || self.open_stream(track, access, &used);
+            let outcome = plugin.analyze(track, &open_audio, wanted);
+            let stream = used.into_inner();
+            let source = stream.as_ref().map(|h| h.key().0.clone());
+            match outcome {
+                Outcome::Done(meta) => {
+                    log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs);
+                    // `patch` re-reads the track under `Catalog`'s lock and merges into whatever's current.
+                    let _ = self.catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
+                    self.inner.status.lock().unwrap().remove(&key);
+                    self.inner.failures.lock().unwrap().remove(&key);
+                    if let Some(source) = &source {
+                        self.note_source(source, false);
+                    }
+                }
+                Outcome::Skip if stream.is_none() && access == Access::Peek => {
+                    // No stream to peek at (not playing, not cached): not a verdict.
+                    log::debug!("scan[{}]: \"{}\" ({:?}) has no cached or running stream yet", plugin.id(), track.title, track.id);
+                    self.inner.status.lock().unwrap().remove(&key);
+                    block(Verdict::Waiting);
+                    continue;
+                }
+                Outcome::Skip => {
+                    log::debug!("scan[{}]: skipping \"{}\" ({:?}) — not applicable", plugin.id(), track.title, track.id);
+                    self.inner.status.lock().unwrap().insert(key, ScanStatus::Skipped);
+                    // A real fetch may have cached audio even with nothing to report — announce it.
+                    self.catalog.announce(track.id);
+                }
+                Outcome::Retry if !wanted() || stream.as_ref().is_some_and(|h| h.info().state == StreamState::Cancelled) => {
+                    // Skipped, paused or preempted mid-analysis: not a failure, tried again later.
+                    log::debug!("scan[{}]: \"{}\" ({:?}) abandoned, trying again later", plugin.id(), track.title, track.id);
+                    self.inner.status.lock().unwrap().remove(&key);
+                }
+                Outcome::Retry => {
+                    log::warn!("scan[{}]: retrying \"{}\" ({:?}) later — transient failure", plugin.id(), track.title, track.id);
+                    self.inner.status.lock().unwrap().insert(key, ScanStatus::Error);
+                    if access == Access::Fetch
+                        && let Some(source) = &source
+                    {
+                        self.note_source(source, true);
+                    }
+                    let mut failures = self.inner.failures.lock().unwrap();
+                    let (count, at) = failures.entry(key).or_insert((0, Instant::now()));
+                    *count += 1;
+                    *at = Instant::now();
+                    if *count >= FAILURE_THRESHOLD {
+                        // No track name, so every track that gives up shares one warnings row.
+                        self.catalog.warn(plugin.id(), "scan keeps failing for some tracks — see :log".to_string());
+                    }
                 }
             }
+            return Verdict::Attempted;
         }
-        return true;
+        verdict
     }
-    false
 }
 
+impl Access {
+    fn from_mode(mode: ScanMode) -> Self {
+        if mode == ScanMode::Active { Access::Fetch } else { Access::Peek }
+    }
+}
+
+/// Drops the claims of finished fetches, and all of them once the driver stops fetching.
+fn reap_held(inner: &Inner, mode: ScanMode) {
+    let mut held = inner.held.lock().unwrap();
+    held.retain(|(h, _)| mode == ScanMode::Active && matches!(h.info().state, StreamState::Connecting | StreamState::Fetching | StreamState::Buffering));
+}

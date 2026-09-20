@@ -215,14 +215,11 @@ pub struct Auth {
 }
 
 impl Auth {
-    /// A librespot [`Cache`] rooted at `cache_dir`, caching credentials, the
-    /// last volume and downloaded audio files.
+    /// A librespot [`Cache`] rooted at `cache_dir`, caching credentials only
+    /// (audio lives in `MediaCache`).
     pub fn cache(cache_dir: &Path) -> Result<Cache, String> {
         Cache::new(
-            Some(cache_dir.to_path_buf()),
-            Some(cache_dir.join("volume")),
-            Some(cache_dir.join("files")),
-            None,
+            Some(cache_dir.to_path_buf()), None, None, None,
         )
         .map_err(|e| format!("librespot cache: {e}"))
     }

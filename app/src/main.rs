@@ -563,7 +563,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             media_cache.log_file_stats();
         });
     }
-    let rodio = Arc::new(RodioPlayer::new(media.clone(), bus.clone(), media_cache.clone()));
+    let engine = medley_core::StreamEngine::new(media.clone(), media_cache.clone(), bus.clone());
+    let rodio = Arc::new(RodioPlayer::new(engine.clone(), bus.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();
     if http_enabled {
         players.insert(SourceId::from("http"), rodio.clone());
@@ -593,10 +594,11 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         let plugin = Arc::new(sources_spotify::SpotifyPlugin::new(
             cache_dir,
             bus.clone(),
-            cfg.volume,
-            media_cache.clone(),
         ));
         register_plugin(plugin, &mut sources, &media, &mut players, &mut plugins);
+        if media.contains(&SourceId::from("spotify")) {
+            players.insert(SourceId::from("spotify"), rodio.clone());
+        }
     }
 
     // BpmPlugin is registered into the running driver further down instead
@@ -617,6 +619,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         plugins,
         scan_plugins,
         media_cache,
+        engine,
         data_dir().join("history.m3u8"),
     );
     if let Some(scan) = &session.scan {

@@ -1,8 +1,7 @@
 //! `player` — audio playback for medley.
 //!
 //! Two `core::Player` implementations:
-//! - [`RodioPlayer`]: real playback via `rodio`. `Media::Url` is fully
-//!   downloaded to a tempfile before decoding (`// MVP:`).
+//! - [`RodioPlayer`]: real playback via `rodio`, fed by `core::StreamEngine` streams.
 //! - [`NullPlayer`]: headless, no device, no decode — emits a fixed event
 //!   sequence carrying exactly the loaded `(source, uri)`. Used by the M1c
 //!   integration test.
@@ -29,6 +28,10 @@ struct Snapshot {
     volume: f32,
     source: Option<core::SourceId>,
     uri: Option<String>,
+    /// The stream being played or loaded, for the live download status.
+    stream: Option<core::StreamHandle>,
+    /// Playback is paused waiting for the download.
+    buffering: bool,
 }
 
 impl Default for Snapshot {
@@ -40,17 +43,26 @@ impl Default for Snapshot {
             volume: 1.0,
             source: None,
             uri: None,
+            stream: None,
+            buffering: false,
         }
     }
 }
 
 impl Snapshot {
     fn status(&self) -> PlayerStatus {
+        let info = self.stream.as_ref().map(|h| h.info());
+        let waiting = info.as_ref().is_some_and(|i| matches!(i.state, core::StreamState::Connecting | core::StreamState::Buffering));
+        let downloading = info.as_ref().is_some_and(|i| {
+            matches!(i.state, core::StreamState::Connecting | core::StreamState::Fetching | core::StreamState::Buffering | core::StreamState::Committing)
+        });
         PlayerStatus {
             state: self.state,
             position_ms: self.position_ms,
             duration_ms: self.duration_ms,
             volume: self.volume,
+            buffering: self.buffering || waiting,
+            download_pct: info.and_then(|i| i.percent).filter(|_| downloading),
         }
     }
 }

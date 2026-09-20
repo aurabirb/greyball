@@ -232,7 +232,7 @@ on `revision` — it is read fresh or kept in its own small cache.
 - A library scan's flood of `TrackUpdated`s moves `revision` only, so it redraws the visible rows but
   never re-filters, re-follows or rebuilds Help; nor does a remote page landing re-filter another list.
 - A row's cached-track marker (`Row::source`, `Session::is_track_cached`) only ever changes off a
-  `TrackUpdated`/`Materialized` event, so every `MediaCache` write site must send one once the write
+  `TrackUpdated`/`Stream{Done}` event, so every `MediaCache` write site must send one once the write
   lands.
 - `Session::remote_playlists` is a pure read of whatever's landed; the fetch itself is kicked by
   `Session::ensure_remote_playlists`, never from the getter or a redraw: at startup (`app/src/main.rs`), on

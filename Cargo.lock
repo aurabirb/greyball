@@ -86,7 +86,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "block2",
  "bpm",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "bpm"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "log",
@@ -370,7 +370,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "core"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -1858,30 +1858,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "librespot-playback"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88258620bf3e6808ea1fadd11639648d77c06280b9f5a4c9d14ea79f6f998af6"
-dependencies = [
- "cpal",
- "form_urlencoded",
- "futures-util",
- "librespot-audio",
- "librespot-core",
- "librespot-metadata",
- "log",
- "portable-atomic",
- "rand 0.9.5",
- "rand_distr",
- "rodio",
- "shell-words",
- "symphonia",
- "thiserror 2.0.20",
- "tokio",
- "zerocopy",
-]
-
-[[package]]
 name = "librespot-protocol"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2562,13 +2538,12 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "player"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "crossbeam-channel",
  "log",
  "rodio",
- "tempfile",
  "wide",
 ]
 
@@ -3318,12 +3293,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shell-words"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
-
-[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3417,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "sources-http"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "log",
@@ -3428,7 +3397,7 @@ dependencies = [
 
 [[package]]
 name = "sources-soulseek"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "log",
@@ -3441,7 +3410,7 @@ dependencies = [
 
 [[package]]
 name = "sources-soundcloud"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "log",
@@ -3449,13 +3418,12 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "url",
 ]
 
 [[package]]
 name = "sources-spotify"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "futures",
@@ -3464,9 +3432,7 @@ dependencies = [
  "librespot-core",
  "librespot-metadata",
  "librespot-oauth",
- "librespot-playback",
  "log",
- "player",
  "reqwest",
  "serde",
  "serde_json",
@@ -4182,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "arboard",
  "core",
@@ -4415,7 +4381,7 @@ dependencies = [
 
 [[package]]
 name = "waveform"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "core",
  "log",

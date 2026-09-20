@@ -66,7 +66,7 @@ impl MedleyView {
             let ps = s.player_status();
             let bpm_tag = bpm_status_tag(s, chrome.status.now_playing_id());
             let liked = chrome.status.now_playing_id().and_then(|id| s.liked_mark(id));
-            let status = StatusLine::assemble(&chrome.status, ps.position_ms, ps.duration_ms, bpm_tag, liked);
+            let status = StatusLine::assemble(&chrome.status, &ps, bpm_tag, liked);
             Frame { windows, chrome, status }
         })
     }

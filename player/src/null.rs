@@ -38,7 +38,7 @@ impl Player for NullPlayer {
         true
     }
 
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, _cache: bool) {
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32) {
         let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let (source, uri) = (r.source.clone(), r.uri.clone());
 

@@ -27,11 +27,8 @@ pub enum CoreEvent {
     /// A skip's debounce elapsed; carries the skip's sequence number.
     DeferredLoad(u64),
     Player(PlayerEvent),
-    /// `Session::play_from_cache` decoded-and-cached this track's audio on a
-    /// background thread (no `MediaCache` entry existed yet when the
-    /// fallback was needed) and it's now ready — `Session` retries playing
-    /// `TrackId` if it's still what's wanted.
-    CacheFallbackReady(TrackId),
+    /// A stream changed state (see `stream::StreamState`); `Done` means the audio is in `MediaCache`.
+    Stream { key: crate::stream::Key, state: crate::stream::StreamState },
     /// Background work failed; `Session` lists it under the warnings until restart.
     BackgroundFailure { context: String, message: String },
     /// A plugin's health changed (`setup()` finished, a plugin's own
@@ -89,13 +86,6 @@ pub enum PlayerEvent {
     /// stream error, not a normal stop) — `Session` tries the local-cache
     /// playback fallback for this rendition's track before giving up.
     LoadFailed { source: SourceId, uri: String },
-    /// A source finished materializing `uri`'s audio locally on its own
-    /// terms — RodioPlayer's own fetch completing, or (for Spotify, which
-    /// has no fetch step scan.rs can observe directly) its worker noticing
-    /// the track landed in librespot's own on-disk cache. `Session` reacts
-    /// by prioritizing this track's scan (`ScanDriver::prioritize`) instead
-    /// of scanning having to poll for it.
-    Materialized { source: SourceId, uri: String },
 }
 
 type Wake = Arc<dyn Fn() + Send + Sync>;

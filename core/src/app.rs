@@ -479,12 +479,6 @@ pub struct Session {
     /// disk" (`is_track_cached`), and `play_from_cache` plays straight from
     /// it when a track's own renditions are unavailable.
     media_cache: Arc<MediaCache>,
-    /// Track id a background `play_from_cache` decode-on-demand is running
-    /// for, if any — `CoreEvent::CacheFallbackReady` only acts on it when
-    /// this still matches, so a later `play_track` call (the user moved on)
-    /// silently supersedes a stale in-flight decode instead of it hijacking
-    /// playback once it finishes.
-    pending_cache_fallback: Option<TrackId>,
     /// Sources already tried for the currently-playing track this attempt —
     /// reset per `play_track`, so `LoadFailed` can retry the next-best
     /// rendition instead of the one that just failed.
@@ -619,7 +613,6 @@ impl Session {
             cfg: Arc::new(cfg),
             scan: None,
             media_cache,
-            pending_cache_fallback: None,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
             skipping: false,
@@ -922,8 +915,8 @@ impl Session {
     }
 
     pub fn on_event(&mut self, ev: &CoreEvent) -> Result<bool> {
-        // `Progress` is per-tick playback position, read live every frame; a background failure only moves `warnings_revision`.
-        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. }) | CoreEvent::BackgroundFailure { .. }) {
+        // `Progress` is per-tick playback position and stream state changes are read live from the player; a background failure only moves `warnings_revision`.
+        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. }) | CoreEvent::BackgroundFailure { .. } | CoreEvent::Stream { .. }) {
             self.touch();
         }
         match ev {
@@ -933,6 +926,9 @@ impl Session {
             }
             CoreEvent::TrackUpdated(id) => {
                 self.refresh_cached_track(*id);
+                if let Some(scan) = &self.scan {
+                    scan.track_changed(*id);
+                }
                 Ok(true)
             }
             CoreEvent::PlaylistsChanged => {
@@ -952,28 +948,34 @@ impl Session {
                 Ok(true)
             }
             CoreEvent::Player(pe) => self.on_player_event(pe),
+            CoreEvent::Stream { key: (source, uri), state } => {
+                use crate::stream::StreamState;
+                if let Some(scan) = &self.scan
+                    && matches!(state, StreamState::Done | StreamState::Failed(_) | StreamState::Cancelled)
+                {
+                    scan.stream_ended();
+                }
+                if *state != StreamState::Done {
+                    return Ok(false);
+                }
+                // The track just became cached: refresh the cached mark; the playing track's scan uses the file.
+                self.touch();
+                if let Some(id) = self.event_track(source, uri)?
+                    && self.shown.now_playing == Some(id)
+                    && let Some(scan) = &self.scan
+                {
+                    log::debug!("app: {source} {uri} is cached -> prioritizing {id:?}");
+                    scan.prioritize(id);
+                }
+                Ok(true)
+            }
             CoreEvent::DeferredLoad(seq) => {
                 if let Some((_, id, p, r)) = self.deferred_load.take_if(|(s, ..)| s == seq)
                     && self.queue.get_current() == Some(id)
                 {
-                    p.load(&r, false, 0, true);
+                    p.load(&r, false, 0);
                 }
                 Ok(false)
-            }
-            CoreEvent::CacheFallbackReady(id) => {
-                // Plays the fallback rendition directly rather than
-                // re-`play_track`ing: whatever made the decode-on-demand
-                // necessary in the first place (a gap, no player, or a
-                // `LoadFailed` on the "live" rendition) hasn't changed, so
-                // re-resolving would just repeat that same failed attempt
-                // before falling back again.
-                if self.pending_cache_fallback == Some(*id)
-                    && let Ok(Some(t)) = self.store.get_track(*id)
-                {
-                    self.pending_cache_fallback = None;
-                    self.play_from_cache(&t, true);
-                }
-                Ok(true)
             }
             CoreEvent::PluginStatusChanged => {
                 // Health can improve outside setup()/run_command() (e.g. an
@@ -1119,9 +1121,6 @@ impl Session {
             self.view.invalidate_remote_playlists(id);
             self.prune_synthetic_hotkeys();
         }
-        if let Some(scan) = &self.scan {
-            scan.update_wiring(id.clone(), wiring.player.clone());
-        }
         if let Some(m) = wiring.media {
             self.media.insert(id.clone(), m);
         }
@@ -1242,7 +1241,6 @@ impl Session {
                                 "player: load failed for \"{}\" ({source}) — trying local-cache fallback",
                                 t.title
                             );
-                            self.pending_cache_fallback = None;
                             if !self.play_from_cache(&t, true) {
                                 self.warn(source.as_str(), &format!("playback failed for {:?} ({uri})", t.title));
                                 self.load_failures += 1;
@@ -1258,21 +1256,6 @@ impl Session {
                             }
                         }
                     }
-                }
-                Ok(true)
-            }
-            PlayerEvent::Materialized { source, uri } => {
-                // The precise trigger for the currently-playing-track fast
-                // path: rather than scanning polling `ScanFetchMode::CacheOnly`
-                // every tick hoping a source finished fetching on its own,
-                // the source announces it directly and this is the one place
-                // that reacts — same `prioritize` a plain `Playing` already
-                // does as a first (possibly premature) attempt.
-                if let Some(id) = self.event_track(source, uri)?
-                    && let Some(scan) = &self.scan
-                {
-                    log::debug!("app: materialized {source} {uri} -> prioritizing {id:?}");
-                    scan.prioritize(id);
                 }
                 Ok(true)
             }
@@ -1921,7 +1904,15 @@ impl Session {
 
     pub fn player_status(&self) -> PlayerStatus {
         let (position_ms, duration_ms) = self.progress;
-        PlayerStatus { state: self.shown.player_state, position_ms, duration_ms, volume: self.shown.volume }
+        let live = self.active_player().map(|p| p.status());
+        PlayerStatus {
+            state: self.shown.player_state,
+            position_ms,
+            duration_ms,
+            volume: self.shown.volume,
+            buffering: live.as_ref().is_some_and(|s| s.buffering),
+            download_pct: live.and_then(|s| s.download_pct),
+        }
     }
 
     /// Real 5-band magnitude of whatever's actually playing — see
@@ -1967,9 +1958,6 @@ impl Session {
     /// plays, false when replaying a history entry itself (walking further
     /// back via `previous_from_history` must not re-add what it just read).
     fn play_track(&mut self, id: TrackId, record: bool) {
-        // Any fresh play call supersedes an outstanding decode-on-demand from
-        // a previous one — see `pending_cache_fallback`'s doc.
-        self.pending_cache_fallback = None;
         self.failed_playback_sources.clear();
         // `current` is what `Finished` and the shown duration are checked against, so every play path sets it.
         if self.queue.get_current() != Some(id) {
@@ -2029,7 +2017,7 @@ impl Session {
             });
         } else {
             self.deferred_load = None;
-            p.load(r, false, 0, true);
+            p.load(r, false, 0);
         }
         self.shown.write().now_playing = Some(track.id);
         // The player's own status still describes the previous track until it processes the load.
@@ -2042,54 +2030,13 @@ impl Session {
         }
     }
 
-    /// Playback fallback: if any of `track`'s renditions already has a
-    /// `MediaCache` entry, play it straight away through the `"local"`
-    /// source (see `cache_rendition`) and return `true`. Otherwise, check
-    /// whether a source can hand us already-local
-    /// bytes without touching the network (`ScanFetchMode::CacheOnly` — e.g.
-    /// Spotify's own librespot file cache from a now-dead live session), and
-    /// if so decode+cache them on a background thread, retrying once that
-    /// lands (`CoreEvent::CacheFallbackReady`). Returns `false` (with
-    /// nothing left to try) when neither has anything.
+    /// Playback fallback: plays `track`'s `MediaCache` entry through the `"local"` source
+    /// (see `cache_rendition`); `false` when nothing is cached or no player takes it.
     fn play_from_cache(&mut self, track: &Track, record: bool) -> bool {
-        if let Some(r) = cache_rendition(&self.media_cache, track) {
-            if let Some(p) = self.pick_player(&r) {
-                self.start_playback(track, &r, p, record);
-                return true;
-            }
-            return false;
-        }
-        self.spawn_cache_fallback_decode(track.clone());
-        false
-    }
-
-    /// Background half of `play_from_cache`'s decode-on-demand path — see
-    /// its doc. Populates `self.media_cache` for `track` from whatever's
-    /// already locally cached (no network), then wakes `on_event` via
-    /// `CoreEvent::CacheFallbackReady` to retry playback.
-    fn spawn_cache_fallback_decode(&mut self, track: Track) {
-        self.pending_cache_fallback = Some(track.id);
-        let media = self.media.snapshot();
-        let players = self.players.clone();
-        let media_cache = self.media_cache.clone();
-        let bus = self.bus.clone();
-        std::thread::spawn(move || {
-            let found = track.renditions.iter().find_map(|r| {
-                crate::scan::open_scan_audio(r, &media, &players, &media_cache, crate::scan::ScanFetchMode::CacheOnly)
-                    .map(|audio| (r, audio))
-            });
-            let Some((r, audio)) = found else {
-                log::debug!(
-                    "play_from_cache: \"{}\" has no already-cached audio to decode",
-                    track.title
-                );
-                return;
-            };
-            match crate::audio_decode::decode_and_cache(&media_cache, &r.source, &r.uri, audio) {
-                Some(_) => bus.send(CoreEvent::CacheFallbackReady(track.id)),
-                None => log::debug!("play_from_cache: decode failed for \"{}\"", track.title),
-            }
-        });
+        let Some(r) = cache_rendition(&self.media_cache, track) else { return false };
+        let Some(p) = self.pick_player(&r) else { return false };
+        self.start_playback(track, &r, p, record);
+        true
     }
 
     /// Start playing `id` right now. If it's already sitting in the manual

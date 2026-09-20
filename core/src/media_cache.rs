@@ -1,17 +1,10 @@
-//! Persistent on-disk cache of a rendition's playable audio — the single
-//! cache every source funnels through: a `ScanPlugin`, `RodioPlayer`, or
-//! Spotify's playback materializer (`sources/spotify/src/player.rs`) all
-//! write here on a cache miss, and playback/scanning read straight from it
-//! before touching a source's own fetch mechanics. `MediaCache` itself
-//! never originates a fetch — it's just the on-disk store.
+//! Persistent on-disk cache of a rendition's playable audio — the single cache every source funnels
+//! through: the stream engine persists a finished download here, and playback and scanning read
+//! straight from it before touching a source. `MediaCache` itself never originates a fetch — it's
+//! just the on-disk store.
 //!
-//! Entries are whatever bytes the caller hands `put` — no forced re-encode.
-//! `audio_decode::decode_and_cache` stores a source's own already-fetched
-//! bytes as-is whenever they're already a plain, unencrypted, playable file
-//! (HTTP/SoundCloud's fetched MP3/AAC, Spotify's already-decrypted,
-//! header-stripped Ogg Vorbis), only transcoding when nothing playable-as-is
-//! is available. Every reader (symphonia for decode/analysis,
-//! `rodio::Decoder::try_from` for playback) sniffs the container from
+//! Entries are the fetched bytes as-is (no forced re-encode). Every reader (symphonia for
+//! analysis, `rodio::Decoder::try_from` for playback) sniffs the container from
 //! content, not a filename extension, so lookups here never depend on one —
 //! but a first-time write does cheaply sniff the magic bytes (`sniff_ext`)
 //! to append `.mp3`/`.ogg` to the filename purely for `ls`-ability.
@@ -19,7 +12,7 @@
 //! Keyed by `(SourceId, Rendition::uri)` — the stable, source-attributed id
 //! a source actually gives us. Never `TrackId`: that's a medley-only
 //! playlist abstraction with no meaning to a source, and a track can have
-//! several renditions (one cache entry each). `put`/`put_file`/`link_local`/
+//! several renditions (one cache entry each). `persist_file`/`link_local`/
 //! `cached_path` all still key on `(source, uri)` exactly as before — that
 //! didn't change.
 //!
@@ -40,8 +33,8 @@
 //! otherwise have — it takes a `Store` handle solely to look one up
 //! (`Store::track_by_rendition`) at write time. That
 //! `Store` handle is never used to originate a fetch, and deliberately isn't
-//! threaded through `Player`/`RodioPlayer`/`SpotifyPlayer`'s own `put`/
-//! `put_file`/`link_local` call sites — those stay exactly as they were,
+//! threaded through `Player`/`RodioPlayer`'s own `put`/
+//! `persist_file`/`link_local` call sites — those stay exactly as they were,
 //! passing only `(source, uri, bytes-or-path)`.
 
 use std::collections::HashMap;
@@ -58,6 +51,9 @@ use crate::types::SourceId;
 /// `(source, uri)` (via `index_key`) -> the filename it was assigned inside
 /// that source's cache subdirectory.
 const INDEX: TableDefinition<&str, &str> = TableDefinition::new("index");
+
+/// Subdirectory of the cache dir holding in-progress stream files.
+const STREAM_DIR: &str = ".streams";
 
 fn index_key(source: &SourceId, uri: &str) -> String {
     format!("{}\0{}", source.as_str(), uri)
@@ -117,7 +113,7 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// Same sniff as `sniff_ext`, but for a caller that only has a path
-/// (`put_file`/`link_local`) — reads a handful of bytes, not the whole file.
+/// (`persist_file`/`link_local`) — reads a handful of bytes, not the whole file.
 fn sniff_ext_path(path: &Path) -> Option<&'static str> {
     use std::io::Read;
     let mut buf = [0u8; 8];
@@ -181,6 +177,7 @@ pub struct MediaCache {
 impl MediaCache {
     pub fn new(dir: PathBuf, store: Arc<dyn Store>) -> Self {
         let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.join(STREAM_DIR));
         let index_path = dir.with_extension("redb");
         let index = Database::create(&index_path)
             .unwrap_or_else(|e| panic!("media cache index {}: {e}", index_path.display()));
@@ -265,25 +262,26 @@ impl MediaCache {
         p.exists().then_some(p)
     }
 
-    /// Store already-fetched bytes (whatever playable format the caller
-    /// hands over) for `(source, uri)`, persisting atomically via a temp
-    /// file in the same directory. Locks per-key so concurrent writers for
-    /// the same rendition (a scan plugin racing `play_from_cache`'s
-    /// decode-on-demand) don't clobber each other.
-    pub fn put(&self, source: &SourceId, uri: &str, bytes: &[u8]) -> io::Result<PathBuf> {
-        let ext = sniff_ext(bytes);
-        self.store_bytes(source, uri, ext, |f| io::Write::write_all(f, bytes))
+    /// Moves a finished stream's temp file (from `new_stream_file`) into place as `(source, uri)`'s entry. Writes
+    /// the index, so call it from a producer thread, never the UI or audio thread.
+    pub fn persist_file(&self, source: &SourceId, uri: &str, src: &Path) -> io::Result<PathBuf> {
+        let lock = self.lock(source, uri);
+        let _guard = lock.lock().unwrap();
+        let dest = self.dest(source, uri, sniff_ext_path(src))?;
+        std::fs::create_dir_all(dest.parent().expect("dest always has a parent"))?;
+        std::fs::rename(src, &dest)?;
+        Ok(dest)
     }
 
-    /// Like `put`, but copies from an existing local file instead of
-    /// buffering it in memory — for a caller (e.g. a player that just
-    /// downloaded, or already has, a local copy) that already has the bytes
-    /// on disk.
-    pub fn put_file(&self, source: &SourceId, uri: &str, src: &std::path::Path) -> io::Result<PathBuf> {
-        let ext = sniff_ext_path(src);
-        self.store_bytes(source, uri, ext, |f| {
-            io::copy(&mut std::fs::File::open(src)?, f).map(|_| ())
-        })
+    /// An empty file for a stream to fill, inside the cache dir so `persist_file` can rename it.
+    pub fn new_stream_file(&self) -> io::Result<(std::fs::File, PathBuf)> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = self.dir.join(STREAM_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("{}-{n}.part", std::process::id()));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+        Ok((file, path))
     }
 
     /// Records that `(source, uri)`'s audio already exists locally at
@@ -309,25 +307,6 @@ impl MediaCache {
     fn lock(&self, source: &SourceId, uri: &str) -> Arc<Mutex<()>> {
         let mut inflight = self.inflight.lock().unwrap();
         inflight.entry(Self::key(source, uri)).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
-    }
-
-    fn store_bytes(
-        &self,
-        source: &SourceId,
-        uri: &str,
-        ext: Option<&str>,
-        write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
-    ) -> io::Result<PathBuf> {
-        let lock = self.lock(source, uri);
-        let _guard = lock.lock().unwrap();
-
-        let dest = self.dest(source, uri, ext)?;
-        let dir = dest.parent().expect("dest always has a parent");
-        std::fs::create_dir_all(dir)?;
-        let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-        write(tmp.as_file_mut())?;
-        tmp.persist(&dest).map_err(|e| e.error)?;
-        Ok(dest)
     }
 
     /// Logs how many files the cache dir holds versus how many index entries exist.

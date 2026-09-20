@@ -125,7 +125,7 @@ pub struct HttpConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpotifyConfig {
-    /// Register the Spotify source + player at startup. On by default —
+    /// Register the Spotify source + media provider at startup. On by default —
     /// **with no cached credentials yet, this blocks startup on an OAuth
     /// browser login** (`Auth::login`). Set `enabled = false` to opt out
     /// entirely.
@@ -187,14 +187,9 @@ pub struct SoulseekConfig {
     pub data_dir: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanConfig {
-    /// After supplying whatever a plugin reads, keep draining the rest of
-    /// the track so the backend commits the whole file to its local cache
-    /// (for Spotify: librespot's on-disk cache). Applies to every plugin's
-    /// background-walk fetches, not just bpm's. See `Player::open_for_scan`.
-    pub cache_full: bool,
     pub bpm: BpmScanConfig,
 }
 
@@ -207,7 +202,7 @@ pub struct BpmScanConfig {
     /// `Disabled`) — this only sets the initial state, and only on the very
     /// first run; after that the last `B`-toggled state (persisted in
     /// `state.toml`) wins. On by default: `CacheOnly` never originates a
-    /// fetch, only reads audio something else already materialized, so
+    /// fetch, only reads audio that is already cached or downloading, so
     /// there's no network cost to leaving it on.
     pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
@@ -281,15 +276,6 @@ impl Default for Config {
             media_cache_dir: PathBuf::new(),
             theme: "default".to_string(),
             volume: 1.0,
-        }
-    }
-}
-
-impl Default for ScanConfig {
-    fn default() -> Self {
-        Self {
-            cache_full: true,
-            bpm: BpmScanConfig::default(),
         }
     }
 }

@@ -131,7 +131,7 @@ impl TabBar<'_> {
         let room = content_w.saturating_sub(detail_start);
         let has_heart = self.status.now_playing_id.is_some() && room >= HEART_W + HEART_TITLE_MIN;
         let detail_w = room.saturating_sub(if has_heart { HEART_W } else { 0 });
-        let want = self.status.now_playing.width();
+        let want = self.status.progress_tag().width() + self.status.now_playing.width();
         let has_wave = total_w >= WAVE_MIN_BAR && !self.status.waveform.is_empty() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
         let title_w = if has_wave { want.min((detail_w / 2).max(TITLE_MIN)).min(detail_w - TRANSPORT_GAP - WAVE_MIN) } else { want.min(detail_w) };
         let wave = has_wave.then(|| (detail_start, detail_w - title_w - if title_w > 0 { TRANSPORT_GAP } else { 0 }));
@@ -143,7 +143,8 @@ impl TabBar<'_> {
     /// The visible title and its start column, clipped to the layout's title width.
     fn title(&self, layout: &Layout) -> (usize, String) {
         let (start, w) = layout.title;
-        let mut text = scroll_title(&self.status.now_playing, w, self.marquee_offset);
+        let tag = self.status.progress_tag();
+        let mut text = format!("{tag}{}", scroll_title(&self.status.now_playing, w.saturating_sub(tag.width()), self.marquee_offset));
         while text.width() > w {
             text.pop();
         }

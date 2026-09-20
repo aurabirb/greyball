@@ -230,10 +230,20 @@ show a "downloading" mark from `engine.status`.
 ### Analyzers
 - `open_scan_audio` collapses to `engine.open(r, Intent::Fetch|Peek)`; the reader is an independent
   cursor over the same file. `decode_blocks`/`SourceAdapter` get a progressive, non-seekable
-  variant that waits on `wait_range` for the next bytes; `open_analysis_audio` loses the
+  variant whose reads wait for the next bytes (seekable only once the stream is `Done`); `open_analysis_audio` loses the
   `read_all` fallback. BPM (60 s prefix) starts as soon as the prefix exists; the waveform consumes
   progressively (the "progressive waveform" TODO item). `Player::open_for_scan`,
   `scan_fetch_paused` and `MediaProvider::materialize` are removed.
+  The driver keeps each walk `Fetch` claim until `Done` (one download at a time, a failed fetch backs its
+  source off so a run of bad tracks cannot recycle Spotify's session); only `Play` announces a cache hit as
+  `Stream{Done}`, so scanning cached files raises no events.
+- Two driver threads: the walk (background, `Fetch`) and the now-playing worker (`prioritize`, `Peek`
+  only), so the playing track's BPM never waits behind a long background waveform pass. A newer
+  `prioritize` preempts the worker through the plugin's `wanted` callback; a `Downloading` status is
+  the in-flight marker that keeps both threads off the same (plugin, track). The walk is event-driven:
+  it keeps an in-memory candidate set (tracks some plugin still `needs()`), patched from
+  `track_changed` (`TrackUpdated`), and sleeps on a condvar until a track, view, mode, plugin or stream
+  event or the next cooldown/backoff/`min_interval` expiry, never polling the store.
 - Analyzers consume the contiguous prefix (`StreamInfo.prefix`) as it grows. After a scrub jump the
   file has islands beyond the gap; an in-order analyzer simply waits at the gap until the backfill
   closes it. Analyzing arbitrary chunks as they land (out of order) is out of scope: a decoder needs
@@ -246,7 +256,10 @@ show a "downloading" mark from `engine.status`.
 - `SpotifyMediaProvider::open` returns `Media::from_reader(..)` over the decrypted, header-skipped
   Ogg (`AudioFile`: random-access, known length -> scrubs during download via `fill_from_seekable`),
   at the best bitrate (320 needs Premium; fall back down), never the drain-on-drop reader.
-- It waits (cancellably, internally) for a live session instead of returning `Unsupported`.
+- It waits for a live session instead of returning `Unsupported`; `MediaProvider::open(r, wanted)` gets a
+  `wanted` callback (false once the stream has no claim left) that a waiting provider polls.
+- The returned reader reopens the `AudioFile` after a read error (a stalled or dead fetch), so the engine's
+  retry continues at the same offset; `Link`'s connection lives on its own thread, published as a `Slot`.
 - The plugin keeps the connection: `Link` (session, backoff, `generation`, `died_streak`,
   `SESSION_HEALTHY_AFTER`, the runtime `Handle`) is unchanged and is the provider's session source.
 - Carry-over checklist (do not lose these behaviors):

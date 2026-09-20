@@ -1,9 +1,4 @@
 //! `SpotifySource` — a `core::Source` over the Spotify Web API.
-//!
-//! Not a `MediaProvider`: Spotify audio is a decrypted librespot stream, not a
-//! fetchable file or URL, so playback is owned entirely by
-//! [`crate::SpotifyPlayer`] and nothing is registered in `app`'s `media` map
-//! for `"spotify"` (`Media` has no "the player handles it" variant).
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 core = { path = "../core" }
 rodio = "0.21"
-tempfile = "3"
 log = "0.4"
 crossbeam-channel = "0.5"
 wide = "1.7.0"

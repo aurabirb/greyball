@@ -28,7 +28,7 @@ fn main() {
     }
 
     if let Some(first) = hits.first() {
-        match src.open(first.rendition()) {
+        match src.open(first.rendition(), &|| true) {
             Ok(Media::Url(u)) => println!("\nstream for {}: {u}", first.rendition().uri),
             Ok(_) => println!("\nstream: unexpected non-URL Media variant"),
             Err(e) => eprintln!("\nopen failed: {e}"),

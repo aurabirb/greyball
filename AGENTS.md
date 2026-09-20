@@ -13,6 +13,12 @@ working-agreement rule is established, add it here directly rather than only in 
 - Before committing: `cargo build --workspace --all-features` and
   `cargo clippy --workspace --all-features --all-targets` — both must be clean. There is no
   `cargo test` step — see the Tests rule under Code style.
+- After each implementation task, run a separate read-only review agent before moving on. Tell it the
+  code was written by an AI agent and that it is scored on: edge cases and bugs it finds, DRY
+  violations, opportunities for a better architecture, code elegance, and how minimal the change is
+  for the task. It must cite file:line with a concrete failing scenario, must not edit or commit, and
+  reports in simple bullet lists, most severe first. Valid findings are then fixed by an
+  implementation agent (new commit) before the next task.
 - Commit with a new commit (never amend), then `git push origin main`.
 - Never stash or undo changes you didn't make — other agents may be working in the repo concurrently.
 - Report genuine user-visible ambiguities back instead of guessing.
@@ -48,6 +54,9 @@ working-agreement rule is established, add it here directly rather than only in 
   medley 'tmux set status off; ./target/debug/medley' &` — then find the window id (`xprop -root
   _NET_CLIENT_LIST`, match `xprop -id <id> WM_NAME` against `medley-shot`), `import -window <id>
   <scratch>.png`, and view the PNG with the Read tool. Write PNGs outside the repo.
+- Testing runs against the default data/state/config dirs and the default media cache; no scratch
+  dirs needed. Never delete, rename or hand-edit the owner's cache files, index or track store
+  yourself — normal app use adding entries is fine.
 - Always clean up afterward: `tmux send-keys -t medley 'q'` then `tmux kill-session -t medley`, and
   remove any debug log file you redirected to.
 - Only kill tmux sessions (and Alacritty windows) you started yourself, by name — never

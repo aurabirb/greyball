@@ -1,12 +1,8 @@
-//! Generic, format-agnostic decode of compressed audio to PCM (for BPM
-//! analysis), plus populating `MediaCache` from a source's raw fetched
-//! bytes. The decode side is shared by every scan plugin (`BpmPlugin`, ...)
-//! and the playback-cache-fallback path (`Session::play_from_cache`) —
-//! neither needs its own codec-specific decoder, regardless of whether the
-//! source was Ogg Vorbis (Spotify), MP3/AAC (SoundCloud/HTTP) or anything
-//! else symphonia recognises.
+//! Format-agnostic decode of a stream's audio to PCM for the scan plugins (`BpmPlugin`, `WaveformPlugin`),
+//! whatever container/codec symphonia recognises (Ogg Vorbis, MP3, AAC in MP4/fMP4, ...).
 
 use std::io::{self, Read, Seek, SeekFrom};
+use std::time::Duration;
 
 use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
@@ -15,57 +11,89 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use crate::media_cache::MediaCache;
-use crate::traits::ReadSeek;
-use crate::types::{Rendition, SourceId, Track};
+use crate::stream::{StreamHandle, StreamReader, StreamState};
 
-/// Wraps a `Box<dyn ReadSeek + Send>` (not `Sync`) so symphonia's
-/// `MediaSource` (which requires `Sync`) accepts it. Sound because the
-/// decode below only ever touches it from the single thread that owns it.
-struct SourceAdapter<R>(R, Option<u64>);
+/// How long a container that cannot be read while incomplete (an MP4 with its index at the end) may take to finish.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-unsafe impl<R> Sync for SourceAdapter<R> {}
+/// A stream reader as a symphonia source: seekable only once the stream is complete.
+struct StreamSource {
+    reader: StreamReader,
+    len: Option<u64>,
+    seekable: bool,
+}
 
-impl<R: Read> Read for SourceAdapter<R> {
+impl Read for StreamSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
+        self.reader.read(buf)
     }
 }
 
-impl<R: Seek> Seek for SourceAdapter<R> {
+impl Seek for StreamSource {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.0.seek(pos)
+        self.reader.seek(pos)
     }
 }
 
-impl<R: Read + Seek + Send> MediaSource for SourceAdapter<R> {
+impl MediaSource for StreamSource {
     fn is_seekable(&self) -> bool {
-        true
+        self.seekable
     }
 
     fn byte_len(&self) -> Option<u64> {
-        self.1
+        self.len
     }
 }
 
-/// Streams `audio` as stereo f32 frames in decoder-sized blocks, auto-detecting the container/codec;
-/// `on_block` returns `false` to stop early. The sample rate, or `None` when nothing could be decoded.
-pub fn decode_blocks(mut audio: Box<dyn ReadSeek + Send>, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Option<u32> {
-    let len = audio.seek(SeekFrom::End(0)).ok();
-    audio.seek(SeekFrom::Start(0)).ok()?;
-    let mss = MediaSourceStream::new(Box::new(SourceAdapter(audio, len)), Default::default());
+#[derive(Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    /// Nothing decodable in the stream.
+    NoAudio,
+    /// The stream failed or was cancelled before the decode finished.
+    Interrupted,
+}
+
+/// Streams `stream` as stereo f32 frames in decoder-sized blocks; `on_block` returns `false` to stop early.
+/// Decodes progressively while the stream is still filling (a read waits for the next bytes), and seekably once
+/// it is complete. The sample rate on success.
+pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Result<u32, DecodeError> {
+    let mut delivered = false;
+    let complete = stream.info().state == StreamState::Done;
+    let mut result = decode_once(stream, complete, &mut |b| {
+        delivered = true;
+        on_block(b)
+    });
+    if result == Err(DecodeError::NoAudio) && !complete && !delivered && !stream.stopped() {
+        // The container needs the whole file first: wait for it, then decode seekably.
+        if !stream.wait_range(0..u64::MAX, FINISH_TIMEOUT) || stream.info().state != StreamState::Done {
+            return Err(DecodeError::Interrupted);
+        }
+        result = decode_once(stream, true, &mut on_block);
+    }
+    if result.is_err() && stream.stopped() {
+        return Err(DecodeError::Interrupted);
+    }
+    result
+}
+
+fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&[[f32; 2]]) -> bool) -> Result<u32, DecodeError> {
+    let len = seekable.then(|| stream.info().len).flatten();
+    let source = StreamSource { reader: stream.reader(), len, seekable };
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
     let probed = symphonia::default::get_probe()
         .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
-        .ok()?;
+        .map_err(|_| DecodeError::NoAudio)?;
     let mut format = probed.format;
-    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL).ok_or(DecodeError::NoAudio)?;
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
-    let mut decoder =
-        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
+    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|_| DecodeError::NoAudio)?;
 
     let mut block: Vec<[f32; 2]> = Vec::new();
     while let Ok(packet) = format.next_packet() {
+        if stream.stopped() {
+            return Err(DecodeError::Interrupted);
+        }
         if packet.track_id() != track_id {
             continue;
         }
@@ -73,52 +101,38 @@ pub fn decode_blocks(mut audio: Box<dyn ReadSeek + Send>, mut on_block: impl FnM
         block.clear();
         push_frames(decoded, &mut block);
         if !on_block(&block) {
-            break;
+            return Ok(sample_rate);
         }
     }
-    Some(sample_rate)
+    if stream.stopped() {
+        return Err(DecodeError::Interrupted);
+    }
+    Ok(sample_rate)
 }
 
-/// Decode `audio` to stereo f32 frames. `max_frames` (`None` for the whole file) stops decoding once
-/// that many frames are in. `None` on a decode failure or a stream too short to be useful.
-pub fn decode_stereo_prefix(
-    audio: Box<dyn ReadSeek + Send>,
-    max_frames: Option<usize>,
-) -> Option<(Vec<[f32; 2]>, u32)> {
+/// Decode `stream` to stereo f32 frames. `max_frames` (`None` for the whole file) stops decoding once that
+/// many frames are in; `wanted` turning false abandons it as `Interrupted`. `NoAudio` for a stream too
+/// short to be useful.
+pub fn decode_stereo_prefix(stream: &StreamHandle, max_frames: Option<usize>, wanted: &dyn Fn() -> bool) -> Result<(Vec<[f32; 2]>, u32), DecodeError> {
     let mut frames: Vec<[f32; 2]> = Vec::new();
-    let sample_rate = decode_blocks(audio, |block| {
+    let mut abandoned = false;
+    let sample_rate = decode_blocks(stream, |block| {
+        if !wanted() {
+            abandoned = true;
+            return false;
+        }
         frames.extend_from_slice(block);
         max_frames.is_none_or(|m| frames.len() < m)
     })?;
+    if abandoned {
+        return Err(DecodeError::Interrupted);
+    }
     if let Some(m) = max_frames {
         frames.truncate(m);
     }
 
-    // Require at least a second — anything shorter isn't useful for
-    // analysis.
-    (frames.len() >= sample_rate as usize).then_some((frames, sample_rate))
-}
-
-/// The track's audio for analysis: its cached file, else fetched via `audio` and stored in `media_cache`.
-pub fn open_analysis_audio(
-    track: &Track,
-    audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
-    media_cache: &MediaCache,
-) -> Option<Box<dyn ReadSeek + Send>> {
-    let cached = track
-        .renditions
-        .iter()
-        .find_map(|r| media_cache.cached_path(&r.source, &r.uri))
-        .and_then(|p| std::fs::File::open(p).ok());
-    if let Some(file) = cached {
-        return Some(Box::new(file));
-    }
-    let (r, audio) = audio()?;
-    let raw = read_all(audio).inspect_err(|e| log::warn!("\"{}\" — couldn't read audio to analyze: {e}", track.title)).ok()?;
-    if let Err(e) = media_cache.put(&r.source, &r.uri, &raw) {
-        log::debug!("\"{}\" — couldn't populate media cache: {e}", track.title);
-    }
-    Some(Box::new(io::Cursor::new(raw)))
+    // Anything shorter than a second isn't useful for analysis.
+    if frames.len() >= sample_rate as usize { Ok((frames, sample_rate)) } else { Err(DecodeError::NoAudio) }
 }
 
 /// Convert one decoded packet's samples (any symphonia sample format, any
@@ -134,37 +148,4 @@ fn push_frames(decoded: AudioBufferRef, out: &mut Vec<[f32; 2]>) {
         let r = if channels >= 2 { chunk[1] } else { l };
         out.push([l, r]);
     }
-}
-
-/// Buffer `audio`'s entire byte stream into memory — for storing as-is in
-/// `MediaCache` (see `decode_and_cache`) and/or decoding from the same
-/// buffer without a second fetch (see `BpmPlugin::analyze`).
-pub fn read_all(mut audio: Box<dyn ReadSeek + Send>) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    audio.read_to_end(&mut buf)?;
-    Ok(buf)
-}
-
-/// Populate `(source, uri)`'s `MediaCache` entry directly from `audio`'s raw
-/// bytes, returning the resulting file path — no decode/re-encode step.
-/// Every reader this is handed (an already-fetched HTTP/SoundCloud file,
-/// Spotify's already-decrypted, header-stripped Ogg Vorbis) is already a
-/// plain, unencrypted, playable file, so storing exactly what was fetched
-/// avoids both the CPU cost and the quality loss of a needless transcode.
-/// Used both by a scan plugin that had to fetch audio itself and by the
-/// playback-cache-fallback path caching on demand for a rendition no scan
-/// has cached yet.
-pub fn decode_and_cache(
-    cache: &MediaCache,
-    source: &SourceId,
-    uri: &str,
-    audio: Box<dyn ReadSeek + Send>,
-) -> Option<std::path::PathBuf> {
-    let bytes = read_all(audio)
-        .inspect_err(|e| log::debug!("audio_decode: read failed for {source} {uri}: {e}"))
-        .ok()?;
-    cache
-        .put(source, uri, &bytes)
-        .inspect_err(|e| log::debug!("audio_decode: couldn't populate media cache for {source} {uri}: {e}"))
-        .ok()
 }

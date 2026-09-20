@@ -34,28 +34,20 @@
   and wide-glyph titles on screen.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
-- [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
-  CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
-  e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
-  slow interval) on an actual triggering event instead of polling for one.
-- [ ] Playing a long uncached SoundCloud track waits for the whole download before playback starts
-  (repro: "OZORA Festival - Galactic Explorers @ Ozora Festival 2023 | Ozora Stage", a multi-hour set).
-  Likely cause: with `[soundcloud] hls` on, `open_hls` (`sources/soundcloud/src/client.rs`) fetches the
-  init segment + every media segment into a tempfile and only then returns `Media::Path` — the
-  progressive path returns `Media::Url`, which `player/src/rodio_player.rs`'s `open_streaming_url`/
-  `StreamingReader` already streams (unless the response has no `Content-Length`, which falls back to
-  a fully-blocking download — check which case this track hits in the log). Fix direction: fetch HLS
-  segments on a background thread into a growing file and hand the player a reader that blocks on
-  not-yet-fetched bytes like `StreamingReader` does (the fMP4 total size isn't known up front, so the
-  preallocate-by-`Content-Length` trick needs adapting — e.g. sum segment sizes via HEAD/byte-range
-  info, or let the reader treat EOF-before-done as "wait"), prioritizing the segment under the seek
-  position; same treatment for the no-`Content-Length` and `Media::Reader` blocking fallbacks.
-  Plan, phases and robustness rules for the agents: `docs/streaming-playback.md` (also covers the
-  "every source" item below).
-- [ ] After the SoundCloud HLS item above: make sure playback can start before the file has been
-  fully downloaded for every source (Spotify, HTTP, local, Soulseek, ...), not just SoundCloud —
-  audit each source's load path for a whole-file wait before the player gets audio and fix the ones
-  that block.
+- [ ] Soulseek: play before slskd finishes the transfer. `SoulseekSource::open` waits for the whole download
+  and returns `Media::Path`. slskd writes the partial file under `<folder>/incomplete/<user>/<remote dirs>/`;
+  following it with a `Media::Stream` producer needs its exact incomplete file name and resume behavior
+  verified against a connected slskd (its Soulseek server connection was down, so nothing was downloaded).
+- [ ] Spotify downloads that overlap (a skipped track still fetching during `GRACE` while the next one
+  starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
+  reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
+  whether librespot's fetch loop or the CDN causes it, and consider cutting a released Spotify fetch at once.
+- [ ] Resume after failure: when a stream fails mid-track (network drop), reopen the key (the same temp
+  file keeps its ranges, the producer refills the gaps) and rebuild the decoder at the current position
+  instead of `LoadFailed`; also covers Spotify's `Loaded::resume`.
+- [ ] Gapless playback as a generic preload: `StreamEngine::open(next, Intent::Play)` shortly before the
+  current track ends; `RodioPlayer` keeps `Player::preload`.
+- [ ] A "downloading" mark on rows from the engine's stream status.
 - [ ] There is no way to delete (or rename) a local playlist. Add `:deleteplaylist <name>` (confirm
   dialog; drops its hotkey binding; windows showing it back out to the top level) and
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`
@@ -78,8 +70,7 @@
   can't.
 - [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
   progressively for a track still downloading — the playing track's bytes already land in a growing
-  file (`StreamingReader`/`open_streaming_url`, `player/src/rodio_player.rs`), so decode what has
-  arrived with `core::audio_decode::decode_blocks`, publish the buckets filled so far and let the
+  stream file (`core::stream`); `WaveformPlugin` already decodes it progressively, so publish the buckets filled so far and let the
   widget draw left to right as the download advances (undownloaded columns blank, each bucket's
   share of the track from the known duration); persist only once complete. SoundCloud tracks carry a
   ready-made `waveform_url` in the API response — use it there instead of decoding if it's cheap to
@@ -165,10 +156,6 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Audits / cleanup tasks
-- [ ] Check whether pausing the background scan with `B` (`ToggleScan`/`scan.set_paused`) actually
-  inhibits *future and queued* track analysis/download, or only pauses whatever's in flight right now
-  — i.e. does newly-added/queued work still get analyzed/downloaded while paused, or does it correctly
-  stay queued until resumed?
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
 - [ ] Run an agent to collect and remove any placeholders of any kind. Write it in the memory to never write placeholders of any kind. Check the 
   todo for infra that is stubbed for unimplemented parts and remove it. Remove any reference for

@@ -109,8 +109,7 @@ pub trait Source: Send + Sync {
 
     /// Add `track_uri` (this source's own rendition URI for the track) to
     /// playlist `node`. Blocking, like `browse` — callers must not run this
-    /// on the UI thread. Default: unsupported, mirroring `Player::
-    /// open_for_scan`'s default.
+    /// on the UI thread. Default: unsupported.
     fn add_to_playlist(&self, _node: &BrowseNode, _track_uri: &str) -> Result<()> {
         Err(Error::Unsupported("add_to_playlist"))
     }
@@ -149,44 +148,27 @@ pub trait Source: Send + Sync {
     }
 }
 
-pub trait ReadSeek: Read + Seek {}
-impl<T: Read + Seek> ReadSeek for T {}
-
 pub enum Media {
+    /// An existing local file: a complete stream, nothing to fetch.
     Path(std::path::PathBuf),
+    /// A CDN link the engine plays and caches through `RangeReader`.
     Url(String),
-    Reader(Box<dyn ReadSeek + Send>),
+    /// Runs on a core thread, appending pieces through the writer and ending with `finish` or `fail`.
+    Stream(Box<dyn FnOnce(crate::stream::StreamWriter) + Send>),
+}
+
+impl Media {
+    /// A `Stream` over any `Read + Seek` (random access, jumps and backfill come from `fill_from_seekable`).
+    pub fn from_reader(reader: impl Read + Seek + Send + 'static) -> Self {
+        Media::Stream(Box::new(move |w| crate::stream::fill_from_seekable(reader, w)))
+    }
 }
 
 pub trait MediaProvider: Send + Sync {
     fn id(&self) -> SourceId;
-    fn open(&self, r: &Rendition) -> Result<Media>;
-
-    /// Ensure `r`'s audio is fetched and return it as a readable stream,
-    /// without indicating playback — the scan "prefetch" primitive
-    /// (`ScanFetchMode::Full`/`Partial`) a background walk uses to get raw
-    /// bytes to decode. Never call this in a mode meant to avoid a live
-    /// fetch (`ScanFetchMode::CacheOnly`) — it always resolves via `open`,
-    /// so a `Media::Url` result always originates a real GET.
-    ///
-    /// Default: resolves via `open` and, for `Media::Url`, does a plain
-    /// one-shot GET (`crate::http_fetch`) — covers every provider that has
-    /// no cheaper way to materialize its own bytes. A provider that already
-    /// owns a client for its own API calls (e.g. an authenticated CDN) may
-    /// override this to reuse it instead.
-    fn materialize(&self, r: &Rendition) -> Result<Box<dyn ReadSeek + Send>> {
-        match self.open(r)? {
-            Media::Path(p) => {
-                std::fs::File::open(&p).map(|f| Box::new(f) as Box<dyn ReadSeek + Send>).map_err(|e| {
-                    Error::Other(format!("materialize: local path {} unreadable: {e}", p.display()))
-                })
-            }
-            Media::Url(url) => crate::http_fetch::fetch_url_bytes(&url)
-                .map(|bytes| Box::new(std::io::Cursor::new(bytes)) as Box<dyn ReadSeek + Send>)
-                .map_err(|e| Error::Other(format!("materialize: fetch of {url} failed: {e}"))),
-            Media::Reader(r) => Ok(r),
-        }
-    }
+    /// Blocking, on a stream thread. `wanted` turns false once nobody wants the stream any more; a
+    /// provider that waits for something must poll it and return an error then.
+    fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -203,6 +185,10 @@ pub struct PlayerStatus {
     pub duration_ms: u32,
     /// 0.0..=1.0
     pub volume: f32,
+    /// Playback is waiting for the download to catch up.
+    pub buffering: bool,
+    /// How much of the track is on disk, while it is still downloading.
+    pub download_pct: Option<u8>,
 }
 
 impl Default for PlayerStatus {
@@ -212,6 +198,8 @@ impl Default for PlayerStatus {
             position_ms: 0,
             duration_ms: 0,
             volume: 1.0,
+            buffering: false,
+            download_pct: None,
         }
     }
 }
@@ -220,9 +208,7 @@ impl Default for PlayerStatus {
 /// rendition. It has no notion of a logical `TrackId`.
 pub trait Player: Send + Sync {
     fn accepts(&self, r: &Rendition) -> bool;
-    /// `cache`: whether this play may populate `MediaCache`. Unused today —
-    /// every caller passes `true`.
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool);
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32);
     /// Warm up `r` so a following `load` of it starts without a gap.
     fn preload(&self, _r: &Rendition) {}
     fn toggle(&self);
@@ -234,36 +220,9 @@ pub trait Player: Send + Sync {
     /// 5-band magnitude of whatever's actually playing right now, roughly
     /// `0.0..=1.0` (bass..treble) — real signal for `:vis 2`, not a volume
     /// proxy. Default: silence, for players with no tap on the raw audio
-    /// (`NullPlayer`, and Spotify's librespot pipeline).
+    /// (`NullPlayer`).
     fn levels(&self) -> [f32; 5] {
         [0.0; 5]
-    }
-
-    /// True while a live `open_for_scan` fetch would compete with this player's own playback.
-    fn scan_fetch_paused(&self) -> bool {
-        false
-    }
-
-    /// Best-effort seekable audio for offline analysis, independent of the
-    /// live playback pipeline (starting a scan must never interrupt or race
-    /// what's currently playing). Default: unsupported. Spotify implements
-    /// this by porting the bpm-audio-dump branch's cache-first /
-    /// CDN-fallback / decrypt path.
-    ///
-    /// `mode`: see `crate::scan::ScanFetchMode`. `Full` drains the rest of
-    /// the track after the plugin reads it so the backend commits the
-    /// *entire* file to its local cache rather than just the bytes actually
-    /// consumed; `Partial` doesn't force that drain. `open_scan_audio` never
-    /// calls this with `CacheOnly` — that mode only ever reads `MediaCache`
-    /// (see its doc) — but a source may still call this itself with
-    /// `CacheOnly` outside that path, e.g. to populate `MediaCache` from
-    /// its own already-local bytes without risking a fetch.
-    fn open_for_scan(
-        &self,
-        _r: &Rendition,
-        _mode: crate::scan::ScanFetchMode,
-    ) -> Result<Box<dyn ReadSeek + Send>> {
-        Err(Error::Unsupported("open_for_scan"))
     }
 }
 
