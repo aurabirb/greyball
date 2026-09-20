@@ -178,7 +178,7 @@ pub(super) fn draw_scrollbar(printer: &Printer, gutter_x: usize, list_h: usize, 
         }
     }
     if let Some(row) = playing.filter(|_| total > 0 && list_h > 0) {
-        let y = (row * list_h / total).min(list_h - 1);
+        let y = if total <= list_h || total == 1 { row } else { row * (list_h - 1) / (total - 1) }.min(list_h - 1);
         let style = if thumb.contains(&y) { ColorStyle::highlight() } else { ColorStyle::secondary() };
         printer.with_color(style, |p| p.print((gutter_x, y), ">"));
     }

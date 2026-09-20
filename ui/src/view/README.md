@@ -67,9 +67,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Section::ALL` order — Player, Custom playlist hotkeys, Tracks and playlists, Windows, Movement,
   Commands (plugin commands appended) — then the playlists that have a key. `build` lays a section out in two lanes (description, shortcut showing the live effective key; one cell of it, the first, is underlined on every row whose key can be set, an unbound one included), the
   shortcut lane one width shared by every section (so all keys share a column); an item's `:command`
-  spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces,
-  with one blank
-  line between items. The result, a flat
+  spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces. The result, a flat
   line list plus each row's `first..end` line span and each section's title line, is cached in
   `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
