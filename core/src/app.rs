@@ -941,7 +941,7 @@ impl Session {
                 if let Some((_, id, p, r)) = self.deferred_load.take_if(|(s, ..)| s == seq)
                     && self.queue.get_current() == Some(id)
                 {
-                    p.load(&r, false, 0, true);
+                    p.load(&r, false, 0);
                 }
                 Ok(false)
             }
@@ -1972,7 +1972,7 @@ impl Session {
             });
         } else {
             self.deferred_load = None;
-            p.load(r, false, 0, true);
+            p.load(r, false, 0);
         }
         self.shown.write().now_playing = Some(track.id);
         // The player's own status still describes the previous track until it processes the load.

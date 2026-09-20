@@ -594,10 +594,11 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         let plugin = Arc::new(sources_spotify::SpotifyPlugin::new(
             cache_dir,
             bus.clone(),
-            cfg.volume,
-            media_cache.clone(),
         ));
         register_plugin(plugin, &mut sources, &media, &mut players, &mut plugins);
+        if media.contains(&SourceId::from("spotify")) {
+            players.insert(SourceId::from("spotify"), rodio.clone());
+        }
     }
 
     // BpmPlugin is registered into the running driver further down instead

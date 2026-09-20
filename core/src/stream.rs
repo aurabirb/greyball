@@ -671,7 +671,7 @@ fn produce(shared: &Arc<Shared>, provider: &dyn MediaProvider, r: &Rendition) {
     if !writer.alive() {
         return;
     }
-    let media = match provider.open(r) {
+    let media = match provider.open(r, &|| writer.alive()) {
         Ok(m) => m,
         Err(e) => return writer.fail(format!("open: {e}")),
     };

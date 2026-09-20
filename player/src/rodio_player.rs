@@ -179,7 +179,7 @@ impl Player for RodioPlayer {
         true
     }
 
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, _cache: bool) {
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32) {
         let _ = self.tx.send(Cmd::Load {
             rendition: r.clone(),
             start_paused,

@@ -38,17 +38,19 @@
   CPU when idle. Design an algorithm that cuts down how often it checks while staying responsive —
   e.g. back off the poll interval the longer nothing's changed, waking immediately (not waiting out a
   slow interval) on an actual triggering event instead of polling for one.
-- [ ] Streaming playback stage 2 (`docs/streaming-playback.md`): port the sources the stage-1 engine does
-  not cover yet. Spotify: `SpotifyMediaProvider::open` returning `Media::from_reader` over the decrypted
-  Ogg, delete `SpotifyPlayer` (carry-over checklist in the doc; it still sends `Stream{Done}` itself).
-  Soulseek: `Media::Path` after slskd finishes stays; investigate whether slskd's partial file can be read
-  safely, do not assume. Local files and the HTTP source already work through the engine; check them in
-  the running app. `Player::load`'s `cache` parameter is ignored (the engine always caches).
+- [ ] Streaming playback stage 2 (`docs/streaming-playback.md`), remainder: Soulseek (investigate whether
+  slskd's partial file can be read safely), local files and the HTTP source checked in the running app.
 - [ ] Streaming playback stage 3 (`docs/streaming-playback.md`): port the analyzers. `core::scan::
   open_scan_audio` returns `Error::Unsupported` for an uncached track (the scan of a track that is not in
   `MediaCache` fails until then); move it and `ScanDriver::prioritize` onto `StreamEngine::open(r,
   Intent::Fetch | Peek)`, add the progressive non-seekable `decode_blocks` variant, drop
   `Player::open_for_scan`/`scan_fetch_paused`, and make BPM and waveform work during the download.
+- [ ] Spotify downloads that overlap (a skipped track still fetching during `GRACE` while the next one
+  starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
+  reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
+  whether librespot's fetch loop or the CDN causes it, and consider cutting a released Spotify fetch at once.
+- [ ] A Spotify load requested while the link is down waits at most `START_TIMEOUT` (60 s, in
+  `RodioPlayer`) before `LoadFailed`; the old player held it until the link came back.
 - [ ] Resume after failure: when a stream fails mid-track (network drop), reopen the key (the same temp
   file keeps its ranges, the producer refills the gaps) and rebuild the decoder at the current position
   instead of `LoadFailed`; also covers Spotify's `Loaded::resume`.

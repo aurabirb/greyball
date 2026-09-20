@@ -1,29 +1,29 @@
-//! `sources-spotify` — a Spotify source + player plugin for medley.
+//! `sources-spotify` — a Spotify source + media provider plugin for medley.
 //!
 //! Built behind `app`'s off-by-default `spotify` cargo feature; `core` never
 //! depends on this crate.
 //!
 //! * [`SpotifySource`] — `core::Source`: URI recognition + Web API track
 //!   search / resolve.
-//! * [`SpotifyPlayer`] — `core::Player`: playback via `librespot-playback`.
+//! * [`SpotifyMediaProvider`] — `core::MediaProvider`: the decrypted Ogg Vorbis, played by `RodioPlayer`.
 //! * [`auth::Auth`] — librespot OAuth login + credential/token cache.
 
 pub mod auth;
-mod player;
+mod link;
 mod plugin;
-mod scan_audio;
+mod provider;
 mod source;
 pub mod uri;
 mod web_player;
 mod webapi;
 
 pub use auth::Auth;
-pub use player::SpotifyPlayer;
+pub use provider::SpotifyMediaProvider;
 pub use plugin::SpotifyPlugin;
 pub use source::SpotifySource;
 pub use uri::{recognizes, SpotifyRef};
 
-/// This crate's `SourceId` — shared by `source`, `webapi` and `player`
+/// This crate's `SourceId` — shared by `source`, `webapi` and `provider`
 /// instead of each redefining it.
 fn source_id() -> core::SourceId {
     core::SourceId::from("spotify")

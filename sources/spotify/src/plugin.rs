@@ -8,12 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{
-    Bus, CoreEvent, MediaCache, Plugin, PluginCommand, PluginHealth, SourceId, Wiring,
-};
+use core::{Bus, CoreEvent, Plugin, PluginCommand, PluginHealth, SourceId, Wiring};
 
 use crate::auth::Auth;
-use crate::player::SpotifyPlayer;
+use crate::provider::SpotifyMediaProvider;
 use crate::source::SpotifySource;
 
 /// Cooldown between automatic background refresh attempts kicked off from
@@ -25,25 +23,21 @@ const AUTO_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 pub struct SpotifyPlugin {
     cache_dir: PathBuf,
     bus: Bus,
-    volume: f32,
-    media_cache: Arc<MediaCache>,
     /// Guards against `probe` spawning overlapping automatic refresh
     /// attempts (it can be called concurrently by the warnings modal and by
     /// `app`'s periodic health timer).
     refreshing: Arc<AtomicBool>,
     next_auto_refresh: Arc<Mutex<Instant>>,
-    /// Reused across rewires: a second `SpotifyPlayer` is a second session login on the same account.
-    wired: Mutex<Option<(Arc<SpotifySource>, Arc<SpotifyPlayer>)>>,
+    /// Reused across rewires: a second `SpotifyMediaProvider` is a second session login on the same account.
+    wired: Mutex<Option<(Arc<SpotifySource>, Arc<SpotifyMediaProvider>)>>,
 }
 
 impl SpotifyPlugin {
-    pub fn new(cache_dir: PathBuf, bus: Bus, volume: f32, media_cache: Arc<MediaCache>) -> Self {
+    pub fn new(cache_dir: PathBuf, bus: Bus) -> Self {
         crate::auth::heal_permissions(&cache_dir);
         Self {
             cache_dir,
             bus,
-            volume,
-            media_cache,
             refreshing: Arc::new(AtomicBool::new(false)),
             next_auto_refresh: Arc::new(Mutex::new(Instant::now())),
             wired: Mutex::new(None),
@@ -113,10 +107,10 @@ impl Plugin for SpotifyPlugin {
             return Wiring::default();
         };
         let mut wired = self.wired.lock().unwrap_or_else(|e| e.into_inner());
-        let (source, player) = match wired.as_ref() {
-            Some((source, player)) => {
+        let (source, media) = match wired.as_ref() {
+            Some((source, media)) => {
                 source.set_token(auth.access_token);
-                (source.clone(), player.clone())
+                (source.clone(), media.clone())
             }
             None => {
                 let source = Arc::new(SpotifySource::new(
@@ -124,19 +118,18 @@ impl Plugin for SpotifyPlugin {
                     self.cache_dir.clone(),
                     self.bus.clone(),
                 ));
-                let player =
-                    Arc::new(SpotifyPlayer::new(auth, self.bus.clone(), self.volume, self.media_cache.clone()));
-                wired.insert((source, player)).clone()
+                let media = Arc::new(SpotifyMediaProvider::new(auth));
+                wired.insert((source, media)).clone()
             }
         };
-        Wiring { source: Some(source), player: Some(player), media: None }
+        Wiring { source: Some(source), player: None, media: Some(media) }
     }
 
     fn setup(&self, _answers: Vec<String>) -> PluginHealth {
         let had_credentials = Auth::cache(&self.cache_dir).is_ok_and(|c| c.credentials().is_some());
         match Auth::login(&self.cache_dir) {
             Ok(_) => {
-                // A fresh music login may be a different account; the cached player is bound to the old one.
+                // A fresh music login may be a different account; the cached provider is bound to the old one.
                 if !had_credentials {
                     *self.wired.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }

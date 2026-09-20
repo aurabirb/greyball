@@ -310,7 +310,7 @@ impl MediaProvider for HttpDirSource {
         source_id()
     }
 
-    fn open(&self, r: &Rendition) -> Result<Media> {
+    fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
         // MVP: hand the raw URL to the player, which downloads it.
         Ok(Media::Url(r.uri.clone()))
     }

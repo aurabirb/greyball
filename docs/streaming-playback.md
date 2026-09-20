@@ -246,7 +246,10 @@ show a "downloading" mark from `engine.status`.
 - `SpotifyMediaProvider::open` returns `Media::from_reader(..)` over the decrypted, header-skipped
   Ogg (`AudioFile`: random-access, known length -> scrubs during download via `fill_from_seekable`),
   at the best bitrate (320 needs Premium; fall back down), never the drain-on-drop reader.
-- It waits (cancellably, internally) for a live session instead of returning `Unsupported`.
+- It waits for a live session instead of returning `Unsupported`; `MediaProvider::open(r, wanted)` gets a
+  `wanted` callback (false once the stream has no claim left) that a waiting provider polls.
+- The returned reader reopens the `AudioFile` after a read error (a stalled or dead fetch), so the engine's
+  retry continues at the same offset; `Link`'s connection lives on its own thread, published as a `Slot`.
 - The plugin keeps the connection: `Link` (session, backoff, `generation`, `died_streak`,
   `SESSION_HEALTHY_AFTER`, the runtime `Handle`) is unchanged and is the provider's session source.
 - Carry-over checklist (do not lose these behaviors):

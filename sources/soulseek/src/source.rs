@@ -181,7 +181,7 @@ impl MediaProvider for SoulseekSource {
         source_id()
     }
 
-    fn open(&self, r: &Rendition) -> Result<Media> {
+    fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
         let track = TrackRef::parse(&r.uri).ok_or_else(|| src_err(format!("not a soulseek track: {:?}", r.uri)))?;
         let path = self.fetch(&r.uri, &track)?;
         Ok(Media::Path(path))

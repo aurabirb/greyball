@@ -166,7 +166,9 @@ impl Media {
 
 pub trait MediaProvider: Send + Sync {
     fn id(&self) -> SourceId;
-    fn open(&self, r: &Rendition) -> Result<Media>;
+    /// Blocking, on a stream thread. `wanted` turns false once nobody wants the stream any more; a
+    /// provider that waits for something must poll it and return an error then.
+    fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -206,9 +208,7 @@ impl Default for PlayerStatus {
 /// rendition. It has no notion of a logical `TrackId`.
 pub trait Player: Send + Sync {
     fn accepts(&self, r: &Rendition) -> bool;
-    /// `cache`: whether this play may populate `MediaCache`. Unused today —
-    /// every caller passes `true`.
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool);
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32);
     /// Warm up `r` so a following `load` of it starts without a gap.
     fn preload(&self, _r: &Rendition) {}
     fn toggle(&self);
@@ -220,7 +220,7 @@ pub trait Player: Send + Sync {
     /// 5-band magnitude of whatever's actually playing right now, roughly
     /// `0.0..=1.0` (bass..treble) — real signal for `:vis 2`, not a volume
     /// proxy. Default: silence, for players with no tap on the raw audio
-    /// (`NullPlayer`, and Spotify's librespot pipeline).
+    /// (`NullPlayer`).
     fn levels(&self) -> [f32; 5] {
         [0.0; 5]
     }

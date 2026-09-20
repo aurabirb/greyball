@@ -40,7 +40,7 @@
 //! otherwise have — it takes a `Store` handle solely to look one up
 //! (`Store::track_by_rendition`) at write time. That
 //! `Store` handle is never used to originate a fetch, and deliberately isn't
-//! threaded through `Player`/`RodioPlayer`/`SpotifyPlayer`'s own `put`/
+//! threaded through `Player`/`RodioPlayer`'s own `put`/
 //! `persist_file`/`link_local` call sites — those stay exactly as they were,
 //! passing only `(source, uri, bytes-or-path)`.
 

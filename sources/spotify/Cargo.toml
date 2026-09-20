@@ -14,12 +14,10 @@ workspace = true
 
 [dependencies]
 core = { path = "../../core" }
-player = { path = "../../player" }
 librespot-core = "0.8.0"
 librespot-metadata = "0.8.0"
 librespot-oauth = "0.8.0"
 librespot-audio = "0.8.0"
-librespot-playback = { version = "0.8.0", default-features = false, features = ["rodio-backend"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"

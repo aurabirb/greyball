@@ -466,7 +466,7 @@ impl MediaProvider for SoundcloudSource {
         source_id()
     }
 
-    fn open(&self, r: &Rendition) -> Result<Media> {
+    fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
         let track_ref = TrackRef::parse(&r.uri)
             .ok_or_else(|| src_err(format!("not a SoundCloud track: {:?}", r.uri)))?;
         let track = self.track_ref(&track_ref)?;
