@@ -141,6 +141,26 @@ struct SearchResponse {
 }
 
 #[derive(Deserialize)]
+struct ApiCollection {
+    id: Option<String>,
+    name: String,
+    #[serde(default)]
+    artists: Vec<Artist>,
+}
+
+#[derive(Deserialize, Default)]
+struct CollectionPage {
+    #[serde(default)]
+    items: Vec<Option<ApiCollection>>,
+}
+
+#[derive(Deserialize)]
+struct CollectionSearchResponse {
+    albums: Option<CollectionPage>,
+    playlists: Option<CollectionPage>,
+}
+
+#[derive(Deserialize)]
 struct ApiPlaylist {
     id: String,
     name: String,
@@ -385,6 +405,27 @@ impl WebApi {
             .items
             .into_iter()
             .filter_map(ApiTrack::into_track)
+            .collect())
+    }
+
+    /// Album or playlist search (`album`/`playlist`), as `(id, display name)`; albums read "Artist – Title".
+    pub fn search_collections(&self, query: &str, kind: &str, limit: usize) -> Result<Vec<(String, String)>, String> {
+        let limit = limit.clamp(1, Self::MAX_LIMIT);
+        let q = url_encode(query);
+        let url = format!("{API}/search?type={kind}&limit={limit}&offset=0&q={q}");
+        let body: CollectionSearchResponse = self.get(&url)?.json().map_err(|e| e.to_string())?;
+        let page = if kind == "album" { body.albums } else { body.playlists };
+        Ok(page
+            .unwrap_or_default()
+            .items
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                let id = c.id?;
+                let artists: Vec<_> = c.artists.iter().map(|a| a.name.as_str()).collect();
+                let name = if artists.is_empty() { c.name } else { format!("{} \u{2013} {}", artists.join(", "), c.name) };
+                Some((id, name))
+            })
             .collect())
     }
 

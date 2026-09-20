@@ -117,6 +117,27 @@ impl Source for SpotifySource {
         Ok(())
     }
 
+    fn search_collections(
+        &self,
+        q: &SearchQuery,
+        kind: core::ItemKind,
+        sink: &mut dyn FnMut(String, BrowseNode),
+    ) -> Result<()> {
+        if q.text.trim().is_empty() {
+            return Ok(());
+        }
+        let (api_kind, prefix) = match kind {
+            core::ItemKind::Album => ("album", ALBUM_PREFIX),
+            core::ItemKind::Playlist => ("playlist", ""),
+            core::ItemKind::Track => return Ok(()),
+        };
+        let limit = if q.limit == 0 { 20 } else { q.limit };
+        for (id, name) in self.api.search_collections(&q.text, api_kind, limit).map_err(src_err)? {
+            sink(name, BrowseNode::Path(format!("{prefix}{id}")));
+        }
+        Ok(())
+    }
+
     fn resolve(&self, uri: &str) -> Result<Track> {
         let r = SpotifyRef::parse(uri).ok_or_else(|| src_err(format!("not a spotify uri: {uri}")))?;
         if r.kind != ItemKind::Track {

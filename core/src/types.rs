@@ -258,6 +258,13 @@ impl SearchQuery {
             limit: 100,
         }
     }
+
+    pub fn all_kinds(text: impl Into<String>) -> Self {
+        Self {
+            kinds: vec![ItemKind::Track, ItemKind::Album, ItemKind::Playlist],
+            ..Self::text(text)
+        }
+    }
 }
 
 /// Split "Artist - Title" / "Artist – Title" / "Artist_-_Title". If no separator,

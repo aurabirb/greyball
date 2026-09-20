@@ -3,7 +3,7 @@
 use std::io::{Read, Seek};
 
 use crate::types::{
-    Playlist, PlaylistId, Rendition, SearchQuery, SourceId, Track, TrackId,
+    ItemKind, Playlist, PlaylistId, Rendition, SearchQuery, SourceId, Track, TrackId,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -66,6 +66,15 @@ pub trait Source: Send + Sync {
     fn recognizes(&self, uri: &str) -> bool;
     /// Blocking. Push hits into `sink` as they are found; return when done.
     fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()>;
+    /// Blocking. Push albums/playlists of `kind` matching `q` as (display name, node); default finds none.
+    fn search_collections(
+        &self,
+        _q: &SearchQuery,
+        _kind: ItemKind,
+        _sink: &mut dyn FnMut(String, BrowseNode),
+    ) -> Result<()> {
+        Ok(())
+    }
     fn resolve(&self, uri: &str) -> Result<Track>;
     /// `want`: how many rows the caller needs ready now (paginated sources
     /// use it to pace background fetching — see `core::PagedList`); ignore

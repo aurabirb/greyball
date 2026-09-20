@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::catalog::Catalog;
 use crate::event::{Bus, CoreEvent};
-use crate::traits::Source;
-use crate::types::SearchQuery;
+use crate::traits::{BrowseNode, Source};
+use crate::types::{ItemKind, SearchQuery};
 
 pub struct Search {
     sources: Vec<Arc<dyn Source>>,
@@ -58,7 +58,26 @@ impl Search {
                         }),
                     }
                 };
-                match source.search(&q, &mut sink) {
+                let mut result = source.search(&q, &mut sink);
+                for kind in [ItemKind::Album, ItemKind::Playlist] {
+                    if result.is_err() || !q.kinds.contains(&kind) {
+                        continue;
+                    }
+                    let mut collection_sink = |name: String, node: BrowseNode| {
+                        if gen_counter.load(Ordering::SeqCst) != generation {
+                            return; // superseded
+                        }
+                        bus.send(CoreEvent::SearchCollection {
+                            search: generation,
+                            source: sid.clone(),
+                            kind,
+                            name,
+                            node,
+                        })
+                    };
+                    result = source.search_collections(&q, kind, &mut collection_sink);
+                }
+                match result {
                     Ok(()) => {
                         let stale = gen_counter.load(Ordering::SeqCst) != generation;
                         log::info!(

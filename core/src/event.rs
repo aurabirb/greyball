@@ -6,11 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
-use crate::types::{SourceId, TrackId};
+use crate::traits::BrowseNode;
+use crate::types::{ItemKind, SourceId, TrackId};
 
 #[derive(Clone, Debug)]
 pub enum CoreEvent {
     SearchHit { search: u64, track: TrackId },
+    SearchCollection { search: u64, source: SourceId, kind: ItemKind, name: String, node: BrowseNode },
     SearchDone { search: u64, source: SourceId },
     TrackUpdated(TrackId),
     QueueChanged,

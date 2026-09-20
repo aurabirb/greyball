@@ -28,7 +28,7 @@ use crate::traits::{
     BrowseNode, Error, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
-    LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
+    ItemKind, LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
     TrackId, parse_artist_title,
 };
 use crate::view_cache::{Change, PendingRows, RemoteCtx, ViewCache};
@@ -691,7 +691,7 @@ impl Session {
         match cmd {
             Command::Search(text) => {
                 self.view.begin_search(&text);
-                self.search_generation = self.search.run(SearchQuery::text(text));
+                self.search_generation = self.search.run(SearchQuery::all_kinds(text));
                 Ok(Dispatch::Ok)
             }
             Command::Play(id) => {
@@ -888,6 +888,13 @@ impl Session {
                 let current = *search == self.search_generation;
                 if current {
                     self.push_result(*track);
+                }
+                Ok(current)
+            }
+            CoreEvent::SearchCollection { search, source, kind, name, node } => {
+                let current = *search == self.search_generation;
+                if current {
+                    self.view.push_collection_result(source.clone(), *kind, name.clone(), node.clone());
                 }
                 Ok(current)
             }
@@ -1246,6 +1253,10 @@ impl Session {
     /// (already in-memory, but still O(n)) results cache every redraw.
     pub fn results_window(&self, offset: usize, limit: usize) -> Vec<Track> {
         self.view.results_window(offset, limit)
+    }
+
+    pub fn search_collections(&self) -> &[(SourceId, ItemKind, String, BrowseNode)] {
+        self.view.collection_results()
     }
 
     pub fn results_query(&self) -> Option<&str> {

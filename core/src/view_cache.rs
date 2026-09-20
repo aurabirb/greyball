@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::catalog::Catalog;
 use crate::event::{Bus, CoreEvent, MembershipOutcome};
 use crate::traits::{BrowseNode, BrowsePage, Error, Source, Store};
-use crate::types::{SourceId, Track, TrackId};
+use crate::types::{ItemKind, SourceId, Track, TrackId};
 
 /// Cache entry behind `ViewCache::remote_playlist_track_ids`/`_len`/`_window`.
 /// `tracks` (already resolved from the store, not just ids — see
@@ -213,6 +213,7 @@ pub(crate) struct ViewCache {
     /// the store just to render it again.
     results_cache: Vec<Track>,
     results_query: Option<String>,
+    collection_results: Vec<(SourceId, ItemKind, String, BrowseNode)>,
     /// Bumped whenever `results`' membership changes.
     results_gen: u64,
 
@@ -238,6 +239,7 @@ impl ViewCache {
     pub fn begin_search(&mut self, query: &str) {
         self.results.clear();
         self.results_cache.clear();
+        self.collection_results.clear();
         self.results_query = (!query.trim().is_empty()).then(|| query.to_string());
         self.results_gen += 1;
     }
@@ -280,6 +282,15 @@ impl ViewCache {
     /// (already in-memory, but still O(n)) `results_cache` every redraw.
     pub fn results_window(&self, offset: usize, limit: usize) -> Vec<Track> {
         self.results_cache.iter().skip(offset).take(limit).cloned().collect()
+    }
+
+    pub fn collection_results(&self) -> &[(SourceId, ItemKind, String, BrowseNode)] {
+        &self.collection_results
+    }
+
+    pub fn push_collection_result(&mut self, source: SourceId, kind: ItemKind, name: String, node: BrowseNode) {
+        self.collection_results.push((source, kind, name, node));
+        self.results_gen += 1;
     }
 
     /// Append `tid` to the search results, deduped, resolving it against the
