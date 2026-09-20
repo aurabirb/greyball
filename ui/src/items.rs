@@ -150,7 +150,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s", "→ always works too."),
     builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s", "← always works too."),
     builtin(Section::Player, BuiltinAction::RevealPlaying, "select the playing track in the active window", "Seeking does this too."),
-    builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track", ""),
+    builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track, playlist or album", ""),
     builtin(Section::Tracks, BuiltinAction::Wedge, "wedge the selected track to the front of the queue", ""),
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),
     builtin(Section::Tracks, BuiltinAction::Like, "like the selected track (add to Liked Songs), or unlike it when it is already liked", "Confirms before removing."),

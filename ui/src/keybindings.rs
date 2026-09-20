@@ -97,16 +97,16 @@ pub fn taken(key: char, hotkeys: &HashMap<char, HotkeyTarget>) -> Option<Taken> 
     builtin_at(hotkeys, key).map(Taken::Builtin)
 }
 
-/// What `ch` means with `selected` under the cursor; built-ins answer to their effective key in `hotkeys`.
-pub fn map(ch: char, selected: Option<TrackId>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
+/// What `ch` means with `selected` (a track) or `collection` (a playlist or album row) under the cursor; built-ins answer to their effective key in `hotkeys`.
+pub fn map(ch: char, selected: Option<TrackId>, collection: Option<(HotkeyTarget, String)>, hotkeys: &HashMap<char, HotkeyTarget>) -> Action {
     if let Some(action) = fixed(ch) {
         return action;
     }
-    builtin_at(hotkeys, ch).map_or(Action::None, |action| builtin_action(action, selected))
+    builtin_at(hotkeys, ch).map_or(Action::None, |action| builtin_action(action, selected, collection))
 }
 
-/// What running `action` means with `selected` under the cursor.
-pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Action {
+/// What running `action` means with `selected` or `collection` under the cursor.
+pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collection: Option<(HotkeyTarget, String)>) -> Action {
     match action {
         BuiltinAction::Next => Action::Command(Command::Next),
         BuiltinAction::Previous => Action::Command(Command::Previous),
@@ -126,7 +126,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>) -> Actio
         BuiltinAction::CycleKindFilter => Action::CycleKindFilter,
         BuiltinAction::Enqueue => match selected {
             Some(id) => Action::Command(Command::Enqueue(id)),
-            None => Action::None,
+            None => collection.map_or(Action::None, |(target, name)| Action::Command(Command::EnqueueCollection(target, name))),
         },
         BuiltinAction::Wedge => match selected {
             Some(id) => Action::Command(Command::Wedge(id)),

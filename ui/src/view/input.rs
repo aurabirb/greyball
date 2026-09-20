@@ -87,8 +87,11 @@ impl MedleyView {
                     return self.handle_action(Action::ToggleWindow(name));
                 }
                 if let command::Parsed::Builtin(action) = parsed {
-                    let selected = self.with_session(|s| self.active_list().and_then(|list| list.selected_track(s)));
-                    return match keybindings::builtin_action(action, selected) {
+                    let (selected, collection) = self.with_session(|s| {
+                        let list = self.active_list();
+                        (list.and_then(|list| list.selected_track(s)), list.and_then(|list| list.selected_collection(s)))
+                    });
+                    return match keybindings::builtin_action(action, selected, collection) {
                         Action::None => self.notify(Notice::failed("no track selected")),
                         action => self.handle_action(action),
                     };

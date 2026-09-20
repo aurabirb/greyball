@@ -159,6 +159,10 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 
 `kind_bar.rs` draws and hit-tests the title row's kind bar. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
 
+## Queue info rows
+
+A Queue window's rows are its tracks, then `Session::queue_info_rows` (`loading <name> …` per pending enqueue, `Continues: …`), drawn with `plain_row` and counted in `len`, so the cursor can rest on them; `visible_track_ids` never holds them, so `selected_track` is `None` there and every action on a track ignores the row. They change without `queue_gen` moving, so the frame is keyed on `revision`, which every job change bumps. `q` on a collection row (`TrackList::selected_collection`: a Search or Playlists row, or the open collection) runs `Command::EnqueueCollection`.
+
 ## Memos
 
 `Memo<K, V>` (`memo.rs`) is the one-entry cache everything keyed here is built on

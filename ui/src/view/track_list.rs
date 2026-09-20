@@ -452,6 +452,22 @@ impl TrackList {
         }
     }
 
+    /// The collection the cursor is on, or the one open, with its display name: what `q` enqueues off a track row.
+    pub(super) fn selected_collection(&self, s: &Session) -> Option<(HotkeyTarget, String)> {
+        if let Some(target) = self.open_target() {
+            return self.context_name(s).map(|name| (target, name));
+        }
+        if !matches!(self.kind, ListKind::Playlists | ListKind::Search) {
+            return None;
+        }
+        let row = self.top_row(s)?;
+        let name = match &row {
+            TopRow::Remote(_, name, ..) => name.clone(),
+            TopRow::Local(_) => top_row_name(&row, &s.playlists()),
+        };
+        Some((row.target(), name))
+    }
+
     /// The full list length.
     pub(super) fn len(&self, s: &Session) -> usize {
         if let Some(ids) = self.filtered_ids(s) {
@@ -461,7 +477,7 @@ impl TrackList {
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_len(),
             (ListKind::Search, _) => self.search_tracks(s) + self.collections(s).len(),
-            (ListKind::Queue, _) => s.queue_len(),
+            (ListKind::Queue, _) => s.queue_len() + s.queue_info_rows().len(),
             (ListKind::History, _) => s.queue.history_len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
             (ListKind::Playlists, Open::TopLevel) => self.top(s).len(),
@@ -531,6 +547,7 @@ impl TrackList {
             _ => (None, None),
         };
         let heading = if self.at_playlists_top() && self.kinds == KindFilter::Albums { "Albums" } else { self.kind.label() };
+        let total = if self.kind == ListKind::Queue { s.queue_len() } else { total };
         let name = name.unwrap_or_else(|| format!("{heading} ({total} {})", self.unit(total)));
         match hint {
             Some(hint) => format!("{name}  ({hint})"),
@@ -579,7 +596,13 @@ impl TrackList {
                 }));
                 rows
             }
-            (ListKind::Queue, _) => track_rows(s.queue_window(offset, limit)),
+            (ListKind::Queue, _) => {
+                let tracks = s.queue_len();
+                let mut rows = if offset < tracks { track_rows(s.queue_window(offset, limit)) } else { vec![] };
+                let room = limit.saturating_sub(rows.len());
+                rows.extend(s.queue_info_rows().into_iter().skip(offset.saturating_sub(tracks)).take(room).map(plain_row));
+                rows
+            }
             (ListKind::History, _) => track_rows(s.history_window(offset, limit)),
             (ListKind::Playlists, Open::Local(id)) => track_rows(s.playlist_window(*id, offset, limit)),
             (ListKind::Playlists, Open::TopLevel) if self.kinds != KindFilter::All && self.top(s).is_empty() => {

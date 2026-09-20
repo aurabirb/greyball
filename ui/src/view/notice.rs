@@ -57,6 +57,7 @@ impl Notice {
                 Some(Notice::Flash(msg.clone()))
             }
             CoreEvent::MembershipResult(MembershipOutcome::Failed(msg)) => Some(Notice::failed(msg)),
+            CoreEvent::Flash(msg) => Some(Notice::Flash(msg.clone())),
             CoreEvent::PluginReport(msg) => Some(Notice::Popup(msg.clone())),
             CoreEvent::UpdateResult(Ok(msg)) => Some(Notice::Flash(msg.clone())),
             CoreEvent::UpdateResult(Err(msg)) => Some(Notice::failed(msg.clone())),

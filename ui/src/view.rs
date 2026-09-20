@@ -389,15 +389,16 @@ impl MedleyView {
             Event::Key(Key::Right) => self.seek(5000),
             Event::Key(Key::Left) => self.seek(-5000),
             &Event::Char(key) => {
-                let (sel, open_row, hotkeys) = self.with_session(|s| {
+                let (sel, collection, open_row, hotkeys) = self.with_session(|s| {
                     let list = self.active_list();
                     let sel = list.and_then(|list| list.selected_track(s));
-                    (sel, list.and_then(|list| list.open_row(s)), s.hotkeys().into_iter().collect())
+                    let collection = list.and_then(|list| list.selected_collection(s));
+                    (sel, collection, list.and_then(|list| list.open_row(s)), s.hotkeys().into_iter().collect())
                 });
                 // Per-user playlist hotkeys win over a built-in command when a key names a playlist target.
                 match keybindings::hotkey_toggle(key, sel, &hotkeys, open_row) {
                     Some(cmd) => self.run_confirmed(cmd),
-                    None => self.handle_action(keybindings::map(key, sel, &hotkeys)),
+                    None => self.handle_action(keybindings::map(key, sel, collection, &hotkeys)),
                 }
             }
             _ => EventResult::Ignored,
@@ -632,7 +633,7 @@ impl MedleyView {
             // A window shown over the view that is no list owns the keyboard but for the keys about windows themselves.
             None if self.over_view(ids[0]) && self.windows[ids[0]].list().is_none() => {
                 let action = match *event {
-                    Event::Char(key) => self.with_session(|s| keybindings::map(key, None, &s.hotkeys().into_iter().collect())),
+                    Event::Char(key) => self.with_session(|s| keybindings::map(key, None, None, &s.hotkeys().into_iter().collect())),
                     Event::Key(Key::Tab) | Event::Shift(Key::Tab) => return self.on_shell_key(event),
                     _ => Action::None,
                 };

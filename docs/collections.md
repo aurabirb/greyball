@@ -106,18 +106,18 @@ its own single-flight walk beside the playlist folders (`ensure_folders`, used o
 The queue stays `VecDeque<TrackId>`: tracks only, no new entry type. Enqueuing a collection resolves
 it to tracks and appends them.
 
-- One command, `Command::EnqueueCollection(HotkeyTarget)`, serves a Search row, a Playlists row
+- One command, `Command::EnqueueCollection(HotkeyTarget, String)` (the target and its display name), serves a Search row, a Playlists row
   (album or playlist) and an opened collection. A local playlist appends its tracks at once.
 - A remote collection may still be paging in (`remote_playlist_track_ids(source, node)`). The
   session holds a pending-enqueue job for it, driven by the existing playlists-changed event (no
   polling, nothing blocks the UI): as pages land, the newly loaded tracks are appended in order. The
   job finishes when the list settles, and is dropped with a flashed notice when it errors or hits a
-  timeout. The tracks it appends are ordinary queue tracks (removable, reorderable, persisted like
+  60 s timeout (a one-shot timer thread sends `QueueChanged`, so no polling), reported through `CoreEvent::Flash`. The tracks it appends are ordinary queue tracks (removable, reorderable, persisted like
   any other).
 - A job appends when tracks are loaded, so tracks queued meanwhile land before its later tracks; this
   is accepted and not worked around with placeholder entries.
-- Very long lists are capped or confirmed above a size the implementer proposes.
-- The Queue window shows non-selectable info rows after the tracks: `loading <name> …` per pending
+- One collection appends at most `ENQUEUE_CAP` (500) tracks, and the notice says when it was cut.
+- The Queue window shows non-selectable info rows after the tracks (`Session::queue_info_rows`): `loading <name> …` per pending
   job and, last, the derived continuation row.
 - Shuffle, `RepeatTrack`, `advance`, `upcoming_track` and queue persistence are unchanged.
 
@@ -186,4 +186,4 @@ to break one, report it back instead of working around it.
 2. Search generation tags on events. (done)
 3. `search_collections` + kind bar + prefix rows. (done)
 4. Playlists-window kind filter + saved-albums listing. (done)
-5. `EnqueueCollection` with the pending-enqueue job + Queue info rows (loading, continuation).
+5. `EnqueueCollection` with the pending-enqueue job + Queue info rows (loading, continuation). (done)
