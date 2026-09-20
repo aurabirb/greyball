@@ -20,7 +20,7 @@
   starts. Decide what the readout shows if the new track fails to load. The player's snapshot already
   describes the playing track until the swap; the Session side (`Loading`/`Playing` handlers set
   `shown.now_playing` and call `set_status`, `self.progress`, the queue pointer, `core/src/app.rs`)
-  still switches at once; the previous track's position/length no longer reach `self.progress` (`Progress` is identity-guarded), so the bar sits at 0 / the new track's catalog length until the swap.
+  still switches at once; `Progress` is identity-guarded, so the bar sits at 0 / the new track's catalog length until the swap (the swap reports the new track's decoded length, also when it starts paused); `Seek` during a pending load moves the previous track without touching the bar.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
@@ -60,8 +60,12 @@
   the filters (playlist subtabs) sit on the left and the title on the right; do not write the count unit
   `(xx playlists)` at all for the Playlists window; put the `[f] change filter` hint (currently drawn left
   of the filter bar) after the playlist subtab; and right-align every list window's title, not just this
-  one. Where the wording is ambiguous (what exactly `(xx playlists)` is — the `count()` text or part of
-  the title), report it back rather than guessing.
+  one. Remove the track/item count from the top titles everywhere (`count()`, `cursor/total unit`,
+  which covers the `(xx playlists)` text) — the status bar shows it now; if `(xx playlists)` turns out to be
+  something other than the `count()` text, report it back rather than guessing. In the search view the entry field
+  (`typed_title` + `HINT`, `track_list.rs` ~889: today `/{input}█` followed by the `(Esc to cancel)`
+  hint) comes right after the filters, drawn in white, and reads `search: {input}█`; the `(esc to exit)`
+  hint is drawn in red (keep or reword the current `(Esc to cancel)` text — the owner wrote "esc to exit").
 - [ ] Fetch the remote branch `worktree-copy-shared-link` (`git fetch origin worktree-copy-shared-link`)
   and merge it into `main`: review it against the "copy shared link" shortcut item below first (it likely
   implements it — delete that item if so), resolve conflicts, then run the build/clippy gates and push.

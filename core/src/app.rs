@@ -811,10 +811,6 @@ impl Session {
                     let cur = p.status();
                     let target = (cur.position_ms as i64 + delta).max(0) as u32;
                     p.seek(target);
-                    let status = p.status();
-                    let (position_ms, duration_ms) = (status.position_ms, status.duration_ms);
-                    self.set_status(status, None);
-                    self.update_progress(position_ms, duration_ms);
                 }
                 Ok(Dispatch::Ok)
             }
@@ -1105,13 +1101,16 @@ impl Session {
     /// The track a player event's rendition belongs to — what `start_playback` handed the player
     /// (the only way a cache-fallback `local` rendition maps back), else the store's index.
     fn event_track(&self, source: &SourceId, uri: &str) -> Result<Option<TrackId>> {
-        if let Some((s, u, id)) = &self.now_playing_rendition
-            && s == source
-            && u == uri
+        if self.is_now_playing(source, uri)
+            && let Some((.., id)) = &self.now_playing_rendition
         {
             return Ok(Some(*id));
         }
         Ok(self.store.track_by_rendition(source, uri)?.map(|t| t.id))
+    }
+
+    fn is_now_playing(&self, source: &SourceId, uri: &str) -> bool {
+        self.now_playing_rendition.as_ref().is_some_and(|(s, u, _)| s == source && u == uri)
     }
 
     fn on_player_event(&mut self, pe: &PlayerEvent) -> Result<bool> {
@@ -1138,7 +1137,7 @@ impl Session {
             }
             PlayerEvent::Progress { source, uri, position_ms, duration_ms } => {
                 // A tick from the previous track, still playing until the new load swaps in, is not the shown track's.
-                if self.now_playing_rendition.as_ref().is_some_and(|(s, u, _)| s == source && u == uri) {
+                if self.is_now_playing(source, uri) {
                     self.update_progress(*position_ms, *duration_ms);
                 }
                 Ok(true)
@@ -2035,6 +2034,7 @@ impl Session {
             p.stop();
         }
         self.queue.stop();
+        self.progress = (0, 0);
     }
 
     /// Play the next track in `self.shown.context`, if there is one, advancing its
@@ -2154,8 +2154,7 @@ impl Session {
         self.players.values().find(|p| p.accepts(r)).cloned()
     }
 
-    /// `state` overrides a player whose own status lags the event that reported it. Progress is left
-    /// alone: until a load swaps in, the player's position and length belong to the previous track.
+    /// `state` overrides a player whose own status lags the event that reported it.
     fn set_status(&mut self, status: PlayerStatus, state: Option<PlayerState>) {
         self.shown.write().player_state = state.unwrap_or(status.state);
     }

@@ -300,14 +300,14 @@ fn worker(
                     let outcome = result
                         .and_then(|loaded| finish_load(&mut audio, &inner, &bus, &source, &uri, loaded, paused, position_ms));
                     if let Err(e) = outcome {
-                        // The previous track plays on (the app decides what replaces it, and a pause made meanwhile stays
-                        // for it); with none, the load's own status goes.
+                        // The previous track plays on and the app decides what replaces it; a pause made during
+                        // the failed load is not carried to that replacement. With none playing, the load's own status goes.
                         log::error!("rodio: load failed: {e}");
+                        audio.pending = None;
                         if let Some(live) = &audio.live {
                             log::debug!("player: the previous track plays on after the failed load");
                             inner.lock().unwrap_or_else(|e| e.into_inner()).stream = Some(live.handle.clone());
                         } else {
-                            audio.pending = None;
                             release(&mut audio, &inner);
                         }
                         bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));
@@ -315,7 +315,10 @@ fn worker(
                 }
             }
             Ok(Cmd::Toggle) => toggle(&mut audio, &inner, &bus),
-            Ok(Cmd::Seek(ms)) => seek(&mut audio, &inner, &tap, ms),
+            Ok(Cmd::Seek(ms)) => {
+                seek(&mut audio, &inner, &tap, ms);
+                report_progress(&audio, &inner, &bus);
+            }
             Ok(Cmd::SetVolume(v)) => {
                 inner.lock().unwrap_or_else(|e| e.into_inner()).volume = v;
                 if let Some(sink) = &audio.sink {
@@ -339,6 +342,18 @@ fn worker(
     }
 }
 
+fn report_progress(audio: &Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
+    let (Some(sink), Some((source, uri))) = (&audio.sink, &audio.playing) else { return };
+    let pos = sink.get_pos().as_millis() as u32;
+    inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = pos;
+    bus.send(CoreEvent::Player(PlayerEvent::Progress {
+        source: source.clone(),
+        uri: uri.clone(),
+        position_ms: pos,
+        duration_ms: audio.duration_ms,
+    }));
+}
+
 fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
     let Some(sink) = &audio.sink else { return };
     let (source, uri) = match &audio.playing {
@@ -348,14 +363,7 @@ fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
     if sink.is_paused() && !audio.buffering {
         return;
     }
-    let pos = sink.get_pos().as_millis() as u32;
-    inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = pos;
-    bus.send(CoreEvent::Player(PlayerEvent::Progress {
-        source: source.clone(),
-        uri: uri.clone(),
-        position_ms: pos,
-        duration_ms: audio.duration_ms,
-    }));
+    report_progress(audio, inner, bus);
     let info = audio.live.as_ref().map(|l| l.handle.info());
     if let Some(info) = &info {
         let active = matches!(info.state, StreamState::Connecting | StreamState::Fetching | StreamState::Buffering);
@@ -394,11 +402,11 @@ fn release(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>) {
         log::debug!("player: sink and stream released");
     }
     audio.sink = None;
-    audio.live = None;
+    let old = audio.live.take();
     audio.buffering = false;
     let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
-    // A load in flight keeps its stream shown.
-    let stream = s.stream.take().filter(|_| audio.pending.is_some());
+    // A load in flight keeps its own stream shown, not the released track's.
+    let stream = s.stream.take().filter(|st| audio.pending.is_some() && old.is_none_or(|l| !l.handle.same_stream(st)));
     *s = Snapshot { volume: s.volume, stream, ..Snapshot::default() };
 }
 
@@ -563,6 +571,7 @@ fn finish_load(
     } else {
         sink.play();
     }
+    report_progress(audio, inner, bus);
     Ok(())
 }
 
@@ -605,39 +614,39 @@ fn seek(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, tap: &Arc<AudioTap>, ms
 }
 
 fn toggle(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
-    let Some(sink) = &audio.sink else {
-        // First load: no sink yet, the pause is recorded for the swap.
-        if let Some((source, uri, paused)) = &mut audio.pending {
-            *paused = !*paused;
-            if *paused {
-                set_state(inner, PlayerState::Paused, 0);
-                bus.send(CoreEvent::Player(PlayerEvent::Paused));
-            } else {
-                set_state(inner, PlayerState::Playing, 0);
-                bus.send(CoreEvent::Player(PlayerEvent::Playing { source: source.clone(), uri: uri.clone() }));
-            }
+    let (state, event) = if let Some(sink) = &audio.sink {
+        let Some((source, uri)) = audio.playing.clone() else {
+            return;
+        };
+        let resume = sink.is_paused() && !audio.buffering;
+        if let Some(p) = &mut audio.pending {
+            p.2 = !resume;
         }
-        return;
-    };
-    let Some((source, uri)) = audio.playing.clone() else {
-        return;
-    };
-    let resume = sink.is_paused() && !audio.buffering;
-    if let Some(p) = &mut audio.pending {
-        p.2 = !resume;
-    }
-    if resume {
-        sink.play();
-        inner.lock().unwrap_or_else(|e| e.into_inner()).state = PlayerState::Playing;
-        bus.send(CoreEvent::Player(PlayerEvent::Playing { source, uri }));
-    } else {
-        sink.pause();
         audio.buffering = false;
-        let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
-        s.buffering = false;
-        s.state = PlayerState::Paused;
-        bus.send(CoreEvent::Player(PlayerEvent::Paused));
-    }
+        if resume {
+            sink.play();
+            (PlayerState::Playing, PlayerEvent::Playing { source, uri })
+        } else {
+            sink.pause();
+            (PlayerState::Paused, PlayerEvent::Paused)
+        }
+    } else {
+        // First load: no sink yet, the pause is recorded for the swap; `Loading` again since nothing plays yet.
+        let Some((source, uri, paused)) = &mut audio.pending else {
+            return;
+        };
+        *paused = !*paused;
+        if *paused {
+            (PlayerState::Paused, PlayerEvent::Paused)
+        } else {
+            (PlayerState::Playing, PlayerEvent::Loading { source: source.clone(), uri: uri.clone() })
+        }
+    };
+    let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
+    s.buffering = false;
+    s.state = state;
+    drop(s);
+    bus.send(CoreEvent::Player(event));
 }
 
 fn set_state(inner: &Arc<Mutex<Snapshot>>, state: PlayerState, position_ms: u32) {

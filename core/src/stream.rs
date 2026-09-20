@@ -546,6 +546,12 @@ pub struct StreamHandle {
     intent: Intent,
 }
 
+impl StreamHandle {
+    pub fn same_stream(&self, other: &StreamHandle) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+}
+
 impl std::fmt::Debug for StreamHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("StreamHandle").field(&self.shared.key).finish()
