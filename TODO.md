@@ -33,30 +33,11 @@
   Help/Log go through the one scrollbar function; the marker input is optional so windows with no
   playing row draw exactly as before.
 ### Bugs
-- [ ] If playback still sticks on a track's last second: `Session::on_player_event` now warns
-  `player: ignoring Finished for <source> <uri>: not the current track` whenever an end-of-track
-  event is dropped, so a stuck track with no such line in the Log pane means the player never sent
-  `Finished` at all — capture `~/.local/state/medley/medley.log` under `RUST_LOG=debug` for that
-  track (source, cached vs streamed, last `Progress` values) before changing `RodioPlayer::tick` or
-  the Spotify player's `EndOfTrack` handling.
 - [ ] A second `:s` started while the first is still streaming mixes both result sets:
   `CoreEvent::SearchHit(TrackId)` carries no search generation, so late hits from the superseded
   query are pushed into the new list (`Session::on_event` → `push_result`, `core/src/app.rs`). Tag
   hits and `SearchDone` with the search they belong to and drop the ones that are not current.
-- [ ] Confirm Log-pane wheel scrolling is responsive under `RUST_LOG=debug` with a large log; if not,
-  check wheel events queuing up behind draws (coalesce consecutive scroll events) and whether the
-  Log arm of `Window::on_event` (`ui/src/view/window.rs`) swallows or mis-routes wheel events.
-- [ ] Spotify: a real-world librespot AP death ("Connection to server closed.", upstream
-  [#1151](https://github.com/librespot-org/librespot/issues/1151)/
-  [#1486](https://github.com/librespot-org/librespot/issues/1486)) hasn't been observed against the
-  background reconnect (`Link` in `sources/spotify/src/player.rs`), only deaths induced by cutting the
-  AP socket through a local proxy. When one shows up in `medley.log`, confirm playback carried on
-  ("reconnecting in the background" → "session connected", no `Stopped` in between), then delete this.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
-- [ ] Remote playlist hotkey toggles (`ViewCache::set_remote_membership`, `core/src/view_cache.rs`)
-  have only been exercised against a throwaway fake source, never a real Spotify playlist. On first
-  real use, confirm in `medley.log` that one press sends exactly one add/remove, the letter goes
-  italic then settles, and the open playlist gains/loses the row — then delete this.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
   (`ui/src/view/rows.rs`) pads the title row only to `content_w` (width minus the scrollbar gutter), so
@@ -70,10 +51,6 @@
   should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`MedleyView::placed`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
   and wide-glyph titles on screen.
-- [ ] Playback has been seen to skip to the next track while the UI was stuck busy (e.g. during heavy
-  Help scrolling, since fixed). Confirm in `medley.log` which path issued the advance and make it
-  robust to a busy UI regardless — likely the auto-advance path misreading a lock/CPU stall as an
-  underrun/end-of-track.
 - [ ] Spotify has stopped recording listening history — investigate why (was working before; unclear
   which change, if any, broke it, or whether it's an account/API-side change).
 - [ ] Check whether the background media scan is polling/ticking at a needlessly high rate and wasting
@@ -150,7 +127,6 @@
   UI as a checkbox next to the existing SoundCloud settings — the config flag exists and is honored,
   just not yet exposed there.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
-- [ ] On soulseek setup page, it should ask the user if they want to set up slskd with docker if it is unavailable, and if the user types yes there should be a docker command with directory and everything set up so that medley can find it, the default folder should be ~/Documents/slskd. if the user skips or types something else we just ask the host, username and password for the slskd instance. the detected slskd status should show up in settings
 - [ ] Ability to include spotify playlists in search results, maybe on the playlists tab initially
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
@@ -161,10 +137,6 @@
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
-- [ ] Building on the status-row widget above: let it be placed either up top next to the
-  tabs (replacing the redundant track-controls row that's currently up there) or down at the bottom,
-  leaving only the command/help row at the bottom when it's moved up. Switchable via a toggle in the
-  Settings UI (wired up there, not config-file-only).
 - [ ] A "similar tracks" panel that filters the already-cached library for tracks similar to a
   chosen one (default: the playing track / the cursor row). For now similarity is just BPM — tracks
   whose `bpm` attr is within a tolerance of the reference (the BPM scan's values live in the track
@@ -173,12 +145,6 @@
   track list window (same paths as Search results). It must work in any placement — docked next to
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
-- [ ] Track list columns (`five_col` / the column layout in `ui/src/view/rows.rs`): make the source
-  column (`*sp`, `ht+lo`, …) narrower, and add a waveform column — a tiny per-row envelope of the
-  track's stored waveform (the WaveformPlugin's 400-bucket RMS scan metadata, drawn with the same
-  block glyphs as the tab-bar waveform in `ui/src/view/tab_bar.rs`), blank for tracks not scanned yet.
-  Hide the column when the window is too narrow to leave the title a sensible minimum, the way the
-  other optional columns drop out.
 - [ ] Make sure the local filter (`/`) works in every panel that shows a track list — Now Playing,
   Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — in
   every placement (tab, docked, floating), filtering that window's own list through the same
