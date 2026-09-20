@@ -53,10 +53,6 @@ pub enum DecodeError {
     Interrupted,
 }
 
-fn interrupted(stream: &StreamHandle) -> bool {
-    matches!(stream.info().state, StreamState::Failed(_) | StreamState::Cancelled)
-}
-
 /// Streams `stream` as stereo f32 frames in decoder-sized blocks; `on_block` returns `false` to stop early.
 /// Decodes progressively while the stream is still filling (a read waits for the next bytes), and seekably once
 /// it is complete. The sample rate on success.
@@ -67,14 +63,14 @@ pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]]
         delivered = true;
         on_block(b)
     });
-    if result == Err(DecodeError::NoAudio) && !complete && !delivered && !interrupted(stream) {
+    if result == Err(DecodeError::NoAudio) && !complete && !delivered && !stream.stopped() {
         // The container needs the whole file first: wait for it, then decode seekably.
         if !stream.wait_range(0..u64::MAX, FINISH_TIMEOUT) || stream.info().state != StreamState::Done {
             return Err(DecodeError::Interrupted);
         }
         result = decode_once(stream, true, &mut on_block);
     }
-    if result.is_err() && interrupted(stream) {
+    if result.is_err() && stream.stopped() {
         return Err(DecodeError::Interrupted);
     }
     result
@@ -95,6 +91,9 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
 
     let mut block: Vec<[f32; 2]> = Vec::new();
     while let Ok(packet) = format.next_packet() {
+        if stream.stopped() {
+            return Err(DecodeError::Interrupted);
+        }
         if packet.track_id() != track_id {
             continue;
         }
@@ -105,7 +104,7 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
             return Ok(sample_rate);
         }
     }
-    if interrupted(stream) {
+    if stream.stopped() {
         return Err(DecodeError::Interrupted);
     }
     Ok(sample_rate)

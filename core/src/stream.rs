@@ -542,6 +542,11 @@ impl StreamHandle {
         }
     }
 
+    /// Whether the stream failed or was cancelled; cheap, for a decode loop to poll.
+    pub fn stopped(&self) -> bool {
+        matches!(self.shared.lock().phase, StreamState::Failed(_) | StreamState::Cancelled)
+    }
+
     /// Stops the download now; every waiting reader wakes with an error.
     pub fn cancel(&self) {
         let mut st = self.shared.lock();
