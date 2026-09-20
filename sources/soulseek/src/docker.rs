@@ -44,8 +44,12 @@ pub fn create(folder: &Path, downloads: &Path) -> Result<(), String> {
     std::fs::create_dir_all(downloads.join("medley")).map_err(|e| format!("creating shared folder: {e}"))?;
     let owner = std::fs::metadata(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     // Rootless podman maps container root to the invoking user already; --user would map to a subuid.
-    let podman = Command::new("docker").arg("--version").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("podman"));
-    let user = if podman { Vec::new() } else { vec!["--user".to_string(), format!("{}:{}", owner.uid(), owner.gid())] };
+    // Asked of the engine, not `--version`: a `docker` symlink to podman doesn't say "podman" there.
+    let rootless_podman = Command::new("docker")
+        .args(["info", "--format", "{{.Host.Security.Rootless}}"])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true");
+    let user = if rootless_podman { Vec::new() } else { vec!["--user".to_string(), format!("{}:{}", owner.uid(), owner.gid())] };
     let mut args = vec![
         "run".to_string(),
         "-d".into(),
