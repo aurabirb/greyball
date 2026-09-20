@@ -42,8 +42,6 @@
   starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
   reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
   whether librespot's fetch loop or the CDN causes it, and consider cutting a released Spotify fetch at once.
-- [ ] A Spotify load requested while the link is down waits at most `START_TIMEOUT` (60 s, in
-  `RodioPlayer`) before `LoadFailed`; the old player held it until the link came back.
 - [ ] Resume after failure: when a stream fails mid-track (network drop), reopen the key (the same temp
   file keeps its ranges, the producer refills the gaps) and rebuild the decoder at the current position
   instead of `LoadFailed`; also covers Spotify's `Loaded::resume`.

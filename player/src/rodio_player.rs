@@ -49,7 +49,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 const START_BYTES: u64 = 256 * 1024;
 /// Playback pauses to buffer when the contiguous bytes past the read position fall below this.
 const LOW_WATER: u64 = 64 * 1024;
-/// How long a load waits for the first bytes before giving up.
+/// How long a load waits for the first bytes once connected; `Connecting` is bounded by the provider.
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum Cmd {
@@ -479,7 +479,7 @@ fn open_and_decode(
             s.stream = Some(handle.clone());
         }
     }
-    let deadline = Instant::now() + START_TIMEOUT;
+    let mut deadline = Instant::now() + START_TIMEOUT;
     while !handle.wait_range(0..START_BYTES, Duration::from_millis(200)) {
         if !current() {
             return Err(core::Error::Other("load superseded".into()));
@@ -487,6 +487,7 @@ fn open_and_decode(
         match handle.info().state {
             StreamState::Failed(why) => return Err(core::Error::Other(format!("stream failed: {why}"))),
             StreamState::Cancelled => return Err(core::Error::Other("stream cancelled".into())),
+            StreamState::Connecting => deadline = Instant::now() + START_TIMEOUT,
             _ => {}
         }
         if Instant::now() >= deadline {
