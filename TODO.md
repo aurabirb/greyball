@@ -182,7 +182,6 @@
     Settings, advanced options (custom host, manual login) only when asked for.
 
 ### Player chrome
-- [ ] Remove the waveform column from the track lists.
 - [ ] Move the shuffle widget (`[S]`) into the top player control block as a `ϟ` symbol, red while
   shuffle is active. The "Shuffle: on/off" flash must also appear on each press.
 - [ ] Hide the bottom scrubber by default: flip the `status_line` default to `false`
