@@ -348,8 +348,6 @@ pub enum Dispatch {
     Queued(usize),
     /// The queue's length after a push to its front.
     Wedged(usize),
-    /// The shareable URL to put on the clipboard.
-    LinkCopied(String),
     ShuffleSet(bool),
     /// A local playlist gained (`added`) or lost the track.
     MembershipSet { track: String, playlist: String, added: bool },
@@ -888,8 +886,14 @@ impl Session {
             Command::Like(track) => self.set_liked(track),
             Command::CopyLink(id) => {
                 let t = self.store.get_track(id)?.ok_or(Error::NotFound)?;
-                let url = t.renditions.iter().find_map(|r| self.sources.get(&r.source)?.share_url(&r.uri));
-                Ok(url.map_or_else(|| Dispatch::Refused(format!("No shareable link for {:?}", t.display_name())), Dispatch::LinkCopied))
+                let name = t.display_name().to_string();
+                let candidates: Vec<_> = t.renditions.iter().filter_map(|r| Some((self.sources.get(&r.source)?.clone(), r.uri.clone()))).collect();
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let url = candidates.iter().find_map(|(source, uri)| source.share_url(uri));
+                    bus.send(CoreEvent::LinkResolved(url.ok_or_else(|| format!("No shareable link for {name:?}"))));
+                });
+                Ok(Dispatch::Done("resolving link...".into()))
             }
             Command::ExportM3u(id) => {
                 let name = self.store.get_playlist(id)?.ok_or(Error::NotFound)?.name;
@@ -971,7 +975,7 @@ impl Session {
                 self.warn(context, message);
                 Ok(true)
             }
-            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) => Ok(true),
+            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
         }
     }
 

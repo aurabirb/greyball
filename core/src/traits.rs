@@ -83,7 +83,7 @@ pub trait Source: Send + Sync {
     fn saved_albums(&self, _want: usize) -> Result<BrowsePage> {
         Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], partial: false, errored: false })
     }
-    /// The shareable web URL for `uri`; `None` when this source has no such URL.
+    /// Blocking (may hit the network): the shareable web URL for `uri`; `None` when this source has no such URL.
     fn share_url(&self, _uri: &str) -> Option<String> {
         None
     }

@@ -53,6 +53,8 @@ pub enum CoreEvent {
     PluginReport(String),
     /// What `:update` came to: a status line, or why it failed.
     UpdateResult(Result<String, String>),
+    /// The shareable URL for the clipboard, or why there is none.
+    LinkResolved(Result<String, String>),
 }
 
 #[derive(Clone, Debug)]

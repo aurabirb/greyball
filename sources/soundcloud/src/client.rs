@@ -382,7 +382,7 @@ impl Source for SoundcloudSource {
     fn share_url(&self, uri: &str) -> Option<String> {
         match TrackRef::parse(uri)? {
             TrackRef::Permalink(url) => Some(url),
-            TrackRef::Id(_) => None,
+            TrackRef::Id(id) => self.track_by_id(id).ok()?.permalink_url,
         }
     }
 
@@ -528,6 +528,8 @@ impl MediaProvider for SoundcloudSource {
 struct ApiTrack {
     id: u64,
     title: String,
+    #[serde(default)]
+    permalink_url: Option<String>,
     #[serde(default)]
     duration: u32, // ms
     #[serde(default)]

@@ -46,11 +46,6 @@ impl Notice {
                     ScanMode::Disabled => "off",
                 }
             )),
-            Dispatch::LinkCopied(url) => {
-                log::info!("copied link: {url}");
-                super::clipboard::copy(&url);
-                Notice::Flash(format!("Copied: {url}"))
-            }
             Dispatch::LinkPending => Notice::Flash("link: pick a second row".to_string()),
             Dispatch::Done(msg) | Dispatch::Refused(msg) => Notice::Flash(msg),
         })
@@ -66,6 +61,12 @@ impl Notice {
             CoreEvent::PluginReport(msg) => Some(Notice::Popup(msg.clone())),
             CoreEvent::UpdateResult(Ok(msg)) => Some(Notice::Flash(msg.clone())),
             CoreEvent::UpdateResult(Err(msg)) => Some(Notice::failed(msg.clone())),
+            CoreEvent::LinkResolved(Ok(url)) => {
+                log::info!("copied link: {url}");
+                super::clipboard::copy(url);
+                Some(Notice::Flash(format!("Copied: {url}")))
+            }
+            CoreEvent::LinkResolved(Err(msg)) => Some(Notice::Flash(msg.clone())),
             _ => None,
         }
     }
