@@ -220,6 +220,8 @@ pub(crate) struct ViewCache {
     /// A source's top-level playlist folders, loaded in the background —
     /// see `ensure_remote_playlists`.
     remote_playlists: Arc<Mutex<HashMap<SourceId, RemotePlaylistsEntry>>>,
+    /// A source's saved albums, fetched and persisted like `remote_playlists`.
+    remote_albums: Arc<Mutex<HashMap<SourceId, RemotePlaylistsEntry>>>,
     /// A remote playlist's ingested tracks, cached per `(source, node)` —
     /// same "safe to call every redraw" requirement as `remote_playlists`.
     /// While `partial` a source may still be loading more in the background
@@ -254,9 +256,12 @@ impl ViewCache {
         cache.get(&(source.clone(), node.clone())).map_or(0, |e| e.generation)
     }
 
-    /// Moves whenever any source's top-level playlist folders do.
+    /// Moves whenever any source's top-level playlist or saved-album folders do.
     pub fn remote_playlists_gen(&self) -> u64 {
-        self.remote_playlists.lock().unwrap().values().map(|e| e.generation).sum()
+        [&self.remote_playlists, &self.remote_albums]
+            .iter()
+            .map(|m| m.lock().unwrap().values().map(|e| e.generation).sum::<u64>())
+            .sum()
     }
 
     /// Text of the last search, so an empty result list can say "no results for X".
@@ -337,10 +342,17 @@ impl ViewCache {
             .unwrap_or_default()
     }
 
+    /// A source's landed saved albums — a pure read; `ensure_remote_playlists` fetches.
+    pub fn remote_albums(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
+        self.remote_albums.lock().unwrap().get(source).map(|e| e.folders.clone()).unwrap_or_default()
+    }
+
     /// Lets the next `ensure_remote_playlists` retry an unsettled fetch at once — the source's token or wiring changed.
     pub(crate) fn invalidate_remote_playlists(&self, source: &SourceId) {
-        if let Some(entry) = self.remote_playlists.lock().unwrap().get_mut(source) {
-            entry.last_attempt = None;
+        for map in [&self.remote_playlists, &self.remote_albums] {
+            if let Some(entry) = map.lock().unwrap().get_mut(source) {
+                entry.last_attempt = None;
+            }
         }
     }
 
@@ -351,17 +363,30 @@ impl ViewCache {
     /// retriable, at most once per `PLAYLISTS_RETRY_FLOOR`, and never
     /// replaces a longer list already known.
     pub(crate) fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
+        self.ensure_folders(&self.remote_playlists, source, ctx, false);
+        self.ensure_folders(&self.remote_albums, source, ctx, true);
+    }
+
+    /// The fetch behind `ensure_remote_playlists`: `Source::browse(Root)` into `map`, or `Source::saved_albums` (persisted under `<source>#albums`) when `albums`.
+    fn ensure_folders(
+        &self,
+        map: &Arc<Mutex<HashMap<SourceId, RemotePlaylistsEntry>>>,
+        source: &SourceId,
+        ctx: RemoteCtx,
+        albums: bool,
+    ) {
+        let (what, key) = if albums { ("albums", format!("{source}#albums")) } else { ("playlists", source.to_string()) };
         let Some(source_handle) = ctx.sources.get(source).cloned() else {
             return;
         };
         {
-            let mut cache = self.remote_playlists.lock().unwrap();
+            let mut cache = map.lock().unwrap();
             let entry = cache.entry(source.clone()).or_insert_with(|| {
                 // First touch this session — hydrate from whatever a
                 // previous session persisted instead of starting empty.
                 let folders = ctx
                     .store
-                    .remote_playlist_folders(source.as_str())
+                    .remote_playlist_folders(&key)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(name, id)| (name, BrowseNode::Path(id)))
@@ -381,7 +406,7 @@ impl ViewCache {
         }
         let source = source.clone();
         let bus = ctx.bus.clone();
-        let cache = self.remote_playlists.clone();
+        let cache = map.clone();
         let store = ctx.store.clone();
 
         std::thread::spawn(move || {
@@ -389,7 +414,8 @@ impl ViewCache {
             source_handle.retry_browse(&BrowseNode::Root);
             let failure = loop {
                 // Small list, no scroll position to pace against — load it all.
-                let page = match source_handle.browse(&BrowseNode::Root, usize::MAX) {
+                let fetched = if albums { source_handle.saved_albums(usize::MAX) } else { source_handle.browse(&BrowseNode::Root, usize::MAX) };
+                let page = match fetched {
                     Ok(page) => page,
                     Err(e) => break Some(e.to_string()),
                 };
@@ -401,7 +427,7 @@ impl ViewCache {
                         entry.set_folders(page.folders.clone());
                     }
                     if clean {
-                        entry.settled = page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
+                        entry.settled = albums || page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
                     }
                 }
                 bus.send(CoreEvent::PlaylistsChanged);
@@ -414,8 +440,8 @@ impl ViewCache {
                             BrowseNode::Root => None,
                         })
                         .collect();
-                    if let Err(e) = store.set_remote_playlist_folders(source.as_str(), &folders) {
-                        log::warn!("{source}: failed to persist playlist folders: {e}");
+                    if let Err(e) = store.set_remote_playlist_folders(&key, &folders) {
+                        log::warn!("{source}: failed to persist {what} folders: {e}");
                     }
                     break None;
                 }
@@ -426,7 +452,7 @@ impl ViewCache {
             };
             cache.lock().unwrap().entry(source.clone()).or_default().browsing = false;
             if let Some(message) = failure {
-                bus.send(CoreEvent::BackgroundFailure { context: source.to_string(), message: format!("playlists: {message}") });
+                bus.send(CoreEvent::BackgroundFailure { context: source.to_string(), message: format!("{what}: {message}") });
             }
             bus.send(CoreEvent::PlaylistsChanged);
         });
@@ -571,7 +597,7 @@ impl ViewCache {
 
     /// Is a fetch of `source`'s top-level playlist-folder list in flight?
     pub fn remote_playlists_loading(&self, source: &SourceId) -> bool {
-        self.remote_playlists.lock().unwrap().get(source).is_some_and(|e| e.browsing)
+        [&self.remote_playlists, &self.remote_albums].iter().any(|m| m.lock().unwrap().get(source).is_some_and(|e| e.browsing))
     }
 
     /// Is more of `(source, node)` still loading? `true` before anything has landed.

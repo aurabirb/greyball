@@ -1512,6 +1512,11 @@ impl Session {
         self.view.remote_playlists(source)
     }
 
+    /// A source's saved albums that have landed so far — a pure read, never fetches.
+    pub fn remote_albums(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
+        self.view.remote_albums(source)
+    }
+
     /// Kicks a single-flight background folder fetch for every registered source whose plugin is healthy.
     pub fn ensure_remote_playlists(&self) {
         let ctx = self.remote_ctx();

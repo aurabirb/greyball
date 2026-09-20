@@ -154,6 +154,27 @@ struct CollectionPage {
     items: Vec<Option<ApiCollection>>,
 }
 
+impl ApiCollection {
+    /// `(id, display name)`; an album reads "Artist – Title".
+    fn into_entry(self) -> Option<(String, String)> {
+        let id = self.id?;
+        let artists: Vec<_> = self.artists.iter().map(|a| a.name.as_str()).collect();
+        let name = if artists.is_empty() { self.name } else { format!("{} \u{2013} {}", artists.join(", "), self.name) };
+        Some((id, name))
+    }
+}
+
+#[derive(Deserialize)]
+struct SavedAlbumItem {
+    album: Option<ApiCollection>,
+}
+
+#[derive(Deserialize)]
+struct SavedAlbums {
+    items: Vec<SavedAlbumItem>,
+    total: usize,
+}
+
 #[derive(Deserialize)]
 struct CollectionSearchResponse {
     albums: Option<CollectionPage>,
@@ -420,13 +441,20 @@ impl WebApi {
             .items
             .into_iter()
             .flatten()
-            .filter_map(|c| {
-                let id = c.id?;
-                let artists: Vec<_> = c.artists.iter().map(|a| a.name.as_str()).collect();
-                let name = if artists.is_empty() { c.name } else { format!("{} \u{2013} {}", artists.join(", "), c.name) };
-                Some((id, name))
-            })
+            .filter_map(ApiCollection::into_entry)
             .collect())
+    }
+
+    /// One page of the user's saved albums as `(id, "Artist – Title")`, walked by offset like `playlists_page`.
+    pub fn saved_albums_page(&self, offset: usize, limit: usize) -> Result<RemotePage<(String, String)>, String> {
+        let url = format!("{API}/me/albums?limit={limit}&offset={offset}");
+        let body: SavedAlbums = self.get(&url)?.json().map_err(|e| e.to_string())?;
+        let consumed = body.items.len();
+        Ok(RemotePage {
+            total: body.total,
+            consumed,
+            hits: body.items.into_iter().filter_map(|i| i.album?.into_entry()).collect(),
+        })
     }
 
     /// Look up a single track by its base-62 id.

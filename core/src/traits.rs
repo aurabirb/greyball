@@ -75,6 +75,10 @@ pub trait Source: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+    /// Blocking, paced by `want` like `browse`: the user's saved albums as `BrowsePage.folders`; default has none.
+    fn saved_albums(&self, _want: usize) -> Result<BrowsePage> {
+        Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], partial: false, errored: false })
+    }
     fn resolve(&self, uri: &str) -> Result<Track>;
     /// `want`: how many rows the caller needs ready now (paginated sources
     /// use it to pace background fetching — see `core::PagedList`); ignore

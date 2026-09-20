@@ -62,6 +62,8 @@ pub struct SpotifySource {
     /// `RemoteCtx`-driven `browse` call the UI's Playlists screen makes on
     /// every redraw, so it must never block.
     folders: PagedList<(String, BrowseNode)>,
+    /// The user's `/me/albums`, paged like `folders`.
+    saved_albums: PagedList<(String, BrowseNode)>,
 }
 
 impl SpotifySource {
@@ -73,6 +75,7 @@ impl SpotifySource {
             playlists: Mutex::new(HashMap::new()),
             albums: Mutex::new(HashMap::new()),
             folders: PagedList::new("spotify: playlists"),
+            saved_albums: PagedList::new("spotify: saved albums"),
         }
     }
 
@@ -177,7 +180,10 @@ impl Source for SpotifySource {
                     }
                 }
             },
-            BrowseNode::Root => self.folders.retry(),
+            BrowseNode::Root => {
+                self.folders.retry();
+                self.saved_albums.retry();
+            }
         }
     }
 
@@ -229,6 +235,18 @@ impl Source for SpotifySource {
 
     fn adds_first(&self, node: &BrowseNode) -> bool {
         self.is_synthetic(node)
+    }
+
+    fn saved_albums(&self, want: usize) -> Result<BrowsePage> {
+        let api = self.api.clone();
+        let (folders, partial) = self.saved_albums.snapshot(&self.bus, want, move |offset| {
+            api.saved_albums_page(offset, PLAYLISTS_PAGE_SIZE).map(|page| RemotePage {
+                total: page.total,
+                consumed: page.consumed,
+                hits: page.hits.into_iter().map(|(id, name)| (name, BrowseNode::Path(format!("{ALBUM_PREFIX}{id}")))).collect(),
+            })
+        });
+        Ok(BrowsePage { title: "albums".to_string(), tracks: vec![], folders, partial, errored: self.saved_albums.errored() })
     }
 
     fn browse(&self, node: &BrowseNode, want: usize) -> Result<BrowsePage> {
