@@ -481,7 +481,9 @@ impl View for MedleyView {
                     ScanLight::Working => ColorStyle::new(fg, Color::Dark(BaseColor::Green)),
                     ScanLight::Errored => ColorStyle::new(fg, Color::Dark(BaseColor::Red)),
                 };
-                printer.windowed(rect).with_color(style, |p| p.print((0, 0), &tag.letter.to_string()));
+                let p = printer.windowed(rect);
+                p.with_color(idle, |p| p.print((0, 0), "[ ]"));
+                p.with_color(style, |p| p.print((1, 0), &tag.letter.to_string()));
             }
             if let Some(rect) = widget.warnings {
                 let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));

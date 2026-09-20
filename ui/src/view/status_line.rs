@@ -161,8 +161,8 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     format!("{}{}", "=".repeat(filled), "-".repeat(width - filled))
 }
 
-/// The analyzer tag is one letter.
-pub(super) const SCAN_TAG_W: usize = 1;
+/// The analyzer tag is a letter in brackets: `[b]`.
+pub(super) const SCAN_TAG_W: usize = 3;
 
 /// What the now-playing track's analysis is doing, shown as the tag's background.
 #[derive(Clone, Copy, PartialEq, Eq)]
