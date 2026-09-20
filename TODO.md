@@ -151,6 +151,29 @@
   every placement (tab, docked, floating), filtering that window's own list through the same
   `TrackList` path. List the panels where it does nothing or acts on the wrong window, then fix them.
 
+- [ ] Fewer steps in the Soulseek (slskd) setup, and a proper setup dialog for every plugin.
+  Today a plugin's setup is a run of one-line prompts inside the warnings panel
+  (`Editing::PluginSetup`, `ui/src/view/input.rs`; `Modal::Warnings`, `ui/src/view/modal.rs`,
+  `ui/src/view/warnings.rs`; `Plugin::setup_prompt`/`setup`, `core/src/plugin.rs`; Soulseek's `Step`
+  plan, `sources/soulseek/src/plugin.rs`).
+  - Run every plugin's setup in a normal, closable modal (not the warnings panel), with no blue
+    background on the prompts.
+  - The modal is a chat log: every question and every answer the user gave is logged in order
+    (mask password answers), scrollable. New warnings that arrive while it is open are tapped into
+    and pasted into the log as they come.
+  - The user can abandon at any time (Esc or a Close button), cancelling any setup step still running.
+  - When setup finishes, do not close the modal on its own: show a "waiting for the source to be
+    ready" line and close only when the source update reports ready (the plugin's `wiring()`
+    applied and its health OK); on a failure keep it open with the reason.
+  - Soulseek: the first question is "path to a local slskd directory, or press Enter to set slskd
+    up". A path takes the existing-slskd flow, using what can be read from that directory
+    (`slskd.yml`, `downloads/`) and asking only for what is missing. Enter (nothing) attempts the
+    Docker way as today, with the normal prompts (folder, Soulseek login) and their defaults.
+  - Keep the flow sensible and configurable but not overwhelming for non-technical users: plain
+    language, one question at a time, the default shown in each prompt, questions that can be
+    detected skipped, a short summary of what will happen before the final step, re-runnable from
+    Settings, advanced options (custom host, manual login) only when asked for.
+
 ### Album support
 Design: `docs/collections.md`.
 - [ ] Albums are collections (`(String, BrowseNode)`), `ItemKind::Album` covers album/EP/single. Add
