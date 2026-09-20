@@ -72,6 +72,14 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Bind `v` to toggle the visualizer pane (`BuiltinAction::ToggleVis`, the `:vis` command) by
+  default, as a normal rebindable key with its Help row.
+- [ ] Rearrange the Help window (`Section`s in `ui/src/items.rs`): the section that holds the help
+  key (`?`) comes first, with `?` at the top of it; next the player keys — play/pause, `n`/`p`, `s`,
+  `e`, `w` and the new `v` (the owner's shorthand: map these to the actual keys/rows); then the playlist
+  hotkeys section, opening with a 2-line description of how playlist hotkeys work and then the `` ` ``
+  key; the Commands section comes last. Where the other sections (Movement, Windows, Tracks) fall in
+  between is not specified: keep their current relative order after the player keys, or report back.
 - [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
   ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
   clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
