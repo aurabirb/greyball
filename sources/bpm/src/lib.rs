@@ -18,7 +18,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use core::{MediaCache, Outcome, ReadSeek, Rendition, ScanPlugin, Track, TrackMeta};
+use core::audio_decode::DecodeError;
+use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta};
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
 /// librespot's fixed output sample rate — the onset/tempo DSP below assumes
@@ -79,24 +80,23 @@ impl ScanPlugin for BpmPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        // Not Spotify-specific: the DSP below only cares about decoded PCM,
-        // and `open_scan_audio` fetches it generically for any source
-        // — so this plugin scans every track, not just ones with a Spotify rendition.
+        // Source-agnostic: the DSP only needs decoded PCM, so every track is scanned.
         !track.attrs.contains_key("bpm")
     }
 
-    fn analyze(
-        &self,
-        track: &Track,
-        audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
-        media_cache: &MediaCache,
-    ) -> Outcome {
+    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>) -> Outcome {
+        let stream = match audio() {
+            Ok(s) => s,
+            Err(outcome) => return outcome,
+        };
         let max_frames = (ANALYSIS_SECONDS * SAMPLE_RATE) as usize;
-        let Some((stereo, _)) = core::audio_decode::open_analysis_audio(track, audio, media_cache)
-            .and_then(|a| core::audio_decode::decode_stereo_prefix(a, Some(max_frames)))
-        else {
-            log::debug!("bpm: \"{}\" — no decodable audio to analyze, skipping", track.title);
-            return Outcome::Skip;
+        let stereo = match core::audio_decode::decode_stereo_prefix(&stream, Some(max_frames)) {
+            Ok((stereo, _)) => stereo,
+            Err(DecodeError::Interrupted) => return Outcome::Retry,
+            Err(DecodeError::NoAudio) => {
+                log::debug!("bpm: \"{}\" — no decodable audio to analyze, skipping", track.title);
+                return Outcome::Skip;
+            }
         };
         match estimate_tempo(&onset_envelope(&downmix(&stereo))) {
             Some(bpm) => {

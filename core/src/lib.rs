@@ -39,7 +39,6 @@ pub use config::{
     expand_home, tilde, Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
     SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES, VisConfig,
 };
-pub use audio_decode::decode_and_cache;
 pub use event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
 pub use http::{HttpOptions, RangeReader, fetch_url_bytes, fetch_url_to};
 pub use logbuf::LogBuf;
@@ -52,13 +51,13 @@ pub use plugin::{Plugin, PluginCommand, PluginHealth, SharedMedia, Wiring};
 pub use queue::{Queue, RepeatSetting};
 pub use rate_limit::RateLimiter;
 pub use resolver::{Resolution, Resolver, Target, is_local_source, local_path_from_uri};
-pub use scan::{Outcome, ScanDriver, ScanFetchMode, ScanMode, ScanPlugin, ScanStatus, TrackMeta, open_scan_audio};
+pub use scan::{Outcome, ScanDriver, ScanMode, ScanPlugin, ScanStatus, TrackMeta};
 pub use search::Search;
 pub use store::{MemStore, RedbStore};
 pub use stream::{Claim, Intent, Key as StreamKey, StreamEngine, StreamHandle, StreamInfo, StreamReader, StreamState, StreamWriter, Stopped, fill_from_seekable, retry as stream_retry};
 pub use traits::{
     BrowseNode, BrowsePage, Error, Media, MediaProvider, Player, PlayerState, PlayerStatus,
-    ReadSeek, Result, Source, Store,
+    Result, Source, Store,
 };
 pub use types::{
     ItemKind, LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery,

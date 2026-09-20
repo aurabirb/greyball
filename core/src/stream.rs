@@ -31,9 +31,9 @@ const WAIT_SLICE: Duration = Duration::from_millis(200);
 pub enum Intent {
     /// Playback: claims the download and steers it with `want`s.
     Play,
-    /// Background cache fill: claims the download.
+    /// Background cache fill: claims the download; a cache hit is not announced.
     Fetch,
-    /// An analyzer reading a stream that is already running: no claim, no `want`s.
+    /// An analyzer joining a stream that is already running (or cached): no claim, no `want`s, no `Done` announcement.
     Peek,
 }
 
@@ -164,7 +164,7 @@ impl Shared {
     }
 
     /// A complete stream over an existing file.
-    fn complete(key: Key, path: PathBuf, bus: Bus, cache: Arc<MediaCache>) -> io::Result<Arc<Self>> {
+    fn complete(key: Key, path: PathBuf, bus: Bus, cache: Arc<MediaCache>, announce: bool) -> io::Result<Arc<Self>> {
         let file = File::open(&path)?;
         let len = file.metadata()?.len();
         let st = State {
@@ -182,7 +182,9 @@ impl Shared {
             play_pos: 0,
         };
         let shared = Arc::new(Self { key, state: Mutex::new(st), cond: Condvar::new(), bus, cache });
-        shared.bus.send(CoreEvent::Stream { key: shared.key.clone(), state: StreamState::Done });
+        if announce {
+            shared.bus.send(CoreEvent::Stream { key: shared.key.clone(), state: StreamState::Done });
+        }
         Ok(shared)
     }
 }
@@ -588,7 +590,7 @@ impl StreamEngine {
         let local = crate::resolver::is_local_source(&r.source) && !media.contains_key(&r.source);
         let cached = self.cache.cached_path(&r.source, &r.uri).or_else(|| local.then(|| PathBuf::from(crate::resolver::local_path_from_uri(&r.uri))));
         if let Some(path) = cached {
-            let shared = Shared::complete(key, path, self.bus.clone(), self.cache.clone()).map_err(|e| Error::Other(format!("open {}: {e}", r.uri)))?;
+            let shared = Shared::complete(key, path, self.bus.clone(), self.cache.clone(), intent == Intent::Play).map_err(|e| Error::Other(format!("open {}: {e}", r.uri)))?;
             return Ok((StreamHandle { shared, intent }, Claim(None)));
         }
         if intent == Intent::Peek {

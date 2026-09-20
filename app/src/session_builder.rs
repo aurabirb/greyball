@@ -29,9 +29,9 @@ pub fn build_session(
     plugins: Vec<Arc<dyn Plugin>>,
     scan_plugins: Vec<Arc<dyn ScanPlugin>>,
     media_cache: Arc<MediaCache>,
+    engine: medley_core::StreamEngine,
     history_path: PathBuf,
 ) -> Session {
-    let cache_full = cfg.scan.cache_full;
     let mut session = Session::new(
         cfg,
         bus,
@@ -46,8 +46,8 @@ pub fn build_session(
     // Always spawned, even with an empty initial plugin list — plugins that
     // only become available after async setup register later via
     // `ScanDriver::register_plugin`.
-    let driver = Arc::new(ScanDriver::new(scan_plugins, cache_full, media));
-    driver.spawn(session.catalog.clone(), store, players, media_cache);
+    let driver = Arc::new(ScanDriver::new(scan_plugins));
+    driver.spawn(session.catalog.clone(), store, engine, media_cache);
     session.scan = Some(driver);
     session
 }

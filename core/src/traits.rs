@@ -105,8 +105,7 @@ pub trait Source: Send + Sync {
 
     /// Add `track_uri` (this source's own rendition URI for the track) to
     /// playlist `node`. Blocking, like `browse` — callers must not run this
-    /// on the UI thread. Default: unsupported, mirroring `Player::
-    /// open_for_scan`'s default.
+    /// on the UI thread. Default: unsupported.
     fn add_to_playlist(&self, _node: &BrowseNode, _track_uri: &str) -> Result<()> {
         Err(Error::Unsupported("add_to_playlist"))
     }
@@ -144,9 +143,6 @@ pub trait Source: Send + Sync {
         false
     }
 }
-
-pub trait ReadSeek: Read + Seek {}
-impl<T: Read + Seek> ReadSeek for T {}
 
 pub enum Media {
     /// An existing local file: a complete stream, nothing to fetch.
@@ -223,31 +219,6 @@ pub trait Player: Send + Sync {
     /// (`NullPlayer`).
     fn levels(&self) -> [f32; 5] {
         [0.0; 5]
-    }
-
-    /// True while a live `open_for_scan` fetch would compete with this player's own playback.
-    fn scan_fetch_paused(&self) -> bool {
-        false
-    }
-
-    /// Best-effort seekable audio for offline analysis, independent of the
-    /// live playback pipeline (starting a scan must never interrupt or race
-    /// what's currently playing). Default: unsupported.
-    ///
-    /// `mode`: see `crate::scan::ScanFetchMode`. `Full` drains the rest of
-    /// the track after the plugin reads it so the backend commits the
-    /// *entire* file to its local cache rather than just the bytes actually
-    /// consumed; `Partial` doesn't force that drain. `open_scan_audio` never
-    /// calls this with `CacheOnly` — that mode only ever reads `MediaCache`
-    /// (see its doc) — but a source may still call this itself with
-    /// `CacheOnly` outside that path, e.g. to populate `MediaCache` from
-    /// its own already-local bytes without risking a fetch.
-    fn open_for_scan(
-        &self,
-        _r: &Rendition,
-        _mode: crate::scan::ScanFetchMode,
-    ) -> Result<Box<dyn ReadSeek + Send>> {
-        Err(Error::Unsupported("open_for_scan"))
     }
 }
 

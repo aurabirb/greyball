@@ -564,7 +564,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let engine = medley_core::StreamEngine::new(media.clone(), media_cache.clone(), bus.clone());
-    let rodio = Arc::new(RodioPlayer::new(engine, bus.clone()));
+    let rodio = Arc::new(RodioPlayer::new(engine.clone(), bus.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();
     if http_enabled {
         players.insert(SourceId::from("http"), rodio.clone());
@@ -619,6 +619,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         plugins,
         scan_plugins,
         media_cache,
+        engine,
         data_dir().join("history.m3u8"),
     );
     if let Some(scan) = &session.scan {

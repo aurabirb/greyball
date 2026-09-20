@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use core::{Outcome, ReadSeek, Rendition, ScanPlugin, Track, TrackMeta, waveform};
+use core::audio_decode::DecodeError;
+use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta, waveform};
 
 /// Envelope length stored per track.
 const BUCKETS: usize = 400;
@@ -33,18 +34,14 @@ impl ScanPlugin for WaveformPlugin {
         !track.attrs.contains_key(waveform::ATTR)
     }
 
-    fn analyze(
-        &self,
-        track: &Track,
-        audio: &dyn Fn() -> Option<(Rendition, Box<dyn ReadSeek + Send>)>,
-        media_cache: &core::MediaCache,
-    ) -> Outcome {
-        let Some(audio) = core::audio_decode::open_analysis_audio(track, audio, media_cache) else {
-            return Outcome::Skip;
+    fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>) -> Outcome {
+        let stream = match audio() {
+            Ok(s) => s,
+            Err(outcome) => return outcome,
         };
         let mut levels: Vec<f32> = Vec::new();
         let (mut sum, mut n) = (0.0_f32, 0);
-        core::audio_decode::decode_blocks(audio, |block| {
+        let decoded = core::audio_decode::decode_blocks(&stream, |block| {
             for [l, r] in block {
                 sum += (l * l + r * r) * 0.5;
                 n += 1;
@@ -55,6 +52,9 @@ impl ScanPlugin for WaveformPlugin {
             }
             true
         });
+        if decoded == Err(DecodeError::Interrupted) {
+            return Outcome::Retry;
+        }
         if n > 0 {
             levels.push((sum / n as f32).sqrt());
         }
@@ -67,10 +67,6 @@ impl ScanPlugin for WaveformPlugin {
 
     fn min_interval(&self) -> Duration {
         self.min_interval
-    }
-
-    fn wants_full_audio(&self) -> bool {
-        true
     }
 }
 
