@@ -54,7 +54,7 @@ pub(super) struct StatusLine {
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
     pub(super) duration_ms: u32,
-    pub(super) bpm_tag: String,
+    pub(super) bpm_tag: ScanTag,
     pub(super) shuffle: bool,
 }
 
@@ -78,7 +78,7 @@ impl StatusLine {
     }
 
     /// Combines a cached `StatusCore` with this frame's freshly-read per-tick data.
-    pub(super) fn assemble(core: &StatusCore, position_ms: u32, duration_ms: u32, bpm_tag: String) -> Self {
+    pub(super) fn assemble(core: &StatusCore, position_ms: u32, duration_ms: u32, bpm_tag: ScanTag) -> Self {
         Self {
             now_playing: core.now_playing.clone(),
             now_playing_id: core.now_playing_id,
@@ -157,28 +157,40 @@ fn progress_bar(pos: u32, dur: u32, width: usize) -> String {
     format!("{}{}", "=".repeat(filled), "-".repeat(width - filled))
 }
 
-/// Width of every `bpm_status_tag`.
-pub(super) const SCAN_TAG_W: usize = 4;
+/// The analyzer tag is one letter.
+pub(super) const SCAN_TAG_W: usize = 1;
 
-/// Bracketed BPM-scan status tag next to the scrubber — read fresh every frame, never cached.
-pub(super) fn bpm_status_tag(s: &Session, now_playing: Option<TrackId>) -> String {
-    let Some(scan) = s.scan.as_ref() else {
-        return "[bd]".to_string();
-    };
-    let mode_letter = match scan.mode() {
-        core::ScanMode::Disabled => return "[bd]".to_string(),
+/// What the now-playing track's analysis is doing, shown as the tag's background.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScanLight {
+    Idle,
+    Working,
+    Errored,
+}
+
+/// `B` while scanning may fetch, `b` when cache-only or off.
+pub(super) struct ScanTag {
+    pub(super) letter: char,
+    pub(super) light: ScanLight,
+}
+
+/// The analyzer tag — read fresh every frame, never cached.
+pub(super) fn bpm_status_tag(s: &Session, now_playing: Option<TrackId>) -> ScanTag {
+    let idle = ScanTag { letter: 'b', light: ScanLight::Idle };
+    let Some(scan) = s.scan.as_ref() else { return idle };
+    let letter = match scan.mode() {
+        core::ScanMode::Disabled => return idle,
         core::ScanMode::CacheOnly => 'b',
         core::ScanMode::Active => 'B',
     };
-    // Purely a plugin-status indicator, never the resolved value itself.
-    let status_letter = match now_playing.and_then(|id| scan.status("bpm", id)) {
-        Some(core::ScanStatus::Downloading) => 'd',
-        Some(core::ScanStatus::Error) => 'e',
-        Some(core::ScanStatus::Skipped) => 's',
-        None => 'w',
+    let light = match now_playing.and_then(|id| scan.status("bpm", id)) {
+        Some(core::ScanStatus::Downloading) => ScanLight::Working,
+        Some(core::ScanStatus::Error) => ScanLight::Errored,
+        Some(core::ScanStatus::Skipped) | None => ScanLight::Idle,
     };
-    format!("[{mode_letter}{status_letter}]")
+    ScanTag { letter, light }
 }
+
 
 /// Full, un-scrolled track text for the terminal window title.
 pub fn window_title_track_text(track: Option<&core::Track>) -> String {

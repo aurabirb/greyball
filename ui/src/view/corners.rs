@@ -39,7 +39,7 @@ impl Slots {
 
 /// The status group at the right end of the right slot's row: the analyzer tag, then the warnings button when there are warnings.
 pub(super) struct Widget {
-    pub(super) scan: Rect,
+    pub(super) scan: Option<Rect>,
     pub(super) warnings: Option<Rect>,
     pub(super) scrubber: bool,
     pub(super) host: WindowId,
@@ -48,8 +48,9 @@ pub(super) struct Widget {
 impl Widget {
     /// The group's cells, from the analyzer tag to the row's end.
     pub(super) fn rect(&self) -> Rect {
-        let end = self.warnings.unwrap_or(self.scan);
-        Rect::from_size(self.scan.top_left(), (end.left() + end.width() - self.scan.left(), 1))
+        let end = self.warnings.or(self.scan).expect("a widget has a tag or a button");
+        let start = self.scan.unwrap_or(end);
+        Rect::from_size(start.top_left(), (end.left() + end.width() - start.left(), 1))
     }
 
     /// The scrubber line's width once the group, if it sits there, has taken its cells.
@@ -100,8 +101,11 @@ impl MedleyView {
         let slot = slots.at(Corner::Right)?;
         let warnings = (count > 0).then(|| warnings_rect(count, slot.row));
         let end = warnings.map_or(slot.row.left() + slot.row.width(), |rect| rect.left());
-        let width = SCAN_TAG_W.min(end - slot.row.left());
-        let scan = Rect::from_size((end - width, slot.row.top()), (width, 1));
+        let scan = (end.saturating_sub(slot.row.left()) >= SCAN_TAG_W)
+            .then(|| Rect::from_size((end - SCAN_TAG_W, slot.row.top()), (SCAN_TAG_W, 1)));
+        if scan.is_none() && warnings.is_none() {
+            return None;
+        }
         Some(Widget { scan, warnings, scrubber: slot.scrubber, host: slot.host })
     }
 

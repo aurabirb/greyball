@@ -1,3 +1,4 @@
+use unicode_width::UnicodeWidthStr;
 use std::thread;
 
 use cursive::{Printer, Rect};
@@ -22,7 +23,7 @@ pub(super) fn warnings_label(count: usize) -> String {
 
 /// The button's cells at the right end of `row`, shared by draw and the click hit-test.
 pub(super) fn warnings_rect(count: usize, row: Rect) -> Rect {
-    let width = warnings_label(count).chars().count().min(row.width());
+    let width = warnings_label(count).width().min(row.width());
     Rect::from_size((row.left() + row.width() - width, row.top()), (width, 1))
 }
 

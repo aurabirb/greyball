@@ -21,7 +21,7 @@ use input::Editing;
 use memo::Memo;
 use modal::Modal;
 use panes::{draw_float_frame, draw_separator, float_body, float_rect, split};
-use status_line::StatusLine;
+use status_line::{ScanLight, StatusLine};
 use tab_bar::{TabBar, TabBarHit, WaveformMemo};
 use text::Marquee;
 use track_list::TrackList;
@@ -472,8 +472,17 @@ impl View for MedleyView {
             printer.windowed(rect).with_color(ColorStyle::primary(), |p| p.print((0, 0), &pad(&input, p.size.x)));
         }
         if let Some(widget) = widget {
-            let scan_style = if widget.scrubber { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
-            printer.windowed(widget.scan).with_color(scan_style, |p| p.print((0, 0), &frame.status.bpm_tag));
+            if let Some(rect) = widget.scan {
+                let idle = if widget.scrubber { ColorStyle::highlight_inactive() } else { ColorStyle::primary() };
+                let fg = Color::Dark(BaseColor::White);
+                let tag = &frame.status.bpm_tag;
+                let style = match tag.light {
+                    ScanLight::Idle => idle,
+                    ScanLight::Working => ColorStyle::new(fg, Color::Dark(BaseColor::Green)),
+                    ScanLight::Errored => ColorStyle::new(fg, Color::Dark(BaseColor::Red)),
+                };
+                printer.windowed(rect).with_color(style, |p| p.print((0, 0), &tag.letter.to_string()));
+            }
             if let Some(rect) = widget.warnings {
                 let (fg, bg) = (Color::Dark(BaseColor::White), Color::Dark(BaseColor::Red));
                 let style = if self.focus == Focus::Warnings { ColorStyle::new(bg, fg) } else { ColorStyle::new(fg, bg) };
@@ -546,7 +555,7 @@ impl MedleyView {
                 self.open_warnings();
                 return EventResult::consumed();
             }
-            if widget.scan.contains(local) {
+            if widget.scan.is_some_and(|rect| rect.contains(local)) {
                 return self.run(core::Command::ToggleScan);
             }
         }
