@@ -253,11 +253,9 @@ impl SoundcloudSource {
         Ok(RemotePage { hits, total, consumed })
     }
 
-    /// Best-quality HLS path: resolve the AAC-160k transcoding's signed
-    /// playlist, fetch the init segment + every media segment in order, and
-    /// stitch them into one fMP4 file `symphonia` decodes like any other.
-    /// Any failure here is a soft failure — `open`'s caller falls back to
-    /// the progressive stream rather than propagating this error.
+    /// Best-quality HLS path: resolves the AAC-160k transcoding's signed playlist here, then returns a
+    /// stream that appends the init segment and every media segment in order (one fMP4 `symphonia`
+    /// decodes like any other). A setup failure is soft — `open` falls back to the progressive stream.
     fn open_hls(&self, track: &ApiTrack) -> Result<Media> {
         let hls = track
             .media
@@ -298,32 +296,31 @@ impl SoundcloudSource {
             return Err(src_err("hls playlist: no media segments"));
         }
 
-        let mut tmp = tempfile::NamedTempFile::new().map_err(|e| src_err(format!("hls tempfile: {e}")))?;
-        if let Some(init_url) = &playlist.init {
-            self.fetch_into(init_url, &mut tmp)?;
-        }
-        for seg_url in &playlist.segments {
-            self.fetch_into(seg_url, &mut tmp)?;
-        }
-
-        let (_file, path) = tmp.keep().map_err(|e| src_err(format!("hls tempfile persist: {e}")))?;
         log::info!("soundcloud: playing via HLS (preset {}) instead of 128kbps progressive", hls.preset);
-        Ok(Media::Path(path))
+        let client = self.client.clone();
+        let urls: Vec<url::Url> = playlist.init.into_iter().chain(playlist.segments).collect();
+        Ok(Media::Stream(Box::new(move |mut w| {
+            let mut offset = 0u64;
+            for (i, url) in urls.iter().enumerate() {
+                let bytes = match core::stream_retry(&w, "hls fetch", || fetch_segment(&client, url)) {
+                    Ok(b) => b,
+                    Err(e) => return w.fail(format!("hls fetch {url}: {e}")),
+                };
+                if w.write_at(offset, &bytes).is_err() {
+                    return;
+                }
+                offset += bytes.len() as u64;
+                w.set_progress((i + 1) as f32 / urls.len() as f32);
+            }
+            w.finish();
+        })))
     }
+}
 
-    /// GETs `url` and appends the response body to `tmp` — no `client_id`
-    /// needed, HLS init/segment URLs are already presigned.
-    fn fetch_into(&self, url: &url::Url, tmp: &mut tempfile::NamedTempFile) -> Result<()> {
-        let bytes = self
-            .client
-            .get(url.clone())
-            .send()
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| src_err(format!("hls fetch {url}: {e}")))?
-            .bytes()
-            .map_err(|e| src_err(format!("hls fetch {url}: {e}")))?;
-        std::io::Write::write_all(tmp, &bytes).map_err(|e| src_err(format!("hls tempfile write: {e}")))
-    }
+/// GETs an init or media segment — no `client_id` needed, the URLs are already presigned.
+fn fetch_segment(client: &reqwest::blocking::Client, url: &url::Url) -> std::io::Result<Vec<u8>> {
+    let resp = client.get(url.clone()).send().and_then(|r| r.error_for_status()).map_err(std::io::Error::other)?;
+    Ok(resp.bytes().map_err(std::io::Error::other)?.to_vec())
 }
 
 /// The bits `open_hls` needs out of a media-playlist `.m3u8`: an optional

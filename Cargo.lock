@@ -2442,7 +2442,6 @@ dependencies = [
  "crossbeam-channel",
  "log",
  "rodio",
- "tempfile",
  "wide",
 ]
 
@@ -3314,7 +3313,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "url",
 ]
 
