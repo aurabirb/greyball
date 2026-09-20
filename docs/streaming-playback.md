@@ -352,7 +352,8 @@ design.
    stream module, engine, `Media::Stream`, `MediaCache::persist_file` + sweep, events/status, the
    player integration and its status-line display, `core::http::RangeReader` (default options for
    `Media::Url`, importable for sources that need more), `Media::from_reader`, the `Url`/`Path`
-   handling (the enum loses `Reader`; its one user, Spotify's scan path, is replaced in stage 2), the
+   handling (the enum loses `Reader`; no provider returns it today, only the player's `open_media`
+   and `materialize` match on it), the
    SoundCloud HLS producer (sequential, retries, `Rendition.duration_ms`), and deletion of every
    old path listed above (`Media::Url` stays; the HTTP source and SoundCloud progressive keep
    returning it). Sources that stop compiling or working (Spotify, scan, anything using
