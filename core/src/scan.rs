@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
 use crate::media_cache::MediaCache;
-use crate::traits::{MediaProvider, Player, ReadSeek, Store};
+use crate::traits::{Error, MediaProvider, Player, ReadSeek, Store};
 use crate::types::{Rendition, SourceId, Track, TrackId};
 
 /// One background-scan extension point (bpm, later genre-ml, ...). A new
@@ -181,14 +181,10 @@ pub fn open_scan_audio(
         return None;
     }
     let source = &rendition.source;
-    if let Some(mp) = media.get(source) {
-        match mp.materialize(rendition) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                log::warn!("scan: {source} media provider couldn't materialize {}: {e}", rendition.uri);
-                None
-            }
-        }
+    if media.contains_key(source) {
+        let e = Error::Unsupported("scanning an uncached track awaits streaming playback stage 3");
+        log::warn!("scan: {source} couldn't open {} for scan: {e}", rendition.uri);
+        None
     } else if let Some(p) = players.get(source) {
         match p.open_for_scan(rendition, mode) {
             Ok(r) => Some(r),
@@ -339,7 +335,7 @@ impl ScanDriver {
     /// `PlayerEvent::Playing`.
     pub fn prioritize(&self, track: TrackId) {
         let mut q = self.inner.priority.lock().unwrap();
-        // A fresh call (e.g. `PlayerEvent::Materialized` firing after
+        // A fresh call (e.g. `Stream{Done}` firing after
         // `Playing` already queued it) resets the retry window rather than
         // being a no-op, since it's new evidence there's something worth
         // trying again for.

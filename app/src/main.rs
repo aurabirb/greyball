@@ -563,7 +563,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             media_cache.log_file_stats();
         });
     }
-    let rodio = Arc::new(RodioPlayer::new(media.clone(), bus.clone(), media_cache.clone()));
+    let engine = medley_core::StreamEngine::new(media.clone(), media_cache.clone(), bus.clone());
+    let rodio = Arc::new(RodioPlayer::new(engine, bus.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();
     if http_enabled {
         players.insert(SourceId::from("http"), rodio.clone());

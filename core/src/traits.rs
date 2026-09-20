@@ -149,40 +149,24 @@ pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 pub enum Media {
+    /// An existing local file: a complete stream, nothing to fetch.
     Path(std::path::PathBuf),
+    /// A CDN link the engine plays and caches through `RangeReader`.
     Url(String),
-    Reader(Box<dyn ReadSeek + Send>),
+    /// Runs on a core thread, appending pieces through the writer and ending with `finish` or `fail`.
+    Stream(Box<dyn FnOnce(crate::stream::StreamWriter) + Send>),
+}
+
+impl Media {
+    /// A `Stream` over any `Read + Seek` (random access, jumps and backfill come from `fill_from_seekable`).
+    pub fn from_reader(reader: impl Read + Seek + Send + 'static) -> Self {
+        Media::Stream(Box::new(move |w| crate::stream::fill_from_seekable(reader, w)))
+    }
 }
 
 pub trait MediaProvider: Send + Sync {
     fn id(&self) -> SourceId;
     fn open(&self, r: &Rendition) -> Result<Media>;
-
-    /// Ensure `r`'s audio is fetched and return it as a readable stream,
-    /// without indicating playback — the scan "prefetch" primitive
-    /// (`ScanFetchMode::Full`/`Partial`) a background walk uses to get raw
-    /// bytes to decode. Never call this in a mode meant to avoid a live
-    /// fetch (`ScanFetchMode::CacheOnly`) — it always resolves via `open`,
-    /// so a `Media::Url` result always originates a real GET.
-    ///
-    /// Default: resolves via `open` and, for `Media::Url`, does a plain
-    /// one-shot GET (`crate::http_fetch`) — covers every provider that has
-    /// no cheaper way to materialize its own bytes. A provider that already
-    /// owns a client for its own API calls (e.g. an authenticated CDN) may
-    /// override this to reuse it instead.
-    fn materialize(&self, r: &Rendition) -> Result<Box<dyn ReadSeek + Send>> {
-        match self.open(r)? {
-            Media::Path(p) => {
-                std::fs::File::open(&p).map(|f| Box::new(f) as Box<dyn ReadSeek + Send>).map_err(|e| {
-                    Error::Other(format!("materialize: local path {} unreadable: {e}", p.display()))
-                })
-            }
-            Media::Url(url) => crate::http_fetch::fetch_url_bytes(&url)
-                .map(|bytes| Box::new(std::io::Cursor::new(bytes)) as Box<dyn ReadSeek + Send>)
-                .map_err(|e| Error::Other(format!("materialize: fetch of {url} failed: {e}"))),
-            Media::Reader(r) => Ok(r),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,6 +183,10 @@ pub struct PlayerStatus {
     pub duration_ms: u32,
     /// 0.0..=1.0
     pub volume: f32,
+    /// Playback is waiting for the download to catch up.
+    pub buffering: bool,
+    /// How much of the track is on disk, while it is still downloading.
+    pub download_pct: Option<u8>,
 }
 
 impl Default for PlayerStatus {
@@ -208,6 +196,8 @@ impl Default for PlayerStatus {
             position_ms: 0,
             duration_ms: 0,
             volume: 1.0,
+            buffering: false,
+            download_pct: None,
         }
     }
 }

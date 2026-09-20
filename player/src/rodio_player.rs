@@ -3,7 +3,7 @@
 //! `rodio`'s `OutputStream` wraps a `cpal::Stream`, which is `!Send`, so it
 //! cannot live behind the `Arc<Mutex<..>>` a `Send + Sync` `Player` needs.
 //! Instead a single long-lived worker thread owns *all* audio state
-//! (`OutputStream`, `Sink`, the current tempfile) and the public methods just
+//! (`OutputStream`, `Sink`, the current stream) and the public methods just
 //! post `Cmd`s to it over a channel. A separate `Arc<Mutex<Snapshot>>` carries
 //! the audio-type-free status back for `status()`.
 //!
@@ -18,13 +18,10 @@
 //! background attempt so a `Loaded` that finally reports in after something
 //! superseded it is just dropped, not applied.
 //!
-//! A `Media::Url` rendition (HTTP/SoundCloud) streams: `open_streaming_url`
-//! starts the GET, and as soon as the response headers report a
-//! `Content-Length` it hands back a `StreamingReader` immediately, letting
-//! the decoder start (and playback begin) on the first bytes while the rest
-//! downloads in the background — see `StreamingReader`'s doc. Without a
-//! `Content-Length` there's no safe way to preallocate the file the reader
-//! seeks within, so that case falls back to the old fully-blocking download.
+//! Audio comes from `core::StreamEngine`: `Intent::Play` returns a `StreamHandle` at once, the load
+//! thread waits for the first `START_BYTES`, and the decoder reads through a `StreamReader`. A stream
+//! that knows its length and can jump (or is finished) gets a seekable decoder; any other gets a
+//! non-seekable one and ignores seeks until it is `Done`.
 //!
 //! rodio 0.21 API notes:
 //! - stream: `OutputStreamBuilder::open_default_stream()`, then `.mixer()`.
@@ -32,37 +29,34 @@
 //! - decode: `Decoder::builder().with_data(..).with_byte_len(..).build()`.
 //! - `Sink::get_pos`, `try_seek`, `set_volume`, `empty`, `stop` unchanged.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use core::{
-    Bus, CoreEvent, Media, MediaCache, MediaProvider, Player, PlayerEvent, PlayerState,
-    PlayerStatus, Rendition, SourceId,
+    Bus, Claim, CoreEvent, Intent, Player, PlayerEvent, PlayerState, PlayerStatus, Rendition,
+    SourceId, StreamEngine, StreamHandle, StreamReader, StreamState,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use rodio::Source;
-use tempfile::NamedTempFile;
 
 use crate::{AudioTap, Snapshot, Tapped, clamp_volume};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Fallback source id (see `load`): a rendition with an unregistered source
-/// still gets tried against the http provider. `SourceId` isn't const, so this
-/// is a tiny constructor.
-fn http_id() -> SourceId {
-    SourceId::from("http")
-}
+/// Bytes on disk before a decoder is built, and before a starved sink resumes.
+const START_BYTES: u64 = 256 * 1024;
+/// Playback pauses to buffer when the contiguous bytes past the read position fall below this.
+const LOW_WATER: u64 = 64 * 1024;
+/// How long a load waits for the first bytes before giving up.
+const START_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum Cmd {
     Load {
         rendition: Rendition,
         start_paused: bool,
         position_ms: u32,
-        cache: bool,
     },
     /// Reported by the background thread `Load` spawns once resolving +
     /// opening the decoder finishes, one way or the other. Dropped if
@@ -87,131 +81,72 @@ enum Cmd {
     Stop { ack: Sender<()> },
 }
 
+/// A stream's bytes with the fMP4 duration patch applied on the way through.
+struct PatchedReader {
+    inner: StreamReader,
+    pos: u64,
+    patch: Option<(u64, [u8; 4])>,
+}
+
+impl Read for PatchedReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if let Some((off, bytes)) = self.patch {
+            for (i, b) in bytes.iter().enumerate() {
+                if let Some(slot) = (off + i as u64).checked_sub(self.pos).and_then(|k| buf[..n].get_mut(k as usize)) {
+                    *slot = *b;
+                }
+            }
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for PatchedReader {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        self.pos = self.inner.seek(to)?;
+        Ok(self.pos)
+    }
+}
+
+type Decoded = Tapped<rodio::Decoder<PatchedReader>>;
+
+/// A decoder over `handle`'s bytes, seekable only if the stream can honor seeks now.
+fn build_source(handle: &StreamHandle, tap: &Arc<AudioTap>) -> core::Result<(Decoded, bool, u32)> {
+    let info = handle.info();
+    let done = info.state == StreamState::Done;
+    let byte_len = info.len.filter(|_| done || info.jumpable);
+    let mut reader = handle.reader();
+    let patch = match info.len {
+        Some(len) if done => {
+            let patch = crate::fmp4::duration_patch(&mut reader, len);
+            let _ = reader.seek(SeekFrom::Start(0));
+            patch
+        }
+        _ => None,
+    };
+    let builder = rodio::Decoder::builder().with_data(PatchedReader { inner: reader, pos: 0, patch });
+    let builder = if let Some(len) = byte_len { builder.with_byte_len(len) } else { builder };
+    let decoder = builder.build().map_err(|e| core::Error::Other(format!("decode: {e}")))?;
+    let duration_ms = decoder.total_duration().map(|d| d.as_millis() as u32).unwrap_or(0);
+    Ok((Tapped::new(decoder, tap.clone()), byte_len.is_some(), duration_ms))
+}
+
 /// What the background thread spawned by `Cmd::Load` hands back: everything
 /// needed to start playback that doesn't touch the (worker-thread-only,
 /// `!Send`) `OutputStream`/`Sink`.
 struct LoadedTrack {
-    tapped: Tapped<rodio::Decoder<StreamingReader>>,
+    tapped: Decoded,
     duration_ms: u32,
-    /// Kept alive so a downloaded/copied tempfile is not deleted mid-playback
-    /// (and, for a streaming download, so the background fetch thread's own
-    /// handle to the same path stays valid).
-    temp: Option<NamedTempFile>,
+    live: Live,
 }
 
-/// Coordinates a background download with the `StreamingReader`(s) reading
-/// the file it's filling in — `written` only ever grows, `cond` wakes a
-/// blocked reader every time it does (or once `done`/`error` is set).
-/// `Default` is the "nothing written yet, still in progress" starting state
-/// a fresh download begins in.
-#[derive(Default)]
-struct StreamState {
-    progress: Mutex<StreamProgress>,
-    cond: Condvar,
-}
-
-#[derive(Default)]
-struct StreamProgress {
-    written: u64,
-    done: bool,
-    error: Option<String>,
-}
-
-impl StreamState {
-    fn ready(total: u64) -> Self {
-        Self {
-            progress: Mutex::new(StreamProgress { written: total, done: true, error: None }),
-            cond: Condvar::new(),
-        }
-    }
-
-    fn advance(&self, n: u64) {
-        let mut p = self.progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.written += n;
-        self.cond.notify_all();
-    }
-
-    fn finish(&self, error: Option<String>) {
-        let mut p = self.progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.done = true;
-        p.error = error;
-        self.cond.notify_all();
-    }
-}
-
-/// `Read + Seek` over a file a background download is still filling in —
-/// blocks a `read()` past what's been written so far instead of a premature
-/// EOF, so `rodio::Decoder` (and thus playback) can start on the first bytes
-/// rather than waiting for the whole fetch. `total_len` is known upfront
-/// (the `Content-Length` the download was sized against, or — for an
-/// already-complete/local source via `StreamingReader::ready` — the file's
-/// actual length), so `Seek` never has to block: the backing file is
-/// preallocated (`set_len`) to its final size before any reader sees it.
-struct StreamingReader {
-    file: File,
-    pos: u64,
-    total_len: u64,
-    state: Arc<StreamState>,
-    patch: Option<(u64, [u8; 4])>,
-}
-
-impl StreamingReader {
-    /// Wraps an already-fully-available file (a `MediaCache` hit, a local
-    /// path, or anything else that doesn't need progressive-download
-    /// bookkeeping) in the same type `LoadedTrack` expects.
-    fn ready(file: File) -> std::io::Result<Self> {
-        let total_len = file.metadata()?.len();
-        Ok(Self { file, pos: 0, total_len, state: Arc::new(StreamState::ready(total_len)), patch: None })
-    }
-}
-
-impl Read for StreamingReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let (written, done, error) = {
-                let p = self.state.progress.lock().unwrap_or_else(|e| e.into_inner());
-                (p.written, p.done, p.error.clone())
-            };
-            if self.pos < written {
-                let avail = (written - self.pos).min(buf.len() as u64) as usize;
-                self.file.seek(SeekFrom::Start(self.pos))?;
-                let n = self.file.read(&mut buf[..avail])?;
-                if let Some((off, bytes)) = self.patch {
-                    for (i, b) in bytes.iter().enumerate() {
-                        if let Some(slot) = (off + i as u64).checked_sub(self.pos).and_then(|k| buf[..n].get_mut(k as usize)) {
-                            *slot = *b;
-                        }
-                    }
-                }
-                self.pos += n as u64;
-                return Ok(n);
-            }
-            if done {
-                return match error {
-                    Some(e) => Err(std::io::Error::other(e)),
-                    None => Ok(0),
-                };
-            }
-            // More is coming — wait for `advance`/`finish` to notify rather
-            // than busy-polling. The timeout is just a safety net (a missed
-            // notify must not hang the decoder forever); the normal wakeup
-            // is the `notify_all` in `advance`/`finish`.
-            let guard = self.state.progress.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = self.state.cond.wait_timeout(guard, Duration::from_millis(200));
-        }
-    }
-}
-
-impl Seek for StreamingReader {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let new_pos = match pos {
-            SeekFrom::Start(p) => p as i64,
-            SeekFrom::Current(d) => self.pos as i64 + d,
-            SeekFrom::End(d) => self.total_len as i64 + d,
-        };
-        self.pos = new_pos.max(0) as u64;
-        Ok(self.pos)
-    }
+/// The stream behind the current sink; dropping it releases the claim.
+struct Live {
+    handle: StreamHandle,
+    _claim: Claim,
+    seekable: bool,
 }
 
 pub struct RodioPlayer {
@@ -221,11 +156,7 @@ pub struct RodioPlayer {
 }
 
 impl RodioPlayer {
-    pub fn new(
-        media: core::SharedMedia,
-        bus: Bus,
-        media_cache: Arc<MediaCache>,
-    ) -> Self {
+    pub fn new(engine: StreamEngine, bus: Bus) -> Self {
         let inner = Arc::new(Mutex::new(Snapshot::default()));
         let tap = Arc::new(AudioTap::default());
         let (tx, rx) = unbounded();
@@ -234,7 +165,7 @@ impl RodioPlayer {
         let worker_tap = tap.clone();
         std::thread::Builder::new()
             .name("rodio-player".into())
-            .spawn(move || worker(rx, worker_tx, worker_inner, worker_tap, bus, media, media_cache))
+            .spawn(move || worker(rx, worker_tx, worker_inner, worker_tap, bus, engine))
             .expect("spawn rodio worker");
         Self { inner, tap, tx }
     }
@@ -248,12 +179,11 @@ impl Player for RodioPlayer {
         true
     }
 
-    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, cache: bool) {
+    fn load(&self, r: &Rendition, start_paused: bool, position_ms: u32, _cache: bool) {
         let _ = self.tx.send(Cmd::Load {
             rendition: r.clone(),
             start_paused,
             position_ms,
-            cache,
         });
     }
 
@@ -292,15 +222,16 @@ impl Player for RodioPlayer {
 struct Audio {
     stream: Option<rodio::OutputStream>,
     sink: Option<rodio::Sink>,
-    /// Kept alive so a downloaded/copied tempfile is not deleted mid-playback.
-    _temp: Option<NamedTempFile>,
+    live: Option<Live>,
+    /// Playback is paused because the download fell behind (not by the user).
+    buffering: bool,
     /// Current `(source, uri)`; every event carries these.
     playing: Option<(SourceId, String)>,
     duration_ms: u32,
     /// Bumped per `Load`; a stale `Finished` from an earlier generation is
     /// suppressed. Single-threaded worker mostly makes races impossible, but
     /// the counter makes it explicit.
-    generation: u64,
+    generation: Arc<AtomicU64>,
     finished_sent: bool,
 }
 
@@ -310,8 +241,7 @@ fn worker(
     inner: Arc<Mutex<Snapshot>>,
     tap: Arc<AudioTap>,
     bus: Bus,
-    media: core::SharedMedia,
-    media_cache: Arc<MediaCache>,
+    engine: StreamEngine,
 ) {
     let stream = match rodio::OutputStreamBuilder::open_default_stream() {
         Ok(s) => Some(s),
@@ -323,10 +253,11 @@ fn worker(
     let mut audio = Audio {
         stream,
         sink: None,
-        _temp: None,
+        live: None,
+        buffering: false,
         playing: None,
         duration_ms: 0,
-        generation: 0,
+        generation: Arc::new(AtomicU64::new(0)),
         finished_sent: false,
     };
 
@@ -344,20 +275,7 @@ fn worker(
                 rendition,
                 start_paused,
                 position_ms,
-                cache,
-            }) => start_load(
-                &mut audio,
-                &inner,
-                &tap,
-                &bus,
-                &media,
-                &media_cache,
-                &tx,
-                rendition,
-                start_paused,
-                position_ms,
-                cache,
-            ),
+            }) => start_load(&mut audio, &inner, &tap, &bus, &engine, &tx, rendition, start_paused, position_ms),
             Ok(Cmd::Loaded {
                 generation,
                 source,
@@ -366,12 +284,12 @@ fn worker(
                 position_ms,
                 result,
             }) => {
-                if generation != audio.generation {
+                if generation != audio.generation.load(Ordering::SeqCst) {
                     // Superseded by a later `Load` or a `Stop` while this
                     // was still resolving — drop it silently.
                     log::debug!(
                         "rodio: dropping stale load result (gen {generation}, now {})",
-                        audio.generation
+                        audio.generation.load(Ordering::SeqCst)
                     );
                 } else {
                     let outcome = result.and_then(|loaded| {
@@ -379,6 +297,7 @@ fn worker(
                     });
                     if let Err(e) = outcome {
                         log::error!("rodio: load failed: {e}");
+                        drop_stream(&mut audio, &inner);
                         audio.sink = None;
                         audio.playing = None;
                         set_state(&inner, PlayerState::Stopped, 0);
@@ -386,15 +305,8 @@ fn worker(
                     }
                 }
             }
-            Ok(Cmd::Toggle) => toggle(&audio, &inner, &bus),
-            Ok(Cmd::Seek(ms)) => {
-                if let Some(sink) = &audio.sink {
-                    match sink.try_seek(Duration::from_millis(ms as u64)) {
-                        Ok(()) => inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms,
-                        Err(e) => log::debug!("rodio: seek to {ms} ms failed: {e}"),
-                    }
-                }
-            }
+            Ok(Cmd::Toggle) => toggle(&mut audio, &inner, &bus),
+            Ok(Cmd::Seek(ms)) => seek(&mut audio, &inner, &tap, ms),
             Ok(Cmd::SetVolume(v)) => {
                 inner.lock().unwrap_or_else(|e| e.into_inner()).volume = v;
                 if let Some(sink) = &audio.sink {
@@ -402,10 +314,11 @@ fn worker(
                 }
             }
             Ok(Cmd::Stop { ack }) => {
-                audio.generation += 1;
+                audio.generation.fetch_add(1, Ordering::SeqCst);
                 if let Some(sink) = &audio.sink {
                     sink.stop();
                 }
+                drop_stream(&mut audio, &inner);
                 audio.sink = None;
                 audio.playing = None;
                 set_state(&inner, PlayerState::Stopped, 0);
@@ -427,7 +340,7 @@ fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
         Some(p) => p.clone(),
         None => return,
     };
-    if sink.is_paused() {
+    if sink.is_paused() && !audio.buffering {
         return;
     }
     let pos = sink.get_pos().as_millis() as u32;
@@ -436,36 +349,67 @@ fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
         position_ms: pos,
         duration_ms: audio.duration_ms,
     }));
-    if sink.empty() && !audio.finished_sent {
+    let info = audio.live.as_ref().map(|l| l.handle.info());
+    if let Some(info) = &info {
+        let active = matches!(info.state, StreamState::Connecting | StreamState::Fetching | StreamState::Buffering);
+        if audio.buffering && (!active || info.ahead >= START_BYTES) {
+            log::debug!("rodio: buffered enough, resuming");
+            audio.buffering = false;
+            inner.lock().unwrap_or_else(|e| e.into_inner()).buffering = false;
+            sink.play();
+        } else if !audio.buffering && active && info.ahead < LOW_WATER {
+            log::debug!("rodio: {} bytes ahead of the read position, pausing to buffer", info.ahead);
+            audio.buffering = true;
+            inner.lock().unwrap_or_else(|e| e.into_inner()).buffering = true;
+            sink.pause();
+        }
+    }
+    if sink.empty() && !audio.finished_sent && !audio.buffering {
         audio.finished_sent = true;
         set_state(inner, PlayerState::Stopped, 0);
-        bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri }));
+        match info.map(|i| i.state) {
+            Some(StreamState::Failed(why)) => {
+                log::error!("rodio: stream failed during playback: {why}");
+                bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));
+            }
+            Some(StreamState::Cancelled) => {
+                log::error!("rodio: stream was cancelled during playback");
+                bus.send(CoreEvent::Player(PlayerEvent::LoadFailed { source, uri }));
+            }
+            _ => bus.send(CoreEvent::Player(PlayerEvent::Finished { source, uri })),
+        }
     }
 }
 
+/// Releases the stream behind the current sink (its download stops after the grace period).
+fn drop_stream(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>) {
+    audio.live = None;
+    audio.buffering = false;
+    let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
+    s.stream = None;
+    s.buffering = false;
+}
+
 /// Handles `Cmd::Load`: does the bookkeeping that has to happen right away
-/// (bump `generation`, publish `Loading`), then hands the actual resolve +
+/// (bump `generation`, publish `Loading`), then hands the actual open +
 /// decode-open off to a background thread and returns immediately — the
 /// worker's `recv` loop is free to keep handling `Stop`/`Toggle`/a
-/// superseding `Load` the whole time that thread is (possibly) stuck on a
-/// slow or hanging source. The background thread's result comes back as
-/// `Cmd::Loaded`, tagged with the `generation` it was asked to load.
+/// superseding `Load` the whole time that thread waits on a slow source.
+/// The background thread's result comes back as `Cmd::Loaded`, tagged with
+/// the `generation` it was asked to load.
 #[allow(clippy::too_many_arguments)]
 fn start_load(
     audio: &mut Audio,
     inner: &Arc<Mutex<Snapshot>>,
     tap: &Arc<AudioTap>,
     bus: &Bus,
-    media: &core::SharedMedia,
-    media_cache: &Arc<MediaCache>,
+    engine: &StreamEngine,
     tx: &Sender<Cmd>,
     r: Rendition,
     start_paused: bool,
     position_ms: u32,
-    cache: bool,
 ) {
-    audio.generation += 1;
-    let generation = audio.generation;
+    let generation = audio.generation.fetch_add(1, Ordering::SeqCst) + 1;
     // The previous (drained) sink stays in place until `finish_load`; its emptiness says nothing about this load.
     audio.finished_sent = true;
     let (source, uri) = (r.source.clone(), r.uri.clone());
@@ -479,6 +423,8 @@ fn start_load(
         s.position_ms = position_ms;
         s.duration_ms = 0;
         s.state = PlayerState::Playing;
+        s.stream = None;
+        s.buffering = false;
     }
     bus.send(CoreEvent::Player(PlayerEvent::Loading {
         source: source.clone(),
@@ -486,8 +432,7 @@ fn start_load(
     }));
 
     if audio.stream.is_none() {
-        // Fail fast — no point spawning a thread to resolve/download a
-        // track this process can never play.
+        // Fail fast — no point spawning a thread to open a track this process can never play.
         let _ = tx.send(Cmd::Loaded {
             generation,
             source,
@@ -499,13 +444,14 @@ fn start_load(
         return;
     }
 
-    let media = media.snapshot();
-    let media_cache = media_cache.clone();
+    let engine = engine.clone();
     let tap = tap.clone();
     let tx = tx.clone();
-    let bus = bus.clone();
+    let inner = inner.clone();
+    let live_generation = audio.generation.clone();
     std::thread::spawn(move || {
-        let result = resolve_and_decode(&media, &media_cache, &r, &tap, cache, &bus);
+        let current = || live_generation.load(Ordering::SeqCst) == generation;
+        let result = open_and_decode(&engine, &r, &tap, &inner, &current);
         let _ = tx.send(Cmd::Loaded {
             generation,
             source,
@@ -517,54 +463,39 @@ fn start_load(
     });
 }
 
-/// Runs on the background thread `start_load` spawns: everything that might
-/// block on the network or a slow disk (`MediaProvider::open`, resolving the
-/// rendition, opening the decoder) — nothing here touches worker-thread-only
-/// state.
-fn resolve_and_decode(
-    media: &HashMap<SourceId, Arc<dyn MediaProvider>>,
-    media_cache: &Arc<MediaCache>,
+/// Runs on the background thread `start_load` spawns: opens the stream, waits for its first bytes and
+/// builds the decoder — nothing here touches worker-thread-only state.
+fn open_and_decode(
+    engine: &StreamEngine,
     r: &Rendition,
     tap: &Arc<AudioTap>,
-    cache: bool,
-    bus: &Bus,
+    inner: &Arc<Mutex<Snapshot>>,
+    current: &dyn Fn() -> bool,
 ) -> core::Result<LoadedTrack> {
-    let source = &r.source;
-    let uri = &r.uri;
-
-    // A local rendition whose source has no registered `MediaProvider` (e.g.
-    // an imported `local` track) is loaded straight off disk — skip the
-    // `media` lookup entirely.
-    let (reader, temp): (StreamingReader, Option<NamedTempFile>) =
-        if core::is_local_source(source) && !media.contains_key(source) {
-            let path = core::local_path_from_uri(uri);
-            let file = File::open(path).map_err(|e| core::Error::Other(e.to_string()))?;
-            let reader = StreamingReader::ready(file).map_err(|e| core::Error::Other(e.to_string()))?;
-            bus.send(CoreEvent::Player(PlayerEvent::Materialized {
-                source: source.clone(),
-                uri: uri.clone(),
-            }));
-            (reader, None)
-        } else {
-            open_media(media, media_cache, source, r, uri, cache, bus)?
-        };
-
-    let mut reader = reader;
-    let total_len = reader.total_len;
-    reader.patch = crate::fmp4::duration_patch(&mut reader, total_len);
-    reader.pos = 0;
-    let decoder = rodio::Decoder::builder()
-        .with_data(reader)
-        .with_byte_len(total_len)
-        .build()
-        .map_err(|e| core::Error::Other(format!("decode: {e}")))?;
-    let duration_ms = decoder
-        .total_duration()
-        .map(|d| d.as_millis() as u32)
-        .unwrap_or(0);
-    let tapped = Tapped::new(decoder, tap.clone());
-
-    Ok(LoadedTrack { tapped, duration_ms, temp })
+    let (handle, claim) = engine.open(r, Intent::Play)?;
+    {
+        let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
+        if current() {
+            s.stream = Some(handle.clone());
+        }
+    }
+    let deadline = Instant::now() + START_TIMEOUT;
+    while !handle.wait_range(0..START_BYTES, Duration::from_millis(200)) {
+        if !current() {
+            return Err(core::Error::Other("load superseded".into()));
+        }
+        match handle.info().state {
+            StreamState::Failed(why) => return Err(core::Error::Other(format!("stream failed: {why}"))),
+            StreamState::Cancelled => return Err(core::Error::Other("stream cancelled".into())),
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(core::Error::Other("timed out waiting for the first bytes".into()));
+        }
+    }
+    let (tapped, seekable, decoded_ms) = build_source(&handle, tap)?;
+    let duration_ms = if decoded_ms > 0 { decoded_ms } else { r.duration_ms };
+    Ok(LoadedTrack { tapped, duration_ms, live: Live { handle, _claim: claim, seekable } })
 }
 
 /// Applies a successfully resolved `LoadedTrack` on the worker thread: the
@@ -589,11 +520,12 @@ fn finish_load(
     let sink = rodio::Sink::connect_new(stream.mixer());
     sink.set_volume(inner.lock().unwrap_or_else(|e| e.into_inner()).volume);
     sink.append(loaded.tapped);
-    if position_ms > 0 {
+    if position_ms > 0 && loaded.live.seekable {
         let _ = sink.try_seek(Duration::from_millis(position_ms as u64));
     }
 
-    audio._temp = loaded.temp;
+    audio.buffering = false;
+    audio.live = Some(loaded.live);
     audio.duration_ms = loaded.duration_ms;
     log::debug!("player: playback started [{source}] {uri} ({} ms)", loaded.duration_ms);
     audio.sink = Some(sink);
@@ -602,6 +534,7 @@ fn finish_load(
     {
         let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
         s.duration_ms = loaded.duration_ms;
+        s.buffering = false;
     }
     bus.send(CoreEvent::Player(PlayerEvent::Playing {
         source: source.clone(),
@@ -618,207 +551,59 @@ fn finish_load(
     Ok(())
 }
 
-/// Resolve a rendition to a `StreamingReader` via its `MediaProvider`
-/// (falling back to the http provider), fetching as needed. `bus` gets a
-/// `PlayerEvent::Materialized` the moment this rendition's bytes are fully
-/// available in `MediaCache` — immediately for every branch except a
-/// streaming `Media::Url` download, where it's deferred to the background
-/// thread that finishes it (see `open_streaming_url`).
-fn open_media(
-    media: &HashMap<SourceId, Arc<dyn MediaProvider>>,
-    media_cache: &Arc<MediaCache>,
-    source: &SourceId,
-    r: &Rendition,
-    uri: &str,
-    cache: bool,
-    bus: &Bus,
-) -> core::Result<(StreamingReader, Option<NamedTempFile>)> {
-    let materialized = || {
-        bus.send(CoreEvent::Player(PlayerEvent::Materialized {
-            source: source.clone(),
-            uri: uri.to_string(),
-        }))
-    };
-
-    // Any source: a `MediaCache` hit plays straight from disk, skipping a
-    // live fetch entirely — checked before asking the provider to do
-    // anything, the same "cache first, else its own fetch mechanics" order
-    // scanning uses.
-    if let Some(p) = media_cache.cached_path(&r.source, &r.uri) {
-        let file = File::open(&p).map_err(|e| core::Error::Other(e.to_string()))?;
-        materialized();
-        return Ok((StreamingReader::ready(file).map_err(|e| core::Error::Other(e.to_string()))?, None));
+/// `Cmd::Seek`: a stream that cannot honor seeks yet ignores them (a failed backward seek on a
+/// non-seekable decoder would end the track); once it is `Done` the decoder is rebuilt seekable.
+fn seek(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, tap: &Arc<AudioTap>, ms: u32) {
+    let (Some(live), Some(old)) = (&mut audio.live, &audio.sink) else { return };
+    if !live.seekable {
+        if live.handle.info().state != StreamState::Done {
+            log::debug!("rodio: seek to {ms} ms ignored: the stream is not seekable until it is downloaded");
+            return;
+        }
+        let Some(stream) = &audio.stream else { return };
+        let rebuilt = match build_source(&live.handle, tap) {
+            Ok((tapped, true, _)) => tapped,
+            Ok(_) => return log::debug!("rodio: seek to {ms} ms ignored: rebuilt decoder is not seekable"),
+            Err(e) => return log::debug!("rodio: seek to {ms} ms failed: {e}"),
+        };
+        let sink = rodio::Sink::connect_new(stream.mixer());
+        sink.set_volume(inner.lock().unwrap_or_else(|e| e.into_inner()).volume);
+        let paused = old.is_paused();
+        sink.pause();
+        sink.append(rebuilt);
+        if let Err(e) = sink.try_seek(Duration::from_millis(ms as u64)) {
+            log::debug!("rodio: seek to {ms} ms failed: {e}");
+        }
+        if !paused {
+            sink.play();
+        }
+        old.stop();
+        live.seekable = true;
+        audio.sink = Some(sink);
+        inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms;
+        return;
     }
-    let provider = media
-        .get(source)
-        .or_else(|| media.get(&http_id()))
-        .ok_or_else(|| core::Error::NoSource(uri.to_string()))?;
-
-    Ok(match provider.open(r)? {
-        // Already sitting on local disk (e.g. Soulseek's own downloads
-        // dir) — nothing was fetched, so MediaCache only gets a symlink to
-        // it, not a duplicate copy.
-        Media::Path(p) => {
-            if cache && let Err(e) = media_cache.link_local(&r.source, &r.uri, &p) {
-                log::debug!("player: couldn't link {source} {uri} into media cache: {e}");
-            }
-            let file = File::open(&p).map_err(|e| core::Error::Other(e.to_string()))?;
-            materialized();
-            (StreamingReader::ready(file).map_err(|e| core::Error::Other(e.to_string()))?, None)
-        }
-        Media::Url(url) => {
-            let (reader, tmp) = open_streaming_url(&url, media_cache, r, source, uri, cache, bus)?;
-            (reader, Some(tmp))
-        }
-        Media::Reader(mut rdr) => {
-            // MVP: copy the stream to a tempfile, then decode from disk — no
-            // `Content-Length` to preallocate against for a generic `Read`,
-            // so this still waits for the whole thing rather than streaming.
-            let mut tmp = NamedTempFile::new().map_err(|e| core::Error::Other(e.to_string()))?;
-            std::io::copy(&mut rdr, tmp.as_file_mut())
-                .map_err(|e| core::Error::Other(e.to_string()))?;
-            let p = tmp.path().to_path_buf();
-            if cache {
-                cache_fetched(media_cache, r, &p, source, uri);
-            }
-            let file = File::open(&p).map_err(|e| core::Error::Other(e.to_string()))?;
-            materialized();
-            (StreamingReader::ready(file).map_err(|e| core::Error::Other(e.to_string()))?, Some(tmp))
-        }
-    })
-}
-
-/// Streams `url`'s body into a preallocated tempfile in the background while
-/// handing back a `StreamingReader` immediately — the decoder can start
-/// consuming the first bytes as they arrive instead of blocking on the whole
-/// fetch, which is what made playback of a big file slow to start. Requires
-/// a `Content-Length` to preallocate (`set_len`) the file the reader seeks
-/// within; without one this falls back to the old fully-blocking download
-/// (still correct, just not faster).
-fn open_streaming_url(
-    url: &str,
-    media_cache: &Arc<MediaCache>,
-    r: &Rendition,
-    source: &SourceId,
-    uri: &str,
-    cache: bool,
-    bus: &Bus,
-) -> core::Result<(StreamingReader, NamedTempFile)> {
-    let fetch = core::start_get(url).map_err(|e| core::Error::Other(format!("download {url}: {e}")))?;
-
-    let Some(len) = fetch.content_length else {
-        let started = std::time::Instant::now();
-        let mut tmp = NamedTempFile::new().map_err(|e| core::Error::Other(e.to_string()))?;
-        let mut body = fetch.body;
-        std::io::copy(&mut body, tmp.as_file_mut()).map_err(|e| core::Error::Other(format!("download {url}: {e}")))?;
-        log::info!("player: fetched {url} in {:?} (no content-length, full download)", started.elapsed());
-        let p = tmp.path().to_path_buf();
-        if cache {
-            cache_fetched(media_cache, r, &p, source, uri);
-        }
-        bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.to_string() }));
-        let file = File::open(&p).map_err(|e| core::Error::Other(e.to_string()))?;
-        return Ok((StreamingReader::ready(file).map_err(|e| core::Error::Other(e.to_string()))?, tmp));
-    };
-
-    let tmp = NamedTempFile::new().map_err(|e| core::Error::Other(e.to_string()))?;
-    tmp.as_file().set_len(len).map_err(|e| core::Error::Other(e.to_string()))?;
-    let read_file = tmp.reopen().map_err(|e| core::Error::Other(e.to_string()))?;
-    let write_file = tmp.reopen().map_err(|e| core::Error::Other(e.to_string()))?;
-    let state = Arc::new(StreamState::default());
-
-    let path = tmp.path().to_path_buf();
-    let media_cache = media_cache.clone();
-    let r = r.clone();
-    let source_owned = source.clone();
-    let uri_owned = uri.to_string();
-    let url_owned = url.to_string();
-    let bus = bus.clone();
-    let cache_state = state.clone();
-    std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        let result = stream_body_to_file(fetch.body, write_file, &cache_state, len);
-        match &result {
-            Ok(()) => {
-                log::info!("player: streamed {url_owned} in {:?}", started.elapsed());
-                if cache {
-                    cache_fetched(&media_cache, &r, &path, &source_owned, &uri_owned);
-                }
-                bus.send(CoreEvent::Player(PlayerEvent::Materialized {
-                    source: source_owned,
-                    uri: uri_owned,
-                }));
-            }
-            Err(e) => bus.send(CoreEvent::BackgroundFailure {
-                context: source_owned.to_string(),
-                message: format!("streaming download of {url_owned} failed: {e}"),
-            }),
-        }
-        cache_state.finish(result.err());
-    });
-
-    Ok((StreamingReader { file: read_file, pos: 0, total_len: len, state, patch: None }, tmp))
-}
-
-/// Runs on `open_streaming_url`'s background thread: copies the response
-/// body into `file` chunk by chunk, advancing `state` after each write so a
-/// blocked `StreamingReader::read` wakes as soon as there's more to give it.
-///
-/// `expected_len` is the `Content-Length` the file was preallocated to
-/// (`set_len`). A body that ends (a clean, error-free EOF) before reaching
-/// it is a truncated transfer, not a success — treating a short read as
-/// "done" used to leave the preallocated file's tail as zero bytes, which
-/// then got copied into `MediaCache` as if it were real audio: a later
-/// cache-hit playback would decode real audio up to the truncation point,
-/// then feed the decoder a wall of zeros it can't parse ("invalid frame"
-/// errors) for the rest of the track — audible as a long trailing silence
-/// on a long track. Truncating the file to what was actually received and
-/// erroring instead keeps a short transfer from ever being cached or
-/// reported as materialized, so a later attempt re-fetches it properly.
-fn stream_body_to_file(
-    mut body: Box<dyn Read + Send>,
-    mut file: File,
-    state: &StreamState,
-    expected_len: u64,
-) -> Result<(), String> {
-    let mut buf = [0u8; 64 * 1024];
-    let mut total = 0u64;
-    loop {
-        let n = body.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            if total < expected_len {
-                file.set_len(total).map_err(|e| e.to_string())?;
-                return Err(format!("truncated: got {total} of {expected_len} bytes"));
-            }
-            return Ok(());
-        }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-        total += n as u64;
-        state.advance(n as u64);
+    match old.try_seek(Duration::from_millis(ms as u64)) {
+        Ok(()) => inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms,
+        Err(e) => log::debug!("rodio: seek to {ms} ms failed: {e}"),
     }
 }
 
-/// Best-effort: stash a copy of a just-fetched (non-local) rendition in the
-/// shared MediaCache for CacheOnly scanning, mirroring Spotify's own
-/// playback-triggered materializer.
-fn cache_fetched(media_cache: &MediaCache, r: &Rendition, path: &std::path::Path, source: &SourceId, uri: &str) {
-    if let Err(e) = media_cache.put_file(&r.source, &r.uri, path) {
-        log::debug!("player: couldn't populate media cache for {source} {uri}: {e}");
-    }
-}
-
-fn toggle(audio: &Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
+fn toggle(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
     let Some(sink) = &audio.sink else { return };
     let Some((source, uri)) = audio.playing.clone() else {
         return;
     };
-    if sink.is_paused() {
+    if sink.is_paused() && !audio.buffering {
         sink.play();
         inner.lock().unwrap_or_else(|e| e.into_inner()).state = PlayerState::Playing;
         bus.send(CoreEvent::Player(PlayerEvent::Playing { source, uri }));
     } else {
         sink.pause();
-        inner.lock().unwrap_or_else(|e| e.into_inner()).state = PlayerState::Paused;
+        audio.buffering = false;
+        let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
+        s.buffering = false;
+        s.state = PlayerState::Paused;
         bus.send(CoreEvent::Player(PlayerEvent::Paused));
     }
 }

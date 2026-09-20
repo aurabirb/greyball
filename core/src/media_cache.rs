@@ -19,7 +19,7 @@
 //! Keyed by `(SourceId, Rendition::uri)` — the stable, source-attributed id
 //! a source actually gives us. Never `TrackId`: that's a medley-only
 //! playlist abstraction with no meaning to a source, and a track can have
-//! several renditions (one cache entry each). `put`/`put_file`/`link_local`/
+//! several renditions (one cache entry each). `put`/`persist_file`/`link_local`/
 //! `cached_path` all still key on `(source, uri)` exactly as before — that
 //! didn't change.
 //!
@@ -41,7 +41,7 @@
 //! (`Store::track_by_rendition`) at write time. That
 //! `Store` handle is never used to originate a fetch, and deliberately isn't
 //! threaded through `Player`/`RodioPlayer`/`SpotifyPlayer`'s own `put`/
-//! `put_file`/`link_local` call sites — those stay exactly as they were,
+//! `persist_file`/`link_local` call sites — those stay exactly as they were,
 //! passing only `(source, uri, bytes-or-path)`.
 
 use std::collections::HashMap;
@@ -58,6 +58,9 @@ use crate::types::SourceId;
 /// `(source, uri)` (via `index_key`) -> the filename it was assigned inside
 /// that source's cache subdirectory.
 const INDEX: TableDefinition<&str, &str> = TableDefinition::new("index");
+
+/// Subdirectory of the cache dir holding in-progress stream files.
+const STREAM_DIR: &str = ".streams";
 
 fn index_key(source: &SourceId, uri: &str) -> String {
     format!("{}\0{}", source.as_str(), uri)
@@ -117,7 +120,7 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// Same sniff as `sniff_ext`, but for a caller that only has a path
-/// (`put_file`/`link_local`) — reads a handful of bytes, not the whole file.
+/// (`persist_file`/`link_local`) — reads a handful of bytes, not the whole file.
 fn sniff_ext_path(path: &Path) -> Option<&'static str> {
     use std::io::Read;
     let mut buf = [0u8; 8];
@@ -181,6 +184,7 @@ pub struct MediaCache {
 impl MediaCache {
     pub fn new(dir: PathBuf, store: Arc<dyn Store>) -> Self {
         let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.join(STREAM_DIR));
         let index_path = dir.with_extension("redb");
         let index = Database::create(&index_path)
             .unwrap_or_else(|e| panic!("media cache index {}: {e}", index_path.display()));
@@ -275,15 +279,26 @@ impl MediaCache {
         self.store_bytes(source, uri, ext, |f| io::Write::write_all(f, bytes))
     }
 
-    /// Like `put`, but copies from an existing local file instead of
-    /// buffering it in memory — for a caller (e.g. a player that just
-    /// downloaded, or already has, a local copy) that already has the bytes
-    /// on disk.
-    pub fn put_file(&self, source: &SourceId, uri: &str, src: &std::path::Path) -> io::Result<PathBuf> {
-        let ext = sniff_ext_path(src);
-        self.store_bytes(source, uri, ext, |f| {
-            io::copy(&mut std::fs::File::open(src)?, f).map(|_| ())
-        })
+    /// Moves a finished stream's temp file (from `new_stream_file`) into place as `(source, uri)`'s entry. Writes
+    /// the index, so call it from a producer thread, never the UI or audio thread.
+    pub fn persist_file(&self, source: &SourceId, uri: &str, src: &Path) -> io::Result<PathBuf> {
+        let lock = self.lock(source, uri);
+        let _guard = lock.lock().unwrap();
+        let dest = self.dest(source, uri, sniff_ext_path(src))?;
+        std::fs::create_dir_all(dest.parent().expect("dest always has a parent"))?;
+        std::fs::rename(src, &dest)?;
+        Ok(dest)
+    }
+
+    /// An empty file for a stream to fill, inside the cache dir so `persist_file` can rename it.
+    pub fn new_stream_file(&self) -> io::Result<(std::fs::File, PathBuf)> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = self.dir.join(STREAM_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("{}-{n}.part", std::process::id()));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+        Ok((file, path))
     }
 
     /// Records that `(source, uri)`'s audio already exists locally at

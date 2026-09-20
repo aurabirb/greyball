@@ -136,6 +136,7 @@ impl Snap {
             position_ms: self.position_ms,
             duration_ms: self.duration_ms,
             volume: self.volume,
+            ..PlayerStatus::default()
         }
     }
 }
@@ -713,7 +714,7 @@ async fn run(
                         c.materialized_sent = true;
                         let (source, uri) = c.id.clone();
                         log::debug!("spotify: materialized {uri}");
-                        bus.send(CoreEvent::Player(PlayerEvent::Materialized { source: source.clone(), uri: uri.clone() }));
+                        bus.send(CoreEvent::Stream { key: (source.clone(), uri.clone()), state: core::StreamState::Done });
                         if c.req.cache {
                             spawn_materialize_to_cache(session.clone(), media_cache.clone(), source, uri, item.clone(), bus.clone());
                         }
@@ -739,7 +740,7 @@ async fn run(
     }
 }
 
-/// Copies the decrypted Ogg into `MediaCache`, then re-sends `Materialized` once it actually lands.
+/// Copies the decrypted Ogg into `MediaCache`, then announces `Stream{Done}` once it actually lands.
 fn spawn_materialize_to_cache(
     session: Session,
     media_cache: Arc<MediaCache>,
@@ -764,7 +765,7 @@ fn spawn_materialize_to_cache(
         })
         .await;
         match copied {
-            Ok(Ok(_)) => bus.send(CoreEvent::Player(PlayerEvent::Materialized { source, uri })),
+            Ok(Ok(_)) => bus.send(CoreEvent::Stream { key: (source, uri), state: core::StreamState::Done }),
             Ok(Err(e)) => log::warn!("spotify: materialize-to-cache {e}"),
             Err(e) => log::warn!("spotify: materialize-to-cache task failed: {e}"),
         }

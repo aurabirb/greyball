@@ -893,8 +893,8 @@ impl Session {
     }
 
     pub fn on_event(&mut self, ev: &CoreEvent) -> Result<bool> {
-        // `Progress` is per-tick playback position, read live every frame; a background failure only moves `warnings_revision`.
-        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. }) | CoreEvent::BackgroundFailure { .. }) {
+        // `Progress` is per-tick playback position and stream state changes are read live from the player; a background failure only moves `warnings_revision`.
+        if !matches!(ev, CoreEvent::Player(PlayerEvent::Progress { .. }) | CoreEvent::BackgroundFailure { .. } | CoreEvent::Stream { .. }) {
             self.touch();
         }
         match ev {
@@ -923,6 +923,20 @@ impl Session {
                 Ok(true)
             }
             CoreEvent::Player(pe) => self.on_player_event(pe),
+            CoreEvent::Stream { key: (source, uri), state } => {
+                if *state != crate::stream::StreamState::Done {
+                    return Ok(false);
+                }
+                // The track just became cached: refresh the cached mark and let its scan use the file.
+                self.touch();
+                if let Some(id) = self.event_track(source, uri)?
+                    && let Some(scan) = &self.scan
+                {
+                    log::debug!("app: {source} {uri} is cached -> prioritizing {id:?}");
+                    scan.prioritize(id);
+                }
+                Ok(true)
+            }
             CoreEvent::DeferredLoad(seq) => {
                 if let Some((_, id, p, r)) = self.deferred_load.take_if(|(s, ..)| s == seq)
                     && self.queue.get_current() == Some(id)
@@ -1219,21 +1233,6 @@ impl Session {
                             }
                         }
                     }
-                }
-                Ok(true)
-            }
-            PlayerEvent::Materialized { source, uri } => {
-                // The precise trigger for the currently-playing-track fast
-                // path: rather than scanning polling `ScanFetchMode::CacheOnly`
-                // every tick hoping a source finished fetching on its own,
-                // the source announces it directly and this is the one place
-                // that reacts — same `prioritize` a plain `Playing` already
-                // does as a first (possibly premature) attempt.
-                if let Some(id) = self.event_track(source, uri)?
-                    && let Some(scan) = &self.scan
-                {
-                    log::debug!("app: materialized {source} {uri} -> prioritizing {id:?}");
-                    scan.prioritize(id);
                 }
                 Ok(true)
             }
@@ -1882,7 +1881,15 @@ impl Session {
 
     pub fn player_status(&self) -> PlayerStatus {
         let (position_ms, duration_ms) = self.progress;
-        PlayerStatus { state: self.shown.player_state, position_ms, duration_ms, volume: self.shown.volume }
+        let live = self.active_player().map(|p| p.status());
+        PlayerStatus {
+            state: self.shown.player_state,
+            position_ms,
+            duration_ms,
+            volume: self.shown.volume,
+            buffering: live.as_ref().is_some_and(|s| s.buffering),
+            download_pct: live.and_then(|s| s.download_pct),
+        }
     }
 
     /// Real 5-band magnitude of whatever's actually playing — see

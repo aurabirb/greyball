@@ -6,7 +6,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::http_fetch::{fetch_url_bytes, fetch_url_to};
+use crate::http::{fetch_url_bytes, fetch_url_to};
 
 const REPO: &str = "aurabirb/greyball";
 
