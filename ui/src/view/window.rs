@@ -239,7 +239,7 @@ impl Window {
         let printer = &printer.windowed(self.rect);
         let content = &printer.windowed(Rect::from_size((0, 0), self.content().size()));
         match (&self.body, frame) {
-            (Body::List(list), WindowFrame::List(frame)) => list.draw(content, focused, frame),
+            (Body::List(list), WindowFrame::List(frame)) => list.draw(content, focused, frame, status.chrome.kind_key),
             (Body::Settings(settings), WindowFrame::Settings(entries)) => settings.draw(content, entries, focused),
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),

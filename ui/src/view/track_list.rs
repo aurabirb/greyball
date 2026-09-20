@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cursive::theme::ColorStyle;
 use cursive::{Printer, Rect};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
 
@@ -732,7 +733,7 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
-            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.kind_key], &format!("show: {}", self.kinds.label()))]
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection)]
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -747,7 +748,7 @@ impl TrackList {
     }
 
     /// `marked` brackets the title, the focus marker docked windows use.
-    pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame) {
+    pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame, kind_key: Option<char>) {
         let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
@@ -759,6 +760,12 @@ impl TrackList {
         }
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
+        if let (Some(start), Some(label)) = (kind_bar::start(&bar), hint(&[kind_key], "change filter")) {
+            let x = start.saturating_sub(label.width() + 1);
+            if x > main_col_start(content_w) + title.width() {
+                printer.with_color(ColorStyle::title_secondary(), |p| p.print((x, 0), &label));
+            }
+        }
     }
 
     /// Re-follows the cursor when `resized`, else keeps cursor and scroll window inside the list.
