@@ -38,7 +38,7 @@ pub fn remove() -> Result<(), String> {
 
 /// Creates the container: `folder` is slskd's `/app`, `downloads` its downloads directory.
 pub fn create(folder: &Path, downloads: &Path) -> Result<(), String> {
-    if let Some(port) = PORTS.into_iter().find(|p| std::net::TcpListener::bind(("0.0.0.0", *p)).is_err()) {
+    if let Some(port) = PORTS.into_iter().find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_err()) {
         return Err(format!("port {port} is already in use"));
     }
     std::fs::create_dir_all(downloads.join("medley")).map_err(|e| format!("creating shared folder: {e}"))?;
@@ -78,7 +78,7 @@ pub fn write_config(folder: &Path, soulseek_user: &str, soulseek_pass: &str) -> 
     let yaml = format!(
         "web:\n  authentication:\n    api_keys:\n      medley:\n        key: {key}\n        role: readwrite\n        \
          cidr: 0.0.0.0/0,::/0\nsoulseek:\n  username: {}\n  password: {}\n\
-         shares:\n  directories:\n    - {DOWNLOADS_MOUNT}/medley\n  cache:\n    retention: 60\n",
+         shares:\n  directories:\n    - {DOWNLOADS_MOUNT}/\n  cache:\n    retention: 60\n",
         quote(soulseek_user),
         quote(soulseek_pass)
     );
