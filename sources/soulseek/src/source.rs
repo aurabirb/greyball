@@ -101,9 +101,10 @@ impl SoulseekSource {
         let entry = std::fs::read_dir(&dest_dir)
             .map_err(|e| src_err(format!("reading {}: {e}", dest_dir.display())))?
             .filter_map(|e| e.ok())
-            .find(|e| e.path().is_file())
+            .find(|e| e.file_type().is_ok_and(|t| t.is_file()))
             .ok_or_else(|| src_err("download reported complete but no file was found"))?;
-        let path = entry.path();
+        let path = place_download(&downloads_dir.join("medley"), &entry.path(), &track.filename)?;
+        let _ = std::fs::remove_dir(&dest_dir);
         self.downloaded.lock().unwrap().insert(uri.to_string(), path.clone());
         Ok(path)
     }
@@ -189,6 +190,79 @@ impl MediaProvider for SoulseekSource {
         let path = self.fetch(&r.uri, &track)?;
         Ok(Media::Path(path))
     }
+}
+
+const MAX_COMPONENT_BYTES: usize = 255;
+
+/// One path component derived from remote data: never empty, hidden, or containing separators/control chars.
+fn sanitize_component(raw: &str, placeholder: &str) -> String {
+    let cleaned: String = raw.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '/' | '\\') { '_' } else { c }).collect();
+    let trimmed = cleaned.trim_start_matches('.').trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        return placeholder.to_string();
+    }
+    if trimmed.len() <= MAX_COMPONENT_BYTES {
+        return trimmed.to_string();
+    }
+    let ext = trimmed.rfind('.').map(|i| &trimmed[i..]).filter(|e| e.len() <= 16).unwrap_or("");
+    let mut end = MAX_COMPONENT_BYTES - ext.len();
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{ext}", &trimmed[..end])
+}
+
+/// `<parent-2>/<parent-1>/<file>` of a remote path, each component sanitized.
+fn album_relative_path(remote: &str) -> PathBuf {
+    let parts: Vec<&str> = remote.split(['\\', '/']).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect();
+    let (name, dirs) = parts.split_last().map_or((&"", &[][..]), |(n, d)| (n, d));
+    let mut out = PathBuf::new();
+    for d in &dirs[dirs.len().saturating_sub(2)..] {
+        out.push(sanitize_component(d, "unknown"));
+    }
+    out.push(sanitize_component(name, "track"));
+    out
+}
+
+/// Moves `src` to its album-style place under `root` (keeping an existing file), refusing symlinks and escapes.
+fn place_download(root: &Path, src: &Path, remote: &str) -> Result<PathBuf> {
+    let rel = album_relative_path(remote);
+    if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return Err(src_err("refusing unsafe download path"));
+    }
+    let mut cur = root.to_path_buf();
+    let dirs = rel.parent().map(|p| p.components().count()).unwrap_or(0);
+    for (i, comp) in rel.components().enumerate() {
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => return Err(src_err(format!("{} is a symlink", cur.display()))),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&cur).map_err(|e| src_err(format!("creating {}: {e}", cur.display())))?;
+            }
+            Err(e) => return Err(src_err(format!("{}: {e}", cur.display()))),
+        }
+        cur.push(comp);
+        if i == dirs {
+            break;
+        }
+    }
+    let dest = cur;
+    if !dest.starts_with(root) {
+        return Err(src_err("refusing unsafe download path"));
+    }
+    match std::fs::symlink_metadata(&dest) {
+        Ok(m) if m.file_type().is_file() => {
+            let _ = std::fs::remove_file(src);
+            return Ok(dest);
+        }
+        Ok(_) => return Err(src_err(format!("{} exists and is not a regular file", dest.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(src_err(format!("{}: {e}", dest.display()))),
+    }
+    if std::fs::rename(src, &dest).is_err() {
+        std::fs::copy(src, &dest).and_then(|_| std::fs::remove_file(src)).map_err(|e| src_err(format!("moving download: {e}")))?;
+    }
+    Ok(dest)
 }
 
 /// Basename with directory separators (Soulseek filenames are Windows-style,

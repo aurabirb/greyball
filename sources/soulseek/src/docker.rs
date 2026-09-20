@@ -41,6 +41,7 @@ pub fn create(folder: &Path, downloads: &Path) -> Result<(), String> {
     if let Some(port) = PORTS.into_iter().find(|p| std::net::TcpListener::bind(("0.0.0.0", *p)).is_err()) {
         return Err(format!("port {port} is already in use"));
     }
+    std::fs::create_dir_all(downloads.join("medley")).map_err(|e| format!("creating shared folder: {e}"))?;
     let owner = std::fs::metadata(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     // Rootless podman maps container root to the invoking user already; --user would map to a subuid.
     let podman = Command::new("docker").arg("--version").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("podman"));
@@ -76,7 +77,8 @@ pub fn write_config(folder: &Path, soulseek_user: &str, soulseek_pass: &str) -> 
     let key = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let yaml = format!(
         "web:\n  authentication:\n    api_keys:\n      medley:\n        key: {key}\n        role: readwrite\n        \
-         cidr: 0.0.0.0/0,::/0\nsoulseek:\n  username: {}\n  password: {}\n",
+         cidr: 0.0.0.0/0,::/0\nsoulseek:\n  username: {}\n  password: {}\n\
+         shares:\n  directories:\n    - {DOWNLOADS_MOUNT}/medley\n  cache:\n    retention: 60\n",
         quote(soulseek_user),
         quote(soulseek_pass)
     );
