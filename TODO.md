@@ -17,7 +17,13 @@
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio
-  starts. Decide what the readout shows if the new track fails to load.
+  starts. Decide what the readout shows if the new track fails to load. The player's snapshot already
+  describes the playing track until the swap; the Session side (`Loading`/`Playing` handlers set
+  `shown.now_playing` and call `set_status`, `self.progress`, the queue pointer, `core/src/app.rs`)
+  still switches at once. Hazard: the previous track's `Progress` events (no track identity) and the
+  `Loading` handler's `set_status` reach `update_progress`, whose `learn_duration` can store the previous
+  track's duration on the newly selected track when its catalog duration is 0 — give `Progress` a
+  `source`/`uri` like `Finished` and guard `update_progress`/`set_status` by identity.
 - [ ] Media keys still don't work on macOS, and the OS "Now Playing" status/widget never gets updated. Investigate whether this needs some form of app registration/packaging (e.g. macOS media-remote/`MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` integration typically requires a proper `.app` bundle with an `Info.plist`/bundle identifier, not a bare CLI binary) — figure out and document the actual OS requirements needed to make this work, then implement whatever's missing.
 - [ ] The screen's rightmost column (seen on macOS) holds stale cells and shows garbage after a window
   resize. Suspects, to check in this order: (1) cells nothing repaints — `draw_row_list`
