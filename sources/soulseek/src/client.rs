@@ -220,6 +220,17 @@ impl SlskdClient {
     /// need to replicate slskd's own filename-sanitizing rules to guess its
     /// final name). Returns the batch id to poll.
     pub fn enqueue_download(&self, username: &str, filename: &str, size: u64) -> ClientResult<uuid::Uuid> {
+        match self.try_enqueue(username, filename, size) {
+            Err(e) if e.to_ascii_lowercase().contains("already in progress") => {
+                // slskd skips a file with a live (non-completed) transfer for the same user; a stale one is ours to drop.
+                self.cancel_active(username, filename)?;
+                self.try_enqueue(username, filename, size)
+            }
+            r => r,
+        }
+    }
+
+    fn try_enqueue(&self, username: &str, filename: &str, size: u64) -> ClientResult<uuid::Uuid> {
         let batch_id = uuid::Uuid::new_v4();
         let body = serde_json::json!({
             "id": batch_id,
@@ -255,6 +266,21 @@ impl SlskdClient {
         }
         let batch: BatchResponse = serde_json::from_str(&text).map_err(|e| format!("batch status: bad response: {e}"))?;
         Ok(batch.batch.and_then(|b| b.transfers.into_iter().next()))
+    }
+
+    fn cancel_active(&self, username: &str, filename: &str) -> ClientResult<()> {
+        let (status, text) =
+            self.call(reqwest::Method::GET, &format!("/api/v0/transfers/downloads/{username}"), None, DEFAULT_TIMEOUT)?;
+        if !status.is_success() {
+            return Err(format!("listing downloads failed ({status}): {text}"));
+        }
+        let user: UserTransfers = serde_json::from_str(&text).map_err(|e| format!("listing downloads: bad response: {e}"))?;
+        for t in user.directories.into_iter().flat_map(|d| d.files) {
+            if t.filename == filename && !t.state.contains("Completed") {
+                self.cancel_download(username, t.id);
+            }
+        }
+        Ok(())
     }
 
     /// Best-effort cleanup of a download we gave up on (timed out waiting).
@@ -312,6 +338,27 @@ struct BatchResponse {
     batch: Option<BatchBody>,
     #[serde(default)]
     failures: Vec<BatchFailure>,
+}
+
+#[derive(Deserialize)]
+struct UserTransfers {
+    #[serde(default)]
+    directories: Vec<UserDirectory>,
+}
+
+#[derive(Deserialize)]
+struct UserDirectory {
+    #[serde(default)]
+    files: Vec<ListedTransfer>,
+}
+
+#[derive(Deserialize)]
+struct ListedTransfer {
+    id: uuid::Uuid,
+    #[serde(default)]
+    filename: String,
+    #[serde(default)]
+    state: String,
 }
 
 #[derive(Deserialize)]

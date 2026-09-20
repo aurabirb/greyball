@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
@@ -45,11 +45,13 @@ pub struct SoulseekSource {
     /// Tracks already downloaded this run, so replaying the same search hit
     /// doesn't re-enqueue a fresh peer-to-peer transfer for it.
     downloaded: Mutex<HashMap<String, PathBuf>>,
+    /// Per-uri lock so concurrent fetches of one track share a single download.
+    in_flight: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl SoulseekSource {
     pub fn new(client: SlskdClient, downloads_dir: Option<PathBuf>) -> Self {
-        Self { client, downloads_dir, downloaded: Mutex::new(HashMap::new()) }
+        Self { client, downloads_dir, downloaded: Mutex::new(HashMap::new()), in_flight: Mutex::new(HashMap::new()) }
     }
 
     fn downloads_dir(&self) -> Result<&Path> {
@@ -61,6 +63,8 @@ impl SoulseekSource {
     /// Downloads `track` (blocking) and returns its local path, first
     /// checking (then populating) `downloaded`.
     fn fetch(&self, uri: &str, track: &TrackRef) -> Result<PathBuf> {
+        let lock = self.in_flight.lock().unwrap().entry(uri.to_string()).or_default().clone();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let cached = self.downloaded.lock().unwrap().get(uri).cloned();
         if let Some(p) = cached
             && p.exists()
