@@ -755,7 +755,7 @@ fn run_once(shared: &Arc<Shared>, provider: &dyn MediaProvider, r: &Rendition, w
         Media::Path(p) => {
             adopt_local(shared, writer, p);
         }
-        Media::Url(url) => match RangeReader::open(&url, HttpOptions::default()) {
+        Media::Url(url) => match RangeReader::open(&url, HttpOptions::default(), writer.hole_from(0).map_or(0, |h| h.start)) {
             Ok(reader) => {
                 fetching();
                 fill_from_seekable(reader, writer);

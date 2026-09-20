@@ -72,18 +72,22 @@ pub struct RangeReader {
 }
 
 impl RangeReader {
-    pub fn open(url: &str, opts: HttpOptions) -> io::Result<Self> {
+    /// The first request fetches the chunk at `start`, so a resume doesn't re-download what it has.
+    pub fn open(url: &str, opts: HttpOptions, start: u64) -> io::Result<Self> {
         let client = opts.client.clone().unwrap_or_else(|| client().clone());
-        let mut this = Self { client, url: url.to_string(), opts, pos: 0, len: None, mode: Mode::Ranged { chunk: Vec::new(), chunk_start: 0 } };
+        let mut this = Self { client, url: url.to_string(), opts, pos: start, len: None, mode: Mode::Ranged { chunk: Vec::new(), chunk_start: start } };
         let client = this.client.clone();
-        let resp = this.send(&client, Some((0, 0)))?;
+        let resp = this.send(&client, Some((start, start + CHUNK - 1)))?;
         if resp.status().as_u16() == 206 {
             this.len = total_from_content_range(&resp);
+            let chunk = resp.bytes().map_err(io::Error::other)?.to_vec();
+            this.mode = Mode::Ranged { chunk, chunk_start: start };
         } else {
             // The ranged client's total timeout would cut a long unranged body short.
             drop(resp);
             let resp = this.send(body_client(), None)?;
             this.len = resp.content_length();
+            this.pos = 0;
             this.mode = Mode::Sequential { body: Box::new(resp), at: 0 };
         }
         Ok(this)

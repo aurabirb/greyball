@@ -200,7 +200,7 @@ Typical first play of an uncached track (existing events marked *):
 3. While playing: `PlayerEvent::Progress`* per tick; `Stream{Buffering}` then `Stream{Fetching}`
    only on an underrun (player status shows/clears "buffering"); retries are debug logs only.
 4. All bytes in -> producer persists to `MediaCache` -> `Stream{Done}` (analysis and the UI react).
-5. End: `PlayerEvent::Finished`*; skip/stop: claim dropped, `Stream{Cancelled}` after `GRACE` if not
+5. End: `PlayerEvent::Finished`*; skip: the old claim is dropped when the next track starts playing; stop: dropped at once; `Stream{Cancelled}` after `GRACE` if not
    done, tempfile removed, `PlayerEvent::Stopped`* / the next `Loading`*.
 6. A permanent failure: `Stream{Failed}` + `PlayerEvent::LoadFailed`* (or `BackgroundFailure`*).
 Cached track: `Loading`* -> `Stream{Done}` -> `Playing`*, no fetch.
@@ -228,7 +228,7 @@ show a "downloading" mark from `engine.status`.
 - `tick`: `Buffering` when the reader is stalled (or `ranges` ahead of the decode position fall
   under `LOW_WATER`): pause with a "buffering" state and resume at the start threshold; `Failed`
   -> `LoadFailed`/`BackgroundFailure`, not `Finished`.
-- Stop/Load of another key drops the claim (grace). Same key reuses the handle.
+- Stop drops the claim at once (grace); a Load of another key keeps the old sink and claim playing until the new track's `finish_load` swaps them out (gapless skip), and `tick` is idle meanwhile. Same key reuses the handle.
 - A read may still block on the audio thread; the start threshold, low-water pause and retries make
   that rare. A decode-ahead ring buffer thread is deliberately deferred.
 

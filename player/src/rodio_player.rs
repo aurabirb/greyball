@@ -233,6 +233,8 @@ struct Audio {
     /// the counter makes it explicit.
     generation: Arc<AtomicU64>,
     finished_sent: bool,
+    /// A load is pending: `tick` leaves the still-playing previous track's state out of the new one's.
+    loading: bool,
 }
 
 fn worker(
@@ -259,6 +261,7 @@ fn worker(
         duration_ms: 0,
         generation: Arc::new(AtomicU64::new(0)),
         finished_sent: false,
+        loading: false,
     };
 
     loop {
@@ -292,6 +295,7 @@ fn worker(
                         audio.generation.load(Ordering::SeqCst)
                     );
                 } else {
+                    audio.loading = false;
                     let outcome = result.and_then(|loaded| {
                         finish_load(&mut audio, &inner, &bus, &source, &uri, loaded, start_paused, position_ms)
                     });
@@ -315,6 +319,7 @@ fn worker(
             }
             Ok(Cmd::Stop { ack }) => {
                 audio.generation.fetch_add(1, Ordering::SeqCst);
+                audio.loading = false;
                 if let Some(sink) = &audio.sink {
                     sink.stop();
                 }
@@ -336,6 +341,9 @@ fn worker(
 
 fn tick(audio: &mut Audio, inner: &Arc<Mutex<Snapshot>>, bus: &Bus) {
     let Some(sink) = &audio.sink else { return };
+    if audio.loading {
+        return;
+    }
     let (source, uri) = match &audio.playing {
         Some(p) => p.clone(),
         None => return,
@@ -412,9 +420,9 @@ fn start_load(
     position_ms: u32,
 ) {
     let generation = audio.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    // The previous sink stays in place until `finish_load`; its emptiness says nothing about this load.
+    // The previous sink and stream keep playing until `finish_load` swaps them out (gapless skip).
     audio.finished_sent = true;
-    drop_stream(audio, inner);
+    audio.loading = true;
     let (source, uri) = (r.source.clone(), r.uri.clone());
     log::debug!("player: load gen {generation} [{source}] {uri}");
     audio.playing = Some((source.clone(), uri.clone()));
