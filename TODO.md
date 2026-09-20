@@ -55,17 +55,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Rework the list window's title row (`TrackList::draw`, `ui/src/view/track_list.rs` ~751; `draw_row_list`,
-  `ui/src/view/rows.rs`; `kind_bar`; `count()`): swap the positions of the title and the kind filters, so
-  the filters (playlist subtabs) sit on the left and the title on the right; do not write the count unit
-  `(xx playlists)` at all for the Playlists window; put the `[f] filter` hint (currently drawn in the title red left
-  of the filter bar) after the playlist subtab; and right-align every list window's title, not just this
-  one. Remove the track/item count from the top titles everywhere (`count()`, `cursor/total unit`,
-  which covers the `(xx playlists)` text) — the status bar shows it now; if `(xx playlists)` turns out to be
-  something other than the `count()` text, report it back rather than guessing. In the search view the entry field
-  (`typed_title` + `HINT`, `track_list.rs` ~889: today `/{input}█` followed by the `(Esc to cancel)`
-  hint) comes right after the filters, drawn in white, and reads `search: {input}█`; the `(esc to exit)`
-  hint is drawn in red (keep or reword the current `(Esc to cancel)` text — the owner wrote "esc to exit").
 - [ ] Now Playing window hint row: replace the docked-only `[M] cycle layout` hint (`hint(&[c.layout_key],
   "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) with the hint for liking the
   playing track, `[=] like` — `=` is the default key of `BuiltinAction::LikePlaying` (`core/src/app.rs`

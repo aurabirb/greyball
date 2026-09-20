@@ -92,7 +92,7 @@ pub(super) struct Segment {
     text: String,
 }
 
-/// `kinds`' segments right-aligned in a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks; `counts` runs parallel to `kinds`.
+/// `kinds`' segments left-aligned from the tags column of a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks; `counts` runs parallel to `kinds`.
 pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], active: KindFilter) -> Vec<Segment> {
     let room = content_w.saturating_sub(main_col_start(content_w) + QUERY_MIN);
     let seg = |kind: KindFilter, n: usize, short: bool, count: bool| {
@@ -115,7 +115,7 @@ pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], a
     if width(&segs) > room {
         return Vec::new();
     }
-    let mut x = content_w - width(&segs);
+    let mut x = main_col_start(content_w);
     segs.into_iter()
         .map(|(kind, text)| {
             let w = text.chars().count();
@@ -125,9 +125,9 @@ pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], a
         .collect()
 }
 
-/// The column the bar starts at, if any segment is shown.
-pub(super) fn start(segs: &[Segment]) -> Option<usize> {
-    segs.first().map(|seg| seg.start)
+/// The column just past the bar, if any segment is shown.
+pub(super) fn end(segs: &[Segment]) -> Option<usize> {
+    segs.last().map(|seg| seg.start + seg.width)
 }
 
 pub(super) fn draw(printer: &Printer, segs: &[Segment], active: KindFilter) {

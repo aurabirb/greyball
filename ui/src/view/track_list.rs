@@ -564,13 +564,9 @@ impl TrackList {
     }
 
     /// The title row: `<name>`, optionally followed by `  (<hint>)`; the search text being typed while it is.
-    fn title(&self, s: &Session, total: usize) -> String {
-        if let Some(input) = &self.input {
-            return format!("/{input}");
-        }
+    fn title(&self, s: &Session) -> String {
         if let Some(query) = self.query.as_deref().filter(|_| self.filterable()) {
-            let plural = if total == 1 { "" } else { "es" };
-            return format!("filter {query:?} ({total} match{plural})");
+            return format!("filter {query:?}");
         }
         let (name, hint) = match (self.kind, &self.open) {
             (ListKind::NowPlaying, _) => (s.playing_context_name(), None),
@@ -580,8 +576,7 @@ impl TrackList {
             _ => (None, None),
         };
         let heading = if self.at_playlists_top() && self.kinds == KindFilter::Albums { "Albums" } else { self.kind.label() };
-        let total = if self.kind == ListKind::Queue { s.queue_len() } else { total };
-        let name = name.unwrap_or_else(|| format!("{heading} ({total} {})", self.unit(total)));
+        let name = name.unwrap_or_else(|| heading.to_string());
         match hint {
             Some(hint) => format!("{name}  ({hint})"),
             None => name,
@@ -689,7 +684,7 @@ impl TrackList {
             let total = self.len(s);
             let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
             Arc::new(ListFrame {
-                title: self.title(s, total),
+                title: self.title(s),
                 rows: self.rows(s, self.state.offset, view_h),
                 total,
                 loading: self.loading(s),
@@ -753,19 +748,18 @@ impl TrackList {
         let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
-        let room = kind_bar::start(&bar).map_or(content_w, |start| start.saturating_sub(1)).saturating_sub(main_col_start(content_w));
-        if let Some(input) = &self.input {
-            title = typed_title(input, room);
-        } else if kind_bar::start(&bar).is_some() {
-            title = scroll_title(&title, room, 0);
-        }
+        let bar_end = kind_bar::end(&bar);
+        let left = bar_end.map_or(main_col_start(content_w), |end| end + 1);
+        let room = content_w.saturating_sub(left);
+        title = if self.input.is_some() { String::new() } else { scroll_title(&title, room, 0) };
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
-        if let (Some(start), Some(label)) = (kind_bar::start(&bar), hint(&[kind_key], "filter")) {
-            let x = start.saturating_sub(label.width() + 1);
-            if x > main_col_start(content_w) + title.width() {
-                printer.with_color(ColorStyle::title_primary(), |p| p.print((x, 0), &label));
-            }
+        if let Some(input) = &self.input {
+            let (typed, tip) = typed_title(input, room);
+            printer.with_color(ColorStyle::primary(), |p| p.print((left, 0), &typed));
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((left + typed.width(), 0), tip));
+        } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(title.width())) {
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &label));
         }
     }
 
@@ -883,11 +877,10 @@ impl TrackList {
     }
 }
 
-const HINT: &str = "  (Esc to cancel)";
+const HINT: &str = "  (esc to exit)";
 
-/// The query being typed with a block cursor, its end kept in view; the hint only when everything fits.
-fn typed_title(input: &str, room: usize) -> String {
-    let typed = format!("/{input}█");
-    let hinted = format!("{typed}{HINT}");
-    if hinted.width() <= room { hinted } else { tail_fit(&typed, room) }
+/// The query being typed with a block cursor, its end kept in view, and the hint only when everything fits.
+fn typed_title(input: &str, room: usize) -> (String, &'static str) {
+    let typed = format!("search: {input}█");
+    if typed.width() + HINT.width() <= room { (typed, HINT) } else { (tail_fit(&typed, room), "") }
 }

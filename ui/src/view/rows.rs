@@ -180,10 +180,7 @@ pub(super) const LIST_TITLE_ROWS: usize = 1;
 pub(super) fn draw_row_list(printer: &Printer, title: &str, back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
     // Reserve the rightmost column of the list body as a scrollbar gutter.
     let content_w = printer.size.x.saturating_sub(1);
-    let indent = main_col_start(content_w);
-    printer.with_color(ColorStyle::title_primary(), |p| {
-        p.print((0, 0), &pad(&format!("{:indent$}{title}", ""), content_w));
-    });
+    printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), &pad_right_aligned(title, content_w)));
     if back && back_button_fits(content_w) {
         printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
     }
