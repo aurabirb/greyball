@@ -66,11 +66,12 @@
   (`typed_title` + `HINT`, `track_list.rs` ~889: today `/{input}█` followed by the `(Esc to cancel)`
   hint) comes right after the filters, drawn in white, and reads `search: {input}█`; the `(esc to exit)`
   hint is drawn in red (keep or reword the current `(Esc to cancel)` text — the owner wrote "esc to exit").
-- [ ] Change the Now Playing window's docked hint from `[M] docked` to `[=]`, matching the Now Playing
-  marker: today the hint row shows the layout key as `[M] cycle layout` only while docked
-  (`hint(&[c.layout_key], "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) and
-  the mode flash names the placement (`Placement::word`, `ui/src/screen.rs`; `panes.rs` ~349-355). Find where
-  `[M] docked` is drawn and what `[=]` is on the Now Playing window, and render the same `[=]` there.
+- [ ] Now Playing window hint row: replace the docked-only `[M] cycle layout` hint (`hint(&[c.layout_key],
+  "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) with the hint for liking the
+  playing track, `[=] like` — `=` is the default key of `BuiltinAction::LikePlaying` (`core/src/app.rs`
+  ~126; `ui/src/items.rs` ~147: "like the playing track, or unlike it"). Resolve the key through the
+  binding like the other hints (`Chrome`'s `*_key` fields; add a `like_playing_key` there if missing) so a
+  rebound key shows correctly, and show it whether or not the window is docked.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
