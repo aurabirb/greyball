@@ -23,6 +23,8 @@ pub struct PanePatch {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Parsed {
     Ready(Command),
+    /// `search <query>` — runs in a Search window the shell picks.
+    Search(String),
     /// A command that takes no argument runs its built-in, as its key does.
     Builtin(BuiltinAction),
     /// `add-to-playlist <name>` — track is the current row.
@@ -70,7 +72,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
     }
     match cmd {
         Cmd::Builtin(action) => Ok(Parsed::Builtin(action)),
-        Cmd::Search => Ok(Parsed::Ready(Command::Search(rest.to_string()))),
+        Cmd::Search => Ok(Parsed::Search(rest.to_string())),
         Cmd::NewPlaylist => Ok(Parsed::Ready(Command::NewPlaylist(rest.to_string()))),
         Cmd::AddToPlaylist => Ok(Parsed::AddToPlaylist(rest.to_string())),
         Cmd::Open if rest.is_empty() => Ok(Parsed::OpenBrowse),
@@ -170,6 +172,7 @@ pub fn resolve(parsed: Parsed, session: &Session, selected: Option<TrackId>) -> 
         // Both handled in `view::commit_edit` — pane visibility/layout is
         // UI-local, not a `core::Command`.
         Parsed::ToggleWindow(_) => Err("window toggling is handled by the UI".into()),
+        Parsed::Search(_) => Err("a search is handled by the UI".into()),
         Parsed::Builtin(_) => Err("a built-in is handled by the UI".into()),
         Parsed::SetPaneLayout(_) => Err("pane layout is handled by the UI".into()),
         Parsed::ExportM3u { name, path } => {

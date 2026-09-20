@@ -8,7 +8,7 @@ use cursive::event::{Event, Key, MouseButton, MouseEvent};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, Command, HotkeyTarget, ItemKind, ListRef, PendingRows, Playlist, PlaylistId, Session, SourceId, TrackId};
+use core::{BrowseNode, Command, HotkeyTarget, ItemKind, ListRef, PendingRows, Playlist, PlaylistId, ResultSet, Session, SourceId, TrackId};
 
 use crate::keybindings;
 use crate::row::RowItem;
@@ -108,8 +108,8 @@ fn rank_filter(matcher: &SkimMatcherV2, text: &str, query: &str) -> Option<Filte
     Some(FilterRank(tier, std::cmp::Reverse(score)))
 }
 
-/// Revision, view generation, scroll offset, cursor, body height, whether searching.
-type FrameKey = (u64, u64, usize, usize, usize, bool);
+/// Revision, view generation, scroll offset, cursor, body height, the search text being typed.
+type FrameKey = (u64, u64, usize, usize, usize, Option<String>);
 
 /// One list window's rendered rows plus what the shell's readout shows about it.
 pub(super) struct ListFrame {
@@ -134,6 +134,10 @@ pub(super) struct TrackList {
     open: Open,
     /// The `/`-filter, live while typed; never empty.
     query: Option<String>,
+    /// Search only: the search whose results this window lists.
+    search: Option<u64>,
+    /// Search only: the query being typed in the title row.
+    input: Option<String>,
     /// Search only: which result kinds are listed.
     kinds: KindFilter,
     /// Bumped whenever `open`, `query` or `kinds` changes — the list-identity part of every memo key.
@@ -155,7 +159,7 @@ pub(super) struct TrackList {
     top: Memo<(u64, u64, u64, u64), Arc<[TopRow]>>,
     /// The top-level rows in this window's order before the kind filter, keyed on the playlists, remote playlists and hotkeys generations.
     top_all: Memo<(u64, u64, u64), Arc<[TopRow]>>,
-    /// Search only: the collection rows after the tracks, albums then playlists, keyed on the results and view generations.
+    /// Search only: the collection rows after the tracks, albums then playlists, keyed on the list and view generations.
     collections: Memo<(u64, u64), Arc<[TopRow]>>,
 }
 
@@ -174,6 +178,8 @@ impl TrackList {
             state: ListState::default(),
             open: Open::default(),
             query: None,
+            search: None,
+            input: None,
             view_gen: 0,
             last_click: None,
             matches: Memo::default(),
@@ -200,6 +206,25 @@ impl TrackList {
 
     pub(super) fn open_remote(&mut self, sid: SourceId, name: String, node: BrowseNode) {
         self.reset_for_new_list(Open::Remote(sid, name, node));
+    }
+
+    pub(super) fn search(&self) -> Option<u64> {
+        self.search
+    }
+
+    /// Lists search `id`'s results from its top; the kind filter stays.
+    pub(super) fn set_search(&mut self, id: Option<u64>) {
+        self.search = id;
+        self.reset_for_new_list(Open::TopLevel);
+    }
+
+    /// The search text being typed, shown in the title row; `None` once committed or cancelled.
+    pub(super) fn set_input(&mut self, text: Option<&str>) {
+        self.input = text.map(str::to_string);
+    }
+
+    fn results<'a>(&self, s: &'a Session) -> Option<&'a ResultSet> {
+        self.search.and_then(|id| s.results(id))
     }
 
     /// Sets the `/`-filter and, when it changed, restarts the selection at the top.
@@ -238,9 +263,9 @@ impl TrackList {
             let of = |kind| rows.iter().filter(|row| row.kind() == kind).count();
             return Some(vec![rows.len(), of(ItemKind::Album), of(ItemKind::Playlist)]);
         }
-        let hits = s.search_collections();
+        let hits = self.results(s).map_or(&[][..], ResultSet::collections);
         let of = |kind| hits.iter().filter(|hit| hit.1 == kind).count();
-        let (songs, albums, playlists) = (s.results_len(), of(ItemKind::Album), of(ItemKind::Playlist));
+        let (songs, albums, playlists) = (self.results(s).map_or(0, |r| r.tracks().len()), of(ItemKind::Album), of(ItemKind::Playlist));
         Some(vec![songs + albums + playlists, songs, albums, playlists])
     }
 
@@ -272,7 +297,7 @@ impl TrackList {
         s.removed_tracks_gen() + match (self.kind, &self.open) {
             (ListKind::NowPlaying, _) => s.context_gen(),
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_gen(sid, node),
-            (ListKind::Search, _) => s.results_gen(),
+            (ListKind::Search, _) => self.results(s).map_or(0, ResultSet::generation),
             (ListKind::Queue, _) => s.queue.queue_gen(),
             (ListKind::History, _) => s.queue.history_gen(),
             (ListKind::Playlists, Open::Local(_)) => s.playlists_gen(),
@@ -315,7 +340,7 @@ impl TrackList {
         match (self.kind, &self.open) {
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_ids(),
-            (ListKind::Search, _) if self.kinds.shows_tracks() => s.results_ids(),
+            (ListKind::Search, _) if self.kinds.shows_tracks() => self.results(s).map(ResultSet::track_ids).unwrap_or_default(),
             (ListKind::Search, _) => vec![],
             (ListKind::Queue, _) => s.queue_ids(),
             (ListKind::History, _) => s.history_ids(),
@@ -395,8 +420,8 @@ impl TrackList {
 
     /// A Search window's collection rows: albums, then playlists, as the kind filter admits.
     fn collections(&self, s: &Session) -> Arc<[TopRow]> {
-        self.collections.get_or_build((s.results_gen(), self.view_gen), || {
-            let hits = s.search_collections();
+        self.collections.get_or_build((self.list_gen(s), self.view_gen), || {
+            let hits = self.results(s).map_or(&[][..], ResultSet::collections);
             [ItemKind::Album, ItemKind::Playlist]
                 .into_iter()
                 .filter(|&kind| self.kinds.admits(kind))
@@ -408,7 +433,7 @@ impl TrackList {
 
     /// How many track rows a Search window lists before its collection rows.
     fn search_tracks(&self, s: &Session) -> usize {
-        if self.kinds.shows_tracks() { s.results_len() } else { 0 }
+        if self.kinds.shows_tracks() { self.results(s).map_or(0, |r| r.tracks().len()) } else { 0 }
     }
 
     fn top_row(&self, s: &Session) -> Option<TopRow> {
@@ -527,8 +552,11 @@ impl TrackList {
         self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel)
     }
 
-    /// The title row: `<name>`, optionally followed by `  (<hint>)`.
-    fn title(&self, s: &Session, total: usize, searching: bool) -> String {
+    /// The title row: `<name>`, optionally followed by `  (<hint>)`; the search text being typed while it is.
+    fn title(&self, s: &Session, total: usize) -> String {
+        if let Some(input) = &self.input {
+            return format!("/{input}  (Esc to cancel)");
+        }
         if let Some(query) = self.query.as_deref().filter(|_| self.filterable()) {
             let plural = if total == 1 { "" } else { "es" };
             return format!("filter {query:?} ({total} match{plural})");
@@ -536,7 +564,7 @@ impl TrackList {
         let (name, hint) = match (self.kind, &self.open) {
             (ListKind::NowPlaying, _) => (s.playing_context_name(), None),
             (_, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
-            (ListKind::Search, _) => (s.results_query().map(str::to_string), searching.then_some("Esc to cancel")),
+            (ListKind::Search, _) => (self.results(s).map(|r| r.query().to_string()), None),
             (ListKind::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
             _ => (None, None),
         };
@@ -572,17 +600,16 @@ impl TrackList {
             }
             (ListKind::NowPlaying, _) => track_rows(s.playing_context_window(offset, limit)),
             (_, Open::Remote(sid, _, node)) => track_rows(s.remote_playlist_window(sid, node, offset, limit)),
-            (ListKind::Search, _) if s.results_len() == 0 && s.search_collections().is_empty() => match s.results_query() {
+            (ListKind::Search, _) if self.results(s).is_none_or(ResultSet::is_empty) => match self.results(s) {
                 // A search ran and came back empty — say so.
-                Some(q) => vec![plain_row(format!(
-                    "no results for {q:?} — check the Log pane (:log) for source errors"
-                ))],
+                Some(r) => vec![plain_row(format!("no results for {:?} — check the Log pane (:log) for source errors", r.query()))],
                 None => vec![],
             },
             (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
             (ListKind::Search, _) => {
                 let tracks = self.search_tracks(s);
-                let mut rows = if offset < tracks { track_rows(s.results_window(offset, limit)) } else { vec![] };
+                let found = self.results(s).map_or(&[][..], ResultSet::tracks);
+                let mut rows = if offset < tracks { track_rows(found.iter().skip(offset).take(limit).cloned().collect()) } else { vec![] };
                 let room = limit.saturating_sub(rows.len());
                 let collections = self.collections(s);
                 rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|row| {
@@ -645,12 +672,12 @@ impl TrackList {
     /// This window's rows for a `rect`-sized window, rebuilt only when something they read changed.
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<ListFrame> {
         let (s, view_h) = (ctx.s, Self::body(rect).height());
-        let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, ctx.searching);
+        let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, self.input.clone());
         self.frame.get_or_build(key, || {
             let total = self.len(s);
             let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
             Arc::new(ListFrame {
-                title: self.title(s, total, ctx.searching),
+                title: self.title(s, total),
                 rows: self.rows(s, self.state.offset, view_h),
                 total,
                 loading: self.loading(s),

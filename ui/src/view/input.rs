@@ -10,6 +10,7 @@ use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, Sourc
 
 use crate::command;
 use crate::keybindings::{self, Action};
+use crate::screen::{Kind, ListKind};
 
 use super::MedleyView;
 use super::modal::Modal;
@@ -17,11 +18,13 @@ use super::notice::Notice;
 use super::panes::PANE_LAYOUT_CYCLE;
 use super::playlist_picker::PlaylistPicker;
 use super::track_list::TrackList;
+use super::window::WindowId;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Editing {
     None,
-    Search,
+    /// Typing this Search window's query in its title row.
+    Search(WindowId),
     CommandLine,
     /// Collecting the answers to a warnings-panel plugin's `setup_prompt`s, one per Enter.
     PluginSetup(SourceId, Vec<String>),
@@ -71,11 +74,12 @@ impl MedleyView {
         let kind = std::mem::replace(&mut self.editing, Editing::None);
         let text = std::mem::take(&mut self.buffer);
         match kind {
-            Editing::Search => {
-                if let Some(list) = self.windows.named("search").and_then(|id| self.windows[id].list_mut()) {
-                    list.show_top(None);
+            Editing::Search(id) => {
+                if let Some(list) = self.windows[id].list_mut() {
+                    list.set_input(None);
                 }
-                self.run(Command::Search(text))
+                self.start_search(id, &text);
+                EventResult::consumed()
             }
             Editing::CommandLine => {
                 let parsed = match command::parse(&text) {
@@ -85,6 +89,13 @@ impl MedleyView {
                 let open = self.active_list().and_then(TrackList::open_local);
                 if let command::Parsed::ToggleWindow(name) = parsed {
                     return self.handle_action(Action::ToggleWindow(name));
+                }
+                if let command::Parsed::Search(query) = parsed {
+                    if let Some(id) = self.search_window() {
+                        self.show(id);
+                        self.start_search(id, &query);
+                    }
+                    return EventResult::consumed();
                 }
                 if let command::Parsed::Builtin(action) = parsed {
                     let (selected, collection) = self.with_session(|s| {
@@ -177,6 +188,24 @@ impl MedleyView {
         }
     }
 
+    /// The Search window a search goes to: the active list when it is one, else a shown one, else the tab.
+    pub(super) fn search_window(&self) -> Option<WindowId> {
+        let is_search = |id: &WindowId| self.windows[*id].kind == Kind::List(ListKind::Search);
+        Some(self.active_list_id())
+            .filter(is_search)
+            .or_else(|| self.visible().into_iter().find(is_search))
+            .or_else(|| self.windows.named("search"))
+    }
+
+    /// Searches `text` from window `id`, dropping what it listed; blank text only drops.
+    fn start_search(&mut self, id: WindowId, text: &str) {
+        let Some(previous) = self.windows[id].list().map(TrackList::search) else { return };
+        let started = self.with_session_mut(|s| s.search(text, previous));
+        if let Some(list) = self.windows[id].list_mut() {
+            list.set_search(started);
+        }
+    }
+
     pub(crate) fn seek(&mut self, ms: i64) -> EventResult {
         let result = self.run(Command::Seek(ms));
         self.reveal_playing(false);
@@ -239,20 +268,15 @@ impl MedleyView {
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {
         match action {
             Action::Command(c) => self.run_confirmed(c),
-            // A list that can't be filtered locally sends `/` to the Search window's input instead.
+            // A list that can't be filtered locally sends `/` to a Search window's query instead.
             Action::FocusSearch => {
                 let id = self.active_list_id();
-                match self.windows[id].list().map(TrackList::is_results) {
-                    Some(false) => {
-                        self.editing = Editing::Filter;
-                        self.buffer.clear();
-                    }
-                    Some(true) => self.show(id),
-                    None => {
-                        if let Some(id) = self.windows.named("search") {
-                            self.show(id);
-                        }
-                    }
+                if self.windows[id].list().is_some_and(|list| !list.is_results()) {
+                    self.editing = Editing::Filter;
+                    self.buffer.clear();
+                } else if let Some(id) = self.search_window() {
+                    self.show(id);
+                    self.edit_search(id);
                 }
                 EventResult::consumed()
             }
@@ -276,6 +300,7 @@ impl MedleyView {
             Action::Tab(n) => {
                 if let Some(&id) = self.tabs.get(n) {
                     self.show(id);
+                    self.edit_search(id);
                 }
                 EventResult::consumed()
             }
@@ -332,10 +357,31 @@ impl MedleyView {
         }
     }
 
+    /// Takes the query input of Search window `id`, typed in its title row; any other window is left alone.
+    pub(super) fn edit_search(&mut self, id: WindowId) {
+        if self.windows[id].kind == Kind::List(ListKind::Search) {
+            self.editing = Editing::Search(id);
+            self.buffer.clear();
+            self.write_search_input(id);
+        }
+    }
+
+    fn write_search_input(&mut self, id: WindowId) {
+        if let Some(list) = self.windows[id].list_mut() {
+            list.set_input(Some(&self.buffer));
+        }
+    }
+
     /// Drops the text being typed; a cancelled filter shows the full list again.
     fn cancel_edit(&mut self) {
-        if self.editing == Editing::Filter {
-            self.set_filter(None);
+        match self.editing {
+            Editing::Filter => self.set_filter(None),
+            Editing::Search(id) => {
+                if let Some(list) = self.windows[id].list_mut() {
+                    list.set_input(None);
+                }
+            }
+            _ => {}
         }
         self.editing = Editing::None;
         self.buffer.clear();
@@ -347,15 +393,16 @@ impl MedleyView {
             return None;
         }
         let outside_click = matches!(event, Event::Mouse { event: MouseEvent::Press(_), .. });
+        let search = matches!(self.editing, Editing::Search(_));
         // A digit as Search's first keystroke is a screen switch, not a query.
-        let leading_digit = self.editing == Editing::Search
-            && self.buffer.is_empty()
-            && matches!(event, Event::Char(c) if c.is_ascii_digit());
+        let leading_digit = search && self.buffer.is_empty() && matches!(event, Event::Char(c) if c.is_ascii_digit());
         if outside_click || leading_digit {
             self.cancel_edit();
             return None;
         }
         let edited = match event {
+            // The `/` that opened the query is not part of it.
+            Event::Char('/') if search && self.buffer.is_empty() => false,
             Event::Char(c) => {
                 self.buffer.push(*c);
                 true
@@ -371,22 +418,26 @@ impl MedleyView {
             Event::Key(Key::Enter) => return Some(self.commit_edit()),
             _ => false,
         };
-        // The filter narrows live as you type.
-        if edited && self.editing == Editing::Filter {
-            let query = self.buffer.clone();
-            self.set_filter(Some(&query));
+        // The filter narrows, and the search window's title follows, live as you type.
+        match self.editing {
+            Editing::Filter if edited => {
+                let query = self.buffer.clone();
+                self.set_filter(Some(&query));
+            }
+            Editing::Search(id) if edited => self.write_search_input(id),
+            _ => {}
         }
         Some(EventResult::consumed())
     }
 
-    /// The text being typed, prompt included.
+    /// The text being typed in the corner slot, prompt included; a search query is typed in its window's title row instead.
     pub(super) fn input_line(&self) -> Option<String> {
         match &self.editing {
-            Editing::Search | Editing::Filter => Some(format!("/{}", self.buffer)),
+            Editing::Filter => Some(format!("/{}", self.buffer)),
             Editing::CommandLine => Some(format!(":{}", self.buffer)),
             Editing::PluginSetup(..) => Some(format!("> {}", self.buffer)),
             Editing::CacheDir => Some(format!("cache dir> {}", self.buffer)),
-            Editing::None => None,
+            Editing::None | Editing::Search(_) => None,
         }
     }
 

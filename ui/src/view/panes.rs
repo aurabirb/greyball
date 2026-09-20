@@ -7,7 +7,6 @@ use core::{Axis, HotkeyTarget, PaneLayoutConfig, Session, Side};
 use crate::screen::{HELP, Kind, ListKind, Placement};
 
 use super::{Focus, MedleyView};
-use super::input::Editing;
 use super::track_list::{TrackList, top_rows};
 use super::window::WindowId;
 
@@ -149,8 +148,27 @@ pub(super) fn draw_float_frame(printer: &Printer, frame: Rect) {
 }
 
 impl MedleyView {
-    /// Closes `id` if it is open; its focus goes to what it opened over, else the next shown window down the stack, else the tab.
+    /// Closes `id` if it is open; a Search window's results go with it.
     pub(super) fn close_window(&mut self, id: WindowId) -> bool {
+        if !self.hide_window(id) {
+            return false;
+        }
+        self.drop_search(id);
+        true
+    }
+
+    /// A closed Search window's results are no longer wanted.
+    fn drop_search(&mut self, id: WindowId) {
+        if let Some(search) = self.windows[id].list().and_then(TrackList::search) {
+            self.with_session_mut(|s| s.forget_search(search));
+            if let Some(list) = self.windows[id].list_mut() {
+                list.set_search(None);
+            }
+        }
+    }
+
+    /// Takes `id` out of `open` if it is there; its focus goes to what it opened over, else the next shown window down the stack, else the tab.
+    fn hide_window(&mut self, id: WindowId) -> bool {
         let Some(i) = self.open.iter().position(|&(open, _)| open == id) else { return false };
         let (_, prior) = self.open.remove(i);
         self.windows[id].blur();
@@ -182,7 +200,7 @@ impl MedleyView {
         }
     }
 
-    /// Brings `id` into view: its tab, else open and focused; a Search list takes the query input at once, same as `/`.
+    /// Brings `id` into view: its tab, else open and focused.
     pub(super) fn show(&mut self, id: WindowId) {
         if self.windows.placement(id) == Placement::Tabbed {
             self.activate(id);
@@ -192,10 +210,6 @@ impl MedleyView {
             }
             self.focus_window(id);
             self.kick_playlists(id);
-        }
-        if self.windows[id].kind == Kind::List(ListKind::Search) {
-            self.editing = Editing::Search;
-            self.buffer.clear();
         }
     }
 
@@ -305,10 +319,13 @@ impl MedleyView {
                 }
                 active
             }
-            None => self.close_window(id),
+            None => self.hide_window(id),
         };
         self.windows.place(id, placement);
         let show = shown && (cover || placement != Placement::Screen);
+        if shown && !show {
+            self.drop_search(id);
+        }
         if placement == Placement::Tabbed {
             self.tabs.push(id);
             if show {

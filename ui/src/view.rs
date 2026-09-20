@@ -284,14 +284,14 @@ impl MedleyView {
     }
 
     fn ctx<'a>(&'a self, s: &'a Session) -> Ctx<'a> {
-        Ctx { s, pane_cfg: self.pane_cfg, searching: self.editing == Editing::Search, placements: self.windows.placements() }
+        Ctx { s, pane_cfg: self.pane_cfg, placements: self.windows.placements() }
     }
 
     /// Offers `event` to each of `ids` under one session lock; the first window not ignoring it, and its outcome.
     fn send(&mut self, ids: &[WindowId], event: &Event) -> Option<(WindowId, WindowOutcome)> {
         let session = self.session.clone();
         let guard = session.lock().unwrap();
-        self.windows.send(ids, event, (&guard, self.pane_cfg, self.editing == Editing::Search))
+        self.windows.send(ids, event, (&guard, self.pane_cfg))
     }
 
     fn apply(&mut self, outcome: WindowOutcome) -> EventResult {

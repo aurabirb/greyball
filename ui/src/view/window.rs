@@ -29,8 +29,6 @@ pub(super) struct WindowId(usize);
 pub(super) struct Ctx<'a> {
     pub(super) s: &'a Session,
     pub(super) pane_cfg: PaneLayoutConfig,
-    /// A search query is being typed.
-    pub(super) searching: bool,
     pub(super) placements: &'a Placements,
 }
 
@@ -424,9 +422,9 @@ impl Windows {
         &mut self,
         ids: &[WindowId],
         event: &Event,
-        (s, pane_cfg, searching): (&Session, PaneLayoutConfig, bool),
+        (s, pane_cfg): (&Session, PaneLayoutConfig),
     ) -> Option<(WindowId, WindowOutcome)> {
-        let ctx = Ctx { s, pane_cfg, searching, placements: &self.placements };
+        let ctx = Ctx { s, pane_cfg, placements: &self.placements };
         ids.iter().find_map(|&id| match self.items[id.0].on_event(event, &ctx) {
             WindowOutcome::Ignored => None,
             outcome => Some((id, outcome)),
