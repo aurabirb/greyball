@@ -7,6 +7,7 @@
 //!   sequence carrying exactly the loaded `(source, uri)`. Used by the M1c
 //!   integration test.
 
+mod fmp4;
 mod null;
 mod rodio_player;
 pub mod spectrum;

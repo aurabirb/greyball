@@ -152,6 +152,7 @@ struct StreamingReader {
     pos: u64,
     total_len: u64,
     state: Arc<StreamState>,
+    patch: Option<(u64, [u8; 4])>,
 }
 
 impl StreamingReader {
@@ -160,7 +161,7 @@ impl StreamingReader {
     /// bookkeeping) in the same type `LoadedTrack` expects.
     fn ready(file: File) -> std::io::Result<Self> {
         let total_len = file.metadata()?.len();
-        Ok(Self { file, pos: 0, total_len, state: Arc::new(StreamState::ready(total_len)) })
+        Ok(Self { file, pos: 0, total_len, state: Arc::new(StreamState::ready(total_len)), patch: None })
     }
 }
 
@@ -175,6 +176,13 @@ impl Read for StreamingReader {
                 let avail = (written - self.pos).min(buf.len() as u64) as usize;
                 self.file.seek(SeekFrom::Start(self.pos))?;
                 let n = self.file.read(&mut buf[..avail])?;
+                if let Some((off, bytes)) = self.patch {
+                    for (i, b) in bytes.iter().enumerate() {
+                        if let Some(slot) = (off + i as u64).checked_sub(self.pos).and_then(|k| buf[..n].get_mut(k as usize)) {
+                            *slot = *b;
+                        }
+                    }
+                }
                 self.pos += n as u64;
                 return Ok(n);
             }
@@ -381,8 +389,10 @@ fn worker(
             Ok(Cmd::Toggle) => toggle(&audio, &inner, &bus),
             Ok(Cmd::Seek(ms)) => {
                 if let Some(sink) = &audio.sink {
-                    let _ = sink.try_seek(Duration::from_millis(ms as u64));
-                    inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms;
+                    match sink.try_seek(Duration::from_millis(ms as u64)) {
+                        Ok(()) => inner.lock().unwrap_or_else(|e| e.into_inner()).position_ms = ms,
+                        Err(e) => log::debug!("rodio: seek to {ms} ms failed: {e}"),
+                    }
                 }
             }
             Ok(Cmd::SetVolume(v)) => {
@@ -539,7 +549,10 @@ fn resolve_and_decode(
             open_media(media, media_cache, source, r, uri, cache, bus)?
         };
 
+    let mut reader = reader;
     let total_len = reader.total_len;
+    reader.patch = crate::fmp4::duration_patch(&mut reader, total_len);
+    reader.pos = 0;
     let decoder = rodio::Decoder::builder()
         .with_data(reader)
         .with_byte_len(total_len)
@@ -744,7 +757,7 @@ fn open_streaming_url(
         cache_state.finish(result.err());
     });
 
-    Ok((StreamingReader { file: read_file, pos: 0, total_len: len, state }, tmp))
+    Ok((StreamingReader { file: read_file, pos: 0, total_len: len, state, patch: None }, tmp))
 }
 
 /// Runs on `open_streaming_url`'s background thread: copies the response
