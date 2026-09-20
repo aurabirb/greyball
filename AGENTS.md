@@ -50,6 +50,10 @@ working-agreement rule is established, add it here directly rather than only in 
   <scratch>.png`, and view the PNG with the Read tool. Write PNGs outside the repo.
 - Always clean up afterward: `tmux send-keys -t medley 'q'` then `tmux kill-session -t medley`, and
   remove any debug log file you redirected to.
+- Only kill tmux sessions (and Alacritty windows) you started yourself, by name — never
+  `tmux kill-server`, never kill a session you didn't create (the owner's own sessions, e.g. `0`,
+  are live; check `tmux ls` and match on the name you chose). Give your session a distinct name if
+  another agent may be running one.
 
 ## Code style
 - Comments: minimal. One short line max, only for non-obvious WHY. No multi-paragraph doc comments,
