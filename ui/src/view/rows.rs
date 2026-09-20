@@ -254,28 +254,28 @@ fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usiz
 type Layout = [Option<(usize, usize, bool)>; 5];
 
 fn column_layout(width: usize) -> Layout {
-    let show_source = width + ROW_MARK_W + 1 >= SOURCE_MIN_LIST_W;
-    let source_w = if show_source { SOURCE_COL_W + 1 } else { 0 };
-    let fixed = TAGS_COL_W + HOTKEYS_COL_W + 1 + source_w + DURATION_COL_W + 1;
+    let wide = width + ROW_MARK_W + 1 >= WIDE_MIN_LIST_W;
+    let (hotkeys_w, source_w) = if wide { (HOTKEYS_COL_W + 1, SOURCE_COL_W + 1) } else { (0, 0) };
+    let fixed = TAGS_COL_W + hotkeys_w + 1 + source_w + DURATION_COL_W;
     if width <= fixed {
         return [None; 5];
     }
     let main_w = width - fixed;
     let main_start = TAGS_COL_W;
     let hotkeys_start = main_start + main_w + 1;
-    let source_start = hotkeys_start + HOTKEYS_COL_W + 1;
-    let duration_start = if show_source { source_start + SOURCE_COL_W + 1 } else { source_start };
+    let source_start = hotkeys_start + hotkeys_w;
+    let duration_start = source_start + source_w;
     [
         Some((0, TAGS_COL_W, true)),
         Some((main_start, main_w, false)),
-        Some((hotkeys_start, HOTKEYS_COL_W, false)),
-        show_source.then_some((source_start, SOURCE_COL_W, false)),
+        wide.then_some((hotkeys_start, HOTKEYS_COL_W, false)),
+        wide.then_some((source_start, SOURCE_COL_W, false)),
         Some((duration_start, DURATION_COL_W, false)),
     ]
 }
 
-/// Narrowest list (including mark and scrollbar gutter) that still shows the source column.
-const SOURCE_MIN_LIST_W: usize = 80;
+/// Narrowest list (including mark and scrollbar gutter) that still shows the hotkeys and source columns.
+const WIDE_MIN_LIST_W: usize = 80;
 
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
 const ROW_MARK_W: usize = 2;
