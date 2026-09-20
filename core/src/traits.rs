@@ -75,6 +75,10 @@ pub trait Source: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+    /// Whether `saved_albums` lists anything for this source.
+    fn has_saved_albums(&self) -> bool {
+        false
+    }
     /// Blocking, paced by `want` like `browse`: the user's saved albums as `BrowsePage.folders`; default has none.
     fn saved_albums(&self, _want: usize) -> Result<BrowsePage> {
         Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], partial: false, errored: false })

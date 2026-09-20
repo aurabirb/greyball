@@ -237,6 +237,10 @@ impl Source for SpotifySource {
         self.is_synthetic(node)
     }
 
+    fn has_saved_albums(&self) -> bool {
+        true
+    }
+
     fn saved_albums(&self, want: usize) -> Result<BrowsePage> {
         let api = self.api.clone();
         let (folders, partial) = self.saved_albums.snapshot(&self.bus, want, move |offset| {
@@ -246,7 +250,7 @@ impl Source for SpotifySource {
                 hits: page.hits.into_iter().map(|(id, name)| (name, BrowseNode::Path(format!("{ALBUM_PREFIX}{id}")))).collect(),
             })
         });
-        Ok(BrowsePage { title: "albums".to_string(), tracks: vec![], folders, partial, errored: self.saved_albums.errored() })
+        Ok(BrowsePage { title: String::new(), tracks: vec![], folders, partial, errored: self.saved_albums.errored() })
     }
 
     fn browse(&self, node: &BrowseNode, want: usize) -> Result<BrowsePage> {

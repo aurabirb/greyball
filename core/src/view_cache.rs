@@ -205,6 +205,17 @@ struct RemotePlaylistDeps {
     cache: TracksCache,
 }
 
+/// Store-key suffix that keeps a source's saved albums apart from its playlist folders.
+const ALBUMS_KEY_SUFFIX: &str = "#albums";
+
+/// One folder-list fetch: log label, store key, the source call, and whether it is the `Root` browse (which resumes a frozen walk and settles only on a real playlist).
+struct FolderWalk {
+    what: &'static str,
+    key: String,
+    fetch: fn(&dyn Source) -> crate::Result<BrowsePage>,
+    walks_root: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct ViewCache {
     results: Vec<TrackId>,
@@ -363,19 +374,33 @@ impl ViewCache {
     /// retriable, at most once per `PLAYLISTS_RETRY_FLOOR`, and never
     /// replaces a longer list already known.
     pub(crate) fn ensure_remote_playlists(&self, source: &SourceId, ctx: RemoteCtx) {
-        self.ensure_folders(&self.remote_playlists, source, ctx, false);
-        self.ensure_folders(&self.remote_albums, source, ctx, true);
+        let playlists = FolderWalk {
+            what: "playlists",
+            key: source.to_string(),
+            fetch: |src| src.browse(&BrowseNode::Root, usize::MAX),
+            walks_root: true,
+        };
+        self.ensure_folders(&self.remote_playlists, source, ctx, playlists);
+        if ctx.sources.get(source).is_some_and(|src| src.has_saved_albums()) {
+            let albums = FolderWalk {
+                what: "albums",
+                key: format!("{source}{ALBUMS_KEY_SUFFIX}"),
+                fetch: |src| src.saved_albums(usize::MAX),
+                walks_root: false,
+            };
+            self.ensure_folders(&self.remote_albums, source, ctx, albums);
+        }
     }
 
-    /// The fetch behind `ensure_remote_playlists`: `Source::browse(Root)` into `map`, or `Source::saved_albums` (persisted under `<source>#albums`) when `albums`.
+    /// The single-flight fetch behind `ensure_remote_playlists`, one walk per folder list.
     fn ensure_folders(
         &self,
         map: &Arc<Mutex<HashMap<SourceId, RemotePlaylistsEntry>>>,
         source: &SourceId,
         ctx: RemoteCtx,
-        albums: bool,
+        walk: FolderWalk,
     ) {
-        let (what, key) = if albums { ("albums", format!("{source}#albums")) } else { ("playlists", source.to_string()) };
+        let FolderWalk { what, key, fetch, walks_root } = walk;
         let Some(source_handle) = ctx.sources.get(source).cloned() else {
             return;
         };
@@ -410,12 +435,13 @@ impl ViewCache {
         let store = ctx.store.clone();
 
         std::thread::spawn(move || {
-            // A previous failed walk froze itself; resume it.
-            source_handle.retry_browse(&BrowseNode::Root);
+            if walks_root {
+                // A previous failed walk froze itself; resume it.
+                source_handle.retry_browse(&BrowseNode::Root);
+            }
             let failure = loop {
                 // Small list, no scroll position to pace against — load it all.
-                let fetched = if albums { source_handle.saved_albums(usize::MAX) } else { source_handle.browse(&BrowseNode::Root, usize::MAX) };
-                let page = match fetched {
+                let page = match fetch(source_handle.as_ref()) {
                     Ok(page) => page,
                     Err(e) => break Some(e.to_string()),
                 };
@@ -427,7 +453,7 @@ impl ViewCache {
                         entry.set_folders(page.folders.clone());
                     }
                     if clean {
-                        entry.settled = albums || page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
+                        entry.settled = !walks_root || page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
                     }
                 }
                 bus.send(CoreEvent::PlaylistsChanged);
