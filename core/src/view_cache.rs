@@ -503,6 +503,12 @@ impl ViewCache {
         ids
     }
 
+    /// The walked ids of `(source, node)`, empty until a hydrated entry is revalidated; no pending adds, so indices are stable.
+    pub fn remote_playlist_confirmed_ids(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) -> Vec<TrackId> {
+        self.ensure_remote_playlist_tracks(source, node, 0, ctx);
+        self.remote_playlist_cached(source, node, |e| if e.revalidated { e.tracks.iter().map(|t| t.id).collect() } else { Vec::new() }).unwrap_or_default()
+    }
+
     /// Cheap count of a remote playlist's ingested tracks so far.
     pub fn remote_playlist_len(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) -> usize {
         self.ensure_remote_playlist_tracks(source, node, 0, ctx);

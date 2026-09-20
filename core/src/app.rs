@@ -51,6 +51,11 @@ struct PendingEnqueue {
     deadline: Instant,
 }
 
+fn queued_note(name: &str, n: usize, capped: bool) -> String {
+    let cut = if capped { format!(", first {ENQUEUE_CAP} only") } else { String::new() };
+    format!("queued {name} ({n} tracks{cut})")
+}
+
 /// Build the synthetic playback-fallback `Rendition` for `track`, if any of
 /// its real renditions already has a `MediaCache` entry — routed through the
 /// `"local"` source, which already reads straight off disk with no
@@ -547,6 +552,7 @@ pub struct Session {
     context_gen: u64,
 
     pending_enqueues: Vec<PendingEnqueue>,
+    enqueue_timer: Option<Instant>,
 }
 
 impl Session {
@@ -646,6 +652,7 @@ impl Session {
             last_setup: HashMap::new(),
             context_gen: 0,
             pending_enqueues: Vec::new(),
+            enqueue_timer: None,
         };
         session.refresh_plugin_health();
         session
@@ -747,15 +754,23 @@ impl Session {
                     Ok(Dispatch::Done(self.enqueue_collection(&name, &ids)))
                 }
                 HotkeyTarget::Remote(source, node) => {
+                    if !self.sources.contains_key(&source) {
+                        return Ok(Dispatch::Refused(format!("could not load {name}")));
+                    }
+                    if self.pending_enqueues.iter().any(|j| j.source == source && j.node == node) {
+                        return Ok(Dispatch::Refused(format!("already loading {name}")));
+                    }
                     self.view.ensure_remote_playlist_loading(&source, &node, self.remote_ctx());
-                    self.pending_enqueues.push(PendingEnqueue { source, node, name: name.clone(), appended: 0, deadline: Instant::now() + ENQUEUE_TIMEOUT });
-                    let bus = self.bus.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(ENQUEUE_TIMEOUT);
-                        bus.send(CoreEvent::QueueChanged);
-                    });
-                    let notes = self.advance_enqueues();
-                    Ok(Dispatch::Done(if notes.is_empty() { format!("loading {name} …") } else { notes.join("; ") }))
+                    self.pending_enqueues.push(PendingEnqueue { source: source.clone(), node: node.clone(), name: name.clone(), appended: 0, deadline: Instant::now() + ENQUEUE_TIMEOUT });
+                    let mut own = None;
+                    for (s, n, note) in self.advance_enqueues() {
+                        if s == source && n == node {
+                            own = Some(note);
+                        } else {
+                            self.bus.send(CoreEvent::Flash(note));
+                        }
+                    }
+                    Ok(Dispatch::Done(own.unwrap_or_else(|| format!("loading {name} …"))))
                 }
                 HotkeyTarget::Builtin(_) => Ok(Dispatch::Refused("not a playlist or album".into())),
             },
@@ -781,6 +796,8 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::ClearQueue => {
+                self.pending_enqueues.clear();
+                self.touch();
                 self.queue.clear();
                 Ok(Dispatch::Ok)
             }
@@ -1348,62 +1365,97 @@ impl Session {
         }
         let n = ids.len().min(ENQUEUE_CAP);
         self.queue.append_many(&ids[..n]);
-        let capped = if n < ids.len() { format!(", first {ENQUEUE_CAP} only") } else { String::new() };
-        format!("queued {name} ({n} tracks{capped})")
+        queued_note(name, n, n < ids.len())
     }
 
-    /// Appends what each pending enqueue's list has loaded since; the messages of the ones that ended.
-    fn advance_enqueues(&mut self) -> Vec<String> {
+    /// Appends what each pending enqueue's list has loaded since; the `(source, node, message)` of the ones that ended.
+    fn advance_enqueues(&mut self) -> Vec<(SourceId, BrowseNode, String)> {
         let mut notes = Vec::new();
         let now = Instant::now();
         for mut job in std::mem::take(&mut self.pending_enqueues) {
-            let ids = self.remote_playlist_track_ids(&job.source, &job.node);
+            // Settled state first: a snapshot taken after it is complete.
+            let errored = self.view.remote_playlist_errored(&job.source, &job.node);
+            let loading = self.remote_playlist_loading(&job.source, &job.node);
+            let ids = self.view.remote_playlist_confirmed_ids(&job.source, &job.node, self.remote_ctx());
             let take = ids.len().min(ENQUEUE_CAP);
             if take > job.appended {
                 self.queue.append_many(&ids[job.appended..take]);
                 job.appended = take;
             }
-            let queued = job.appended;
-            let name = &job.name;
-            if take == ENQUEUE_CAP && ids.len() > ENQUEUE_CAP {
-                notes.push(format!("queued {name} ({queued} tracks, first {ENQUEUE_CAP} only)"));
-            } else if self.view.remote_playlist_errored(&job.source, &job.node) {
-                notes.push(format!("could not load {name} ({queued} tracks queued)"));
-            } else if !self.remote_playlist_loading(&job.source, &job.node) {
-                notes.push(if queued == 0 { format!("nothing to queue from {name}") } else { format!("queued {name} ({queued} tracks)") });
+            let (queued, name) = (job.appended, &job.name);
+            let note = if take == ENQUEUE_CAP && ids.len() > ENQUEUE_CAP {
+                Some(queued_note(name, queued, true))
+            } else if errored {
+                Some(format!("could not load {name} ({queued} tracks queued)"))
+            } else if !loading {
+                Some(if queued == 0 { format!("nothing to queue from {name}") } else { queued_note(name, queued, false) })
             } else if now >= job.deadline {
-                notes.push(format!("timed out loading {name} ({queued} tracks queued)"));
+                Some(format!("gave up loading {name} ({queued} tracks queued)"))
             } else {
-                self.view.ensure_remote_playlist_loading(&job.source, &job.node, self.remote_ctx());
-                self.pending_enqueues.push(job);
+                None
+            };
+            match note {
+                Some(note) => notes.push((job.source, job.node, note)),
+                None => {
+                    self.view.ensure_remote_playlist_loading(&job.source, &job.node, self.remote_ctx());
+                    self.pending_enqueues.push(job);
+                }
             }
         }
+        self.arm_enqueue_timer();
         self.touch();
         notes
+    }
+
+    /// Wakes the session at the earliest pending deadline; a timer already armed for it or sooner is enough.
+    fn arm_enqueue_timer(&mut self) {
+        let Some(earliest) = self.pending_enqueues.iter().map(|j| j.deadline).min() else {
+            return;
+        };
+        let now = Instant::now();
+        if self.enqueue_timer.is_some_and(|armed| armed > now && armed <= earliest) {
+            return;
+        }
+        self.enqueue_timer = Some(earliest);
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(earliest.saturating_duration_since(Instant::now()));
+            bus.send(CoreEvent::QueueChanged);
+        });
     }
 
     fn notify_enqueues(&mut self) {
         if self.pending_enqueues.is_empty() {
             return;
         }
-        for note in self.advance_enqueues() {
+        for (.., note) in self.advance_enqueues() {
             self.bus.send(CoreEvent::Flash(note));
         }
+    }
+
+    fn queue_continues(&self) -> Option<&PlaybackContext> {
+        let ctx = self.shown.context.as_ref()?;
+        let has_next = if self.queue.get_shuffle() { !ctx.tracks.is_empty() } else { ctx.tracks.get(ctx.index + 1).is_some() };
+        has_next.then_some(ctx)
+    }
+
+    /// Row count of `queue_info_rows`, without building them.
+    pub fn queue_info_len(&self) -> usize {
+        self.pending_enqueues.len() + usize::from(self.queue_continues().is_some())
     }
 
     /// The Queue window's non-selectable rows after its tracks: pending loads, then what plays after the queue.
     pub fn queue_info_rows(&self) -> Vec<String> {
         let mut rows: Vec<String> = self.pending_enqueues.iter().map(|job| format!("loading {} …", job.name)).collect();
-        if let Some(ctx) = self.shown.context.as_ref() {
+        if let Some(ctx) = self.queue_continues() {
             let next = if self.queue.get_shuffle() { ctx.shuffle_bag.last().copied() } else { Some(ctx.index + 1) }
                 .and_then(|i| ctx.tracks.get(i))
                 .and_then(|&id| self.store.get_track(id).ok().flatten());
             let name = ctx.name.as_deref().unwrap_or("playing list");
-            match next {
-                Some(t) => rows.push(format!("Continues: {name} — {}", t.display_name())),
-                None if self.queue.get_shuffle() && !ctx.tracks.is_empty() => rows.push(format!("Continues: {name}")),
-                None => {}
-            }
+            rows.push(match next {
+                Some(t) => format!("Continues: {name} — {}", t.display_name()),
+                None => format!("Continues: {name}"),
+            });
         }
         rows
     }

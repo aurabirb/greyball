@@ -105,14 +105,18 @@ its own single-flight walk beside the playlist folders (`ensure_folders`, used o
 
 The queue stays `VecDeque<TrackId>`: tracks only, no new entry type. Enqueuing a collection resolves
 it to tracks and appends them.
-
-- One command, `Command::EnqueueCollection(HotkeyTarget, String)` (the target and its display name), serves a Search row, a Playlists row
-  (album or playlist) and an opened collection. A local playlist appends its tracks at once.
-- A remote collection may still be paging in (`remote_playlist_track_ids(source, node)`). The
-  session holds a pending-enqueue job for it, driven by the existing playlists-changed event (no
-  polling, nothing blocks the UI): as pages land, the newly loaded tracks are appended in order. The
-  job finishes when the list settles, and is dropped with a flashed notice when it errors or hits a
-  60 s timeout (a one-shot timer thread sends `QueueChanged`, so no polling), reported through `CoreEvent::Flash`. The tracks it appends are ordinary queue tracks (removable, reorderable, persisted like
+- One command, `Command::EnqueueCollection(HotkeyTarget, String)` (the target and its display name), serves a Search row or a Playlists row
+  (album or playlist); `q` on a track row queues that one track. A local playlist appends its tracks at once; a second job for a
+  collection already loading is refused.
+- A remote collection may still be paging in. The session holds a pending-enqueue job for it, driven
+  by the existing playlists-changed event (no polling, nothing blocks the UI): as pages land, the
+  newly loaded tracks are appended in order, read from the confirmed walked list
+  (`ViewCache::remote_playlist_confirmed_ids`: empty until a cache hydrated from a previous session
+  is revalidated, and without pending adds), so the appended count always indexes the list it
+  counts. The job finishes when the list settles, and is dropped with a flashed notice when it
+  errors or hits a 60 s timeout; on timeout it only gives up (the walk continues in the cache). One
+  timer thread per job set, armed for the earliest deadline, sends `QueueChanged` and is re-armed for
+  the next; notices go through `CoreEvent::Flash`. Clearing the queue cancels the jobs. The tracks it appends are ordinary queue tracks (removable, reorderable, persisted like
   any other).
 - A job appends when tracks are loaded, so tracks queued meanwhile land before its later tracks; this
   is accepted and not worked around with placeholder entries.

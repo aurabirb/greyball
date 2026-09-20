@@ -161,7 +161,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
 
 ## Queue info rows
 
-A Queue window's rows are its tracks, then `Session::queue_info_rows` (`loading <name> …` per pending enqueue, `Continues: …`), drawn with `plain_row` and counted in `len`, so the cursor can rest on them; `visible_track_ids` never holds them, so `selected_track` is `None` there and every action on a track ignores the row. They change without `queue_gen` moving, so the frame is keyed on `revision`, which every job change bumps. `q` on a collection row (`TrackList::selected_collection`: a Search or Playlists row, or the open collection) runs `Command::EnqueueCollection`.
+A Queue window's rows are its tracks, then `Session::queue_info_rows` (`loading <name> …` per pending enqueue, `Continues: …`), drawn with `plain_row` and counted in `len`, so the cursor can rest on them; `visible_track_ids` never holds them, so `selected_track` is `None` there and every action on a track ignores the row. They change without `queue_gen` moving, so the frame is keyed on `revision`, which every job change bumps. `q` on a collection row (`TrackList::selected_collection`: a Search or Playlists row) runs `Command::EnqueueCollection`.
 
 ## Memos
 

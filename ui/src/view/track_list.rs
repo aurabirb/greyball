@@ -452,12 +452,9 @@ impl TrackList {
         }
     }
 
-    /// The collection the cursor is on, or the one open, with its display name: what `q` enqueues off a track row.
+    /// The Search or Playlists collection row under the cursor, with its display name: what `q` enqueues when no track is selected.
     pub(super) fn selected_collection(&self, s: &Session) -> Option<(HotkeyTarget, String)> {
-        if let Some(target) = self.open_target() {
-            return self.context_name(s).map(|name| (target, name));
-        }
-        if !matches!(self.kind, ListKind::Playlists | ListKind::Search) {
+        if self.open_target().is_some() || !matches!(self.kind, ListKind::Playlists | ListKind::Search) {
             return None;
         }
         let row = self.top_row(s)?;
@@ -477,7 +474,7 @@ impl TrackList {
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_len(),
             (ListKind::Search, _) => self.search_tracks(s) + self.collections(s).len(),
-            (ListKind::Queue, _) => s.queue_len() + s.queue_info_rows().len(),
+            (ListKind::Queue, _) => s.queue_len() + s.queue_info_len(),
             (ListKind::History, _) => s.queue.history_len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
             (ListKind::Playlists, Open::TopLevel) => self.top(s).len(),
