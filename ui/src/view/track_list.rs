@@ -624,7 +624,8 @@ impl TrackList {
                 let room = limit.saturating_sub(rows.len());
                 let collections = self.collections(s);
                 rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|row| {
-                    plain_row(format!("[{}] {}", kind_bar::noun(row.kind()), top_row_name(row, &[])))
+                    let name = top_row_name(row, &[]);
+                    plain_row(if self.kinds == KindFilter::All { format!("[{}] {name}", kind_bar::noun(row.kind())) } else { name })
                 }));
                 rows
             }
@@ -654,7 +655,7 @@ impl TrackList {
                                 let count = p.map(|p| p.items.len()).unwrap_or(0);
                                 plain_row(format!("{name}  ({count} tracks)"))
                             }
-                            TopRow::Remote(sid, name, _, ItemKind::Album) => plain_row(format!("[album] [{sid}] {name}")),
+                            TopRow::Remote(sid, name, _, ItemKind::Album) if self.kinds == KindFilter::All => plain_row(format!("[album] [{sid}] {name}")),
                             TopRow::Remote(sid, name, ..) => plain_row(format!("[{sid}] {name}")),
                         };
                         let key = s.playlist_hotkey(&row.target());
