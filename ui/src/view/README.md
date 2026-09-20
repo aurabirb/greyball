@@ -68,7 +68,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Section::ALL` order — Player, Custom playlist hotkeys, Tracks and playlists, Windows, Movement,
   Commands (plugin commands appended) — then the playlists that have a key. `build` lays a section out in two lanes (description, shortcut showing the live effective key; one cell of it, the first, is underlined on every row whose key can be set, an unbound one included), the
   shortcut lane one width shared by every section (so all keys share a column); an item's `:command`
-  spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces. The result, a flat
+  spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces; one blank line precedes every item and separates sections. The result, a flat
   line list plus each row's `first..end` line span and each section's title line, is cached in
   `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
@@ -161,7 +161,7 @@ Every Search window (the `search` tab, the `results` companion) is independent: 
 
 ## Kind bar
 
-`kind_bar.rs` draws and hit-tests the title row's kind bar. A static `[f] change filter` label (the `CycleKindFilter` key) sits left of the bar when it fits beside the title without squeezing it. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
+`kind_bar.rs` draws and hit-tests the title row's kind bar. A static `[f] filter` label (the `CycleKindFilter` key) sits left of the bar when it fits beside the title without squeezing it. A list has one (`TrackList::has_kind_bar`) at the top level of a Search window (All, Songs, Albums, Playlists) or a Playlists window (All, Albums, Playlists); `is_results` is narrower: a Search top level, whose list mixes tracks and collections. `f` (`cycle_kinds`) or a click on a segment sets `kinds`, bumping `view_gen` with no refetch; if `select` names a row the filter hides, `relayout` resets the filter to All. Album rows never take a hotkey.
 
 ## Queue info rows
 

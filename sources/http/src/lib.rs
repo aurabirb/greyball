@@ -168,6 +168,10 @@ impl Source for HttpDirSource {
         source_id()
     }
 
+    fn share_url(&self, uri: &str) -> Option<String> {
+        self.recognizes(uri).then(|| uri.to_string())
+    }
+
     fn recognizes(&self, uri: &str) -> bool {
         let Ok(u) = Url::parse(uri) else { return false };
         if !matches!(u.scheme(), "http" | "https") {

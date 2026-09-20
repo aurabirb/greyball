@@ -67,6 +67,7 @@ pub enum BuiltinAction {
     SeekForward,
     SeekBack,
     AddToPlaylistOrNew,
+    CopyLink,
     Quit,
     ClearQueue,
     ToggleScan,
@@ -110,6 +111,7 @@ impl BuiltinAction {
         (BuiltinAction::SeekForward, Some('.')),
         (BuiltinAction::SeekBack, Some(',')),
         (BuiltinAction::AddToPlaylistOrNew, Some('+')),
+        (BuiltinAction::CopyLink, Some('y')),
         (BuiltinAction::Quit, Some('Q')),
         (BuiltinAction::ClearQueue, Some('E')),
         (BuiltinAction::ToggleScan, Some('B')),
@@ -157,6 +159,7 @@ impl BuiltinAction {
             BuiltinAction::SeekForward => "seek-forward",
             BuiltinAction::SeekBack => "seek-back",
             BuiltinAction::AddToPlaylistOrNew => "add-to-playlist",
+            BuiltinAction::CopyLink => "copy-link",
             BuiltinAction::Quit => "quit",
             BuiltinAction::ClearQueue => "clear-queue",
             BuiltinAction::ToggleScan => "toggle-scan",
@@ -267,6 +270,10 @@ pub enum Command {
     /// `l`: toggles the track in the liked/favorites synthetic playlist(s) of its own sources —
     /// see `Session::liked_targets`.
     Like(TrackId),
+    /// Ask the track's sources for a shareable web URL.
+    CopyLink(TrackId),
+    /// Import a pasted web URL into `playlist`, or the queue when `None`.
+    AddUrl { url: String, playlist: Option<PlaylistId> },
     ExportM3u(PlaylistId),
     /// Export to an explicit path.
     ExportM3uTo {
@@ -871,6 +878,28 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::Like(track) => self.set_liked(track),
+            Command::CopyLink(id) => {
+                let t = self.store.get_track(id)?.ok_or(Error::NotFound)?;
+                let name = t.display_name().to_string();
+                let candidates: Vec<_> = t.renditions.iter().filter_map(|r| Some((self.sources.get(&r.source)?.clone(), r.uri.clone()))).collect();
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let url = candidates.iter().find_map(|(source, uri)| source.share_url(uri));
+                    bus.send(CoreEvent::LinkResolved(url.ok_or_else(|| format!("No shareable link for {name:?}"))));
+                });
+                Ok(Dispatch::Done("resolving link...".into()))
+            }
+            Command::AddUrl { url, playlist } => {
+                let Some(source) = self.source_for_uri(&url).cloned() else {
+                    return Ok(Dispatch::Refused(format!("No source recognizes {url:?}")));
+                };
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let result = Self::import_url(source.as_ref(), &url).map_err(|e| e.to_string());
+                    bus.send(CoreEvent::UrlResolved { playlist, result });
+                });
+                Ok(Dispatch::Done("resolving link...".into()))
+            }
             Command::ExportM3u(id) => {
                 let name = self.store.get_playlist(id)?.ok_or(Error::NotFound)?.name;
                 self.export_m3u_to(id, PathBuf::from(format!("{name}.m3u8")))
@@ -960,7 +989,17 @@ impl Session {
                 self.warn(context, message);
                 Ok(true)
             }
-            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) => Ok(true),
+            CoreEvent::UrlResolved { playlist, result } => {
+                let msg = match result {
+                    Ok((tracks, incomplete)) => {
+                        self.add_resolved_tracks(*playlist, tracks, *incomplete).unwrap_or_else(|e| e.to_string())
+                    }
+                    Err(msg) => msg.clone(),
+                };
+                self.bus.send(CoreEvent::Flash(msg));
+                Ok(true)
+            }
+            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
         }
     }
 
@@ -1884,9 +1923,34 @@ impl Session {
         self.active_player().map(|p| p.levels()).unwrap_or([0.0; 5])
     }
 
-    /// Pasted raw URI/URL: first source whose `recognizes()` returns true.
+    /// Pasted raw URI/URL: a recognizing source, with the catch-all HTTP source only as the fallback.
     pub fn source_for_uri(&self, uri: &str) -> Option<&Arc<dyn Source>> {
-        self.sources.values().find(|s| s.recognizes(uri))
+        let http = SourceId::from("http");
+        let mut matches: Vec<_> = self.sources.iter().filter(|(_, s)| s.recognizes(uri)).collect();
+        matches.sort_by_key(|(id, _)| (**id == http, id.as_str().to_string()));
+        matches.first().map(|(_, s)| *s)
+    }
+
+    /// Blocking: the tracks a pasted URL points at (a whole collection when the source can browse it), capped at `ENQUEUE_CAP`.
+    /// The flag is true when the source reported an error partway, so the list may be cut short.
+    pub fn import_url(source: &dyn Source, url: &str) -> Result<(Vec<Track>, bool)> {
+        let Some(node) = source.browse_uri(url) else {
+            return source.resolve(url).map(|t| (vec![t], false));
+        };
+        let deadline = Instant::now() + ENQUEUE_TIMEOUT;
+        loop {
+            let page = source.browse(&node, ENQUEUE_CAP)?;
+            if !page.partial || page.tracks.len() >= ENQUEUE_CAP || Instant::now() >= deadline {
+                if page.tracks.is_empty() {
+                    let why = if page.errored { "could not load" } else { "nothing to import from" };
+                    return Err(Error::Other(format!("{why} {url}")));
+                }
+                let mut tracks = page.tracks;
+                tracks.truncate(ENQUEUE_CAP);
+                return Ok((tracks, page.errored));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
     }
 
     // ---- internals ----
@@ -2447,25 +2511,17 @@ impl Session {
                 artists,
                 Rendition::fresh(SourceId::from(spec.source.as_str()), spec.uri.clone(), 0, spec.quality.clone()),
             ))?;
-            match &mut pl {
-                Some(pl) => {
-                    if pl.items.contains(&tid) {
-                        log::info!("add: already in \"{}\", skipping: {raw}", pl.name);
-                        skipped += 1;
-                        continue;
-                    }
-                    pl.items.push(tid);
-                }
-                None => self.queue.append(tid),
+            if !self.place_track(&mut pl, tid) {
+                log::info!("add: already in the playlist, skipping: {raw}");
+                skipped += 1;
+                continue;
             }
             added += 1;
         }
 
+        self.save_target(&pl, added)?;
         match pl {
             Some(pl) => {
-                if added > 0 {
-                    self.save_playlist(&pl)?;
-                }
                 log::info!("add: \"{}\" — {added} added, {skipped} skipped", pl.name);
                 Ok(Dispatch::Done(if skipped > 0 {
                     format!("added {added} track(s) to \"{}\" ({skipped} skipped)", pl.name)
@@ -2481,6 +2537,50 @@ impl Session {
                     format!("queued {added} track(s)")
                 }))
             }
+        }
+    }
+
+    fn add_resolved_tracks(&mut self, playlist: Option<PlaylistId>, tracks: &[Track], incomplete: bool) -> Result<String> {
+        let mut pl = playlist
+            .map(|id| self.store.get_playlist(id)?.ok_or(Error::NotFound))
+            .transpose()?;
+        let (mut added, mut skipped) = (0usize, 0usize);
+        for track in tracks {
+            let tid = self.catalog.ingest(track.clone())?;
+            if !self.place_track(&mut pl, tid) {
+                skipped += 1;
+                continue;
+            }
+            added += 1;
+        }
+        self.save_target(&pl, added)?;
+        let (verb, target) = match &pl {
+            Some(pl) => ("added", format!(" to \"{}\"", pl.name)),
+            None => ("queued", String::new()),
+        };
+        let skipped = if skipped > 0 { format!(" ({skipped} already there)") } else { String::new() };
+        Ok(format!("{verb} {added} track(s){target}{skipped}{}", if incomplete { " (incomplete)" } else { "" }))
+    }
+
+    /// Adds to the open playlist, or the queue when there is none; false when the playlist already has it.
+    fn place_track(&mut self, pl: &mut Option<Playlist>, tid: TrackId) -> bool {
+        match pl {
+            Some(pl) if pl.items.contains(&tid) => false,
+            Some(pl) => {
+                pl.items.push(tid);
+                true
+            }
+            None => {
+                self.queue.append(tid);
+                true
+            }
+        }
+    }
+
+    fn save_target(&mut self, pl: &Option<Playlist>, added: usize) -> Result<()> {
+        match pl {
+            Some(pl) if added > 0 => self.save_playlist(pl),
+            _ => Ok(()),
         }
     }
 

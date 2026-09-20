@@ -103,6 +103,11 @@ impl Source for SpotifySource {
         crate::uri::recognizes(uri)
     }
 
+    fn share_url(&self, uri: &str) -> Option<String> {
+        let r = SpotifyRef::parse(uri)?;
+        Some(format!("https://open.spotify.com/{}/{}", r.kind.seg(), r.id))
+    }
+
     fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         if q.text.trim().is_empty() {
             return Ok(());

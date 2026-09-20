@@ -377,6 +377,19 @@ impl Source for SoundcloudSource {
         crate::uri::recognizes(uri)
     }
 
+    fn share_url(&self, uri: &str) -> Option<String> {
+        match TrackRef::parse(uri)? {
+            TrackRef::Permalink(url) => Some(url),
+            TrackRef::Id(id) => match self.track_by_id(id) {
+                Ok(t) => t.permalink_url,
+                Err(e) => {
+                    log::warn!("soundcloud: share_url: track {id}: {e}");
+                    None
+                }
+            },
+        }
+    }
+
     fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         let text = q.text.trim();
         if text.is_empty() {
@@ -519,6 +532,8 @@ impl MediaProvider for SoundcloudSource {
 struct ApiTrack {
     id: u64,
     title: String,
+    #[serde(default)]
+    permalink_url: Option<String>,
     #[serde(default)]
     duration: u32, // ms
     #[serde(default)]

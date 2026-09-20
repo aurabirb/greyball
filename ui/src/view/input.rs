@@ -449,14 +449,9 @@ impl MedleyView {
         }
     }
 
-    /// `:open <url-or-path>`'s remote-link case.
-    fn open_playlist_uri(&mut self, uri: String) -> EventResult {
-        let found = self.with_session(|s| {
-            let source = s.source_for_uri(&uri)?;
-            let node = source.browse_uri(&uri)?;
-            Some((source.id(), node))
-        });
-        match found {
+    /// `:open <url>`: a browsable link opens as a remote list, any other recognized URL is added as a track.
+    fn open_playlist_uri(&mut self, uri: String, open: Option<PlaylistId>, browse: Option<(core::SourceId, core::BrowseNode)>) -> EventResult {
+        match browse {
             Some((sid, node)) => {
                 let name = match &node {
                     core::BrowseNode::Path(id) => id.clone(),
@@ -470,14 +465,19 @@ impl MedleyView {
                 }
                 EventResult::consumed()
             }
-            None => self.notify(Notice::failed(format!("no source can open this as a playlist: {uri:?}"))),
+            None => self.run(Command::AddUrl { url: uri, playlist: open }),
         }
     }
 
     /// `:open <url-or-path>`'s argument case.
     fn open_arg(&mut self, arg: String, open: Option<PlaylistId>) -> EventResult {
-        if self.with_session(|s| s.source_for_uri(&arg).is_some()) {
-            return self.open_playlist_uri(arg);
+        let url = arg.trim().to_string();
+        let found = self.with_session(|s| {
+            let source = s.source_for_uri(&url)?;
+            Some(source.browse_uri(&url).map(|node| (source.id(), node)))
+        });
+        if let Some(browse) = found {
+            return self.open_playlist_uri(url, open, browse);
         }
         // A URL no source claims is not a path to add.
         if arg.contains("://") && !arg.starts_with("file://") {

@@ -761,10 +761,10 @@ impl TrackList {
         }
         draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
-        if let (Some(start), Some(label)) = (kind_bar::start(&bar), hint(&[kind_key], "change filter")) {
+        if let (Some(start), Some(label)) = (kind_bar::start(&bar), hint(&[kind_key], "filter")) {
             let x = start.saturating_sub(label.width() + 1);
             if x > main_col_start(content_w) + title.width() {
-                printer.with_color(ColorStyle::title_secondary(), |p| p.print((x, 0), &label));
+                printer.with_color(ColorStyle::title_primary(), |p| p.print((x, 0), &label));
             }
         }
     }

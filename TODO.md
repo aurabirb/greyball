@@ -58,7 +58,7 @@
 - [ ] Rework the list window's title row (`TrackList::draw`, `ui/src/view/track_list.rs` ~751; `draw_row_list`,
   `ui/src/view/rows.rs`; `kind_bar`; `count()`): swap the positions of the title and the kind filters, so
   the filters (playlist subtabs) sit on the left and the title on the right; do not write the count unit
-  `(xx playlists)` at all for the Playlists window; put the `[f] change filter` hint (currently drawn left
+  `(xx playlists)` at all for the Playlists window; put the `[f] filter` hint (currently drawn in the title red left
   of the filter bar) after the playlist subtab; and right-align every list window's title, not just this
   one. Remove the track/item count from the top titles everywhere (`count()`, `cursor/total unit`,
   which covers the `(xx playlists)` text) — the status bar shows it now; if `(xx playlists)` turns out to be
@@ -66,9 +66,6 @@
   (`typed_title` + `HINT`, `track_list.rs` ~889: today `/{input}█` followed by the `(Esc to cancel)`
   hint) comes right after the filters, drawn in white, and reads `search: {input}█`; the `(esc to exit)`
   hint is drawn in red (keep or reword the current `(Esc to cancel)` text — the owner wrote "esc to exit").
-- [ ] Fetch the remote branch `worktree-copy-shared-link` (`git fetch origin worktree-copy-shared-link`)
-  and merge it into `main`: review it against the "copy shared link" shortcut item below first (it likely
-  implements it — delete that item if so), resolve conflicts, then run the build/clippy gates and push.
 - [ ] Change the Now Playing window's docked hint from `[M] docked` to `[=]`, matching the Now Playing
   marker: today the hint row shows the layout key as `[M] cycle layout` only while docked
   (`hint(&[c.layout_key], "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) and
@@ -81,13 +78,19 @@
   receiving it as events from the live analysis (the stream engine lets it run while the track
   downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
   and stays quiet when no tempo is known.
+- [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
+  `browse_uri` that resolves the URL through `/resolve` to a playlist id and lists it with
+  `playlist_tracks` (`sources/soundcloud/src/client.rs`); `TrackRef::parse` (`uri.rs`) currently
+  rejects 3-segment set paths. `on.soundcloud.com/...` short links need their redirect followed to the
+  permalink first.
+- [ ] Bracketed paste in the TUI: enable it in terminal setup, add a paste event to the edit buffer
+  (`ui/src/view/input.rs`) and strip newlines so a multi-line paste can't run a command.
+- [ ] `y` (copy shared link) polish: debounce repeated presses (each spawns a detached thread and a
+  network call).
 - [ ] Audit the codebase for keys written as literal strings (`` ` ``, `P`, `M`, `+`, …) in Help text,
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
   can't.
-- [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
-  ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
-  clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
 - [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
   progressively for a track still downloading — the playing track's bytes already land in a growing
   stream file (`core::stream`); `WaveformPlugin` already decodes it progressively, so publish the buckets filled so far and let the

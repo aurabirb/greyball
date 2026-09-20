@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::traits::BrowseNode;
-use crate::types::{ItemKind, SourceId, TrackId};
+use crate::types::{ItemKind, PlaylistId, SourceId, Track, TrackId};
 
 #[derive(Clone, Debug)]
 pub enum CoreEvent {
@@ -50,6 +50,10 @@ pub enum CoreEvent {
     PluginReport(String),
     /// What `:update` came to: a status line, or why it failed.
     UpdateResult(Result<String, String>),
+    /// The shareable URL for the clipboard, or why there is none.
+    LinkResolved(Result<String, String>),
+    /// The tracks a pasted URL resolved to, bound for `playlist` (the queue when `None`).
+    UrlResolved { playlist: Option<PlaylistId>, result: Result<(Vec<Track>, bool), String> },
 }
 
 #[derive(Clone, Debug)]

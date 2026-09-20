@@ -29,7 +29,7 @@ impl ItemKind {
         })
     }
 
-    fn seg(self) -> &'static str {
+    pub fn seg(self) -> &'static str {
         match self {
             Self::Track => "track",
             Self::Album => "album",

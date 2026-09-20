@@ -118,6 +118,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collecti
             Some(id) => Action::AddToPlaylistPrompt(id),
             None => prompt(action),
         },
+        BuiltinAction::CopyLink => selected.map_or(Action::None, |id| Action::Command(Command::CopyLink(id))),
         BuiltinAction::Quit => Action::Command(Command::Quit),
         BuiltinAction::ClearQueue => Action::Command(Command::ClearQueue),
         BuiltinAction::ToggleScan => Action::Command(Command::ToggleScan),
