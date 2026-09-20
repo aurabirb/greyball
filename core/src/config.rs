@@ -204,6 +204,7 @@ pub struct BpmScanConfig {
     /// `state.toml`) wins. On by default: `CacheOnly` never originates a
     /// fetch, only reads audio that is already cached or downloading, so
     /// there's no network cost to leaving it on.
+    pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
 }
