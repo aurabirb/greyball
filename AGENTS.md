@@ -48,6 +48,9 @@ working-agreement rule is established, add it here directly rather than only in 
   medley 'tmux set status off; ./target/debug/medley' &` — then find the window id (`xprop -root
   _NET_CLIENT_LIST`, match `xprop -id <id> WM_NAME` against `medley-shot`), `import -window <id>
   <scratch>.png`, and view the PNG with the Read tool. Write PNGs outside the repo.
+- Testing runs against the default data/state/config dirs and the default media cache; no scratch
+  dirs needed. Never delete, rename or hand-edit the owner's cache files, index or track store
+  yourself — normal app use adding entries is fine.
 - Always clean up afterward: `tmux send-keys -t medley 'q'` then `tmux kill-session -t medley`, and
   remove any debug log file you redirected to.
 - Only kill tmux sessions (and Alacritty windows) you started yourself, by name — never
