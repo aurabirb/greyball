@@ -128,6 +128,8 @@ pub(super) struct ListFrame {
     kind_counts: Option<Vec<usize>>,
     /// The playing track's row, for the scrollbar marker.
     playing: Option<usize>,
+    /// The cursor is on a collection row, which `q` enqueues whole.
+    collection: bool,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -480,12 +482,17 @@ impl TrackList {
         }
     }
 
-    /// The Search or Playlists collection row under the cursor, with its display name: what `q` enqueues when no track is selected.
-    pub(super) fn selected_collection(&self, s: &Session) -> Option<(HotkeyTarget, String)> {
+    /// The Search or Playlists collection row under the cursor.
+    fn collection_row(&self, s: &Session) -> Option<TopRow> {
         if self.open_target().is_some() || !matches!(self.kind, ListKind::Playlists | ListKind::Search) {
             return None;
         }
-        let row = self.top_row(s)?;
+        self.top_row(s)
+    }
+
+    /// The collection row with its display name: what `q` enqueues when no track is selected.
+    pub(super) fn selected_collection(&self, s: &Session) -> Option<(HotkeyTarget, String)> {
+        let row = self.collection_row(s)?;
         let name = top_row_name(&row, &s.playlists());
         Some((row.target(), name))
     }
@@ -688,6 +695,7 @@ impl TrackList {
                 assignable,
                 kind_counts: self.kind_counts(s),
                 playing: self.playing_index(s),
+                collection: self.collection_row(s).is_some(),
                 keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
@@ -703,6 +711,7 @@ impl TrackList {
             (ListKind::Playlists, Open::TopLevel) => {
                 let assign = if frame.keyed { "[Bksp] clear" } else { "[any key] assign" };
                 let mut hints: Vec<String> = frame.assignable.then(|| assign.to_string()).into_iter().collect();
+                hints.extend(hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection));
                 hints.extend(hint(&[c.keys_key], "playlist keys").filter(|_| tab));
                 hints
             }
@@ -723,7 +732,7 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
-            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.kind_key], &format!("show: {}", self.kinds.label()))]
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.kind_key], &format!("show: {}", self.kinds.label()))]
                 .into_iter()
                 .flatten()
                 .collect(),
