@@ -28,6 +28,7 @@ use track_list::TrackList;
 use warnings::warnings_label;
 use window::{Ctx, StatusCtx, WindowId, WindowOutcome, Windows};
 
+mod clipboard;
 mod corners;
 mod files;
 mod frame;

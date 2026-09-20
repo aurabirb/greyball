@@ -67,9 +67,6 @@
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
   can't.
-- [ ] Add a "copy shared link" shortcut, default `y` (a rebindable `BuiltinAction` with a Help row):
-  ask the item's source for its shareable web URL — not the raw medley/source URI — copy it to the
-  clipboard and log it. Add a `Source` method for this (default: unsupported, with a notice saying so).
 - [ ] Waveform overview (top bar, `WaveformPlugin` in `sources/waveform`): build the envelope
   progressively for a track still downloading — the playing track's bytes already land in a growing
   file (`StreamingReader`/`open_streaming_url`, `player/src/rodio_player.rs`), so decode what has

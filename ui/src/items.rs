@@ -155,6 +155,7 @@ pub const ITEMS: &[Item] = &[
     ),
     builtin(Section::Hotkeys, BuiltinAction::SwitchPlaylists, "switch to the playlist keys window (opens it when closed)", ""),
     builtin(Section::Tracks, BuiltinAction::AddToPlaylistOrNew, "add the selected track to a playlist, or make a new one", ""),
+    builtin(Section::Tracks, BuiltinAction::CopyLink, "copy the selected track's shareable web link", ""),
     builtin(Section::Tracks, BuiltinAction::Enqueue, "enqueue the selected track, playlist or album", ""),
     builtin(Section::Tracks, BuiltinAction::Wedge, "wedge the selected track to the front of the queue", ""),
     builtin(Section::Tracks, BuiltinAction::ClearQueue, "clear the queue", ""),

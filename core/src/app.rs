@@ -67,6 +67,7 @@ pub enum BuiltinAction {
     SeekForward,
     SeekBack,
     AddToPlaylistOrNew,
+    CopyLink,
     Quit,
     ClearQueue,
     ToggleScan,
@@ -110,6 +111,7 @@ impl BuiltinAction {
         (BuiltinAction::SeekForward, Some('.')),
         (BuiltinAction::SeekBack, Some(',')),
         (BuiltinAction::AddToPlaylistOrNew, Some('+')),
+        (BuiltinAction::CopyLink, Some('y')),
         (BuiltinAction::Quit, Some('Q')),
         (BuiltinAction::ClearQueue, Some('E')),
         (BuiltinAction::ToggleScan, Some('B')),
@@ -157,6 +159,7 @@ impl BuiltinAction {
             BuiltinAction::SeekForward => "seek-forward",
             BuiltinAction::SeekBack => "seek-back",
             BuiltinAction::AddToPlaylistOrNew => "add-to-playlist",
+            BuiltinAction::CopyLink => "copy-link",
             BuiltinAction::Quit => "quit",
             BuiltinAction::ClearQueue => "clear-queue",
             BuiltinAction::ToggleScan => "toggle-scan",
@@ -267,6 +270,8 @@ pub enum Command {
     /// `l`: toggles the track in the liked/favorites synthetic playlist(s) of its own sources —
     /// see `Session::liked_targets`.
     Like(TrackId),
+    /// Ask the track's sources for a shareable web URL.
+    CopyLink(TrackId),
     ExportM3u(PlaylistId),
     /// Export to an explicit path.
     ExportM3uTo {
@@ -343,6 +348,8 @@ pub enum Dispatch {
     Queued(usize),
     /// The queue's length after a push to its front.
     Wedged(usize),
+    /// The shareable URL to put on the clipboard.
+    LinkCopied(String),
     ShuffleSet(bool),
     /// A local playlist gained (`added`) or lost the track.
     MembershipSet { track: String, playlist: String, added: bool },
@@ -879,6 +886,11 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::Like(track) => self.set_liked(track),
+            Command::CopyLink(id) => {
+                let t = self.store.get_track(id)?.ok_or(Error::NotFound)?;
+                let url = t.renditions.iter().find_map(|r| self.sources.get(&r.source)?.share_url(&r.uri));
+                Ok(url.map_or_else(|| Dispatch::Refused(format!("No shareable link for {:?}", t.display_name())), Dispatch::LinkCopied))
+            }
             Command::ExportM3u(id) => {
                 let name = self.store.get_playlist(id)?.ok_or(Error::NotFound)?.name;
                 self.export_m3u_to(id, PathBuf::from(format!("{name}.m3u8")))

@@ -83,6 +83,10 @@ pub trait Source: Send + Sync {
     fn saved_albums(&self, _want: usize) -> Result<BrowsePage> {
         Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], partial: false, errored: false })
     }
+    /// The shareable web URL for `uri`; `None` when this source has no such URL.
+    fn share_url(&self, _uri: &str) -> Option<String> {
+        None
+    }
     fn resolve(&self, uri: &str) -> Result<Track>;
     /// `want`: how many rows the caller needs ready now (paginated sources
     /// use it to pace background fetching — see `core::PagedList`); ignore

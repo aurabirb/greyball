@@ -46,6 +46,11 @@ impl Notice {
                     ScanMode::Disabled => "off",
                 }
             )),
+            Dispatch::LinkCopied(url) => {
+                log::info!("copied link: {url}");
+                super::clipboard::copy(&url);
+                Notice::Flash(format!("Copied: {url}"))
+            }
             Dispatch::LinkPending => Notice::Flash("link: pick a second row".to_string()),
             Dispatch::Done(msg) | Dispatch::Refused(msg) => Notice::Flash(msg),
         })

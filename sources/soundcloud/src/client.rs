@@ -379,6 +379,13 @@ impl Source for SoundcloudSource {
         crate::uri::recognizes(uri)
     }
 
+    fn share_url(&self, uri: &str) -> Option<String> {
+        match TrackRef::parse(uri)? {
+            TrackRef::Permalink(url) => Some(url),
+            TrackRef::Id(_) => None,
+        }
+    }
+
     fn search(&self, q: &SearchQuery, sink: &mut dyn FnMut(Track)) -> Result<()> {
         let text = q.text.trim();
         if text.is_empty() {
