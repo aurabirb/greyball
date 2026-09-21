@@ -260,47 +260,58 @@ impl SoundcloudSource {
         }
     }
 
+    /// The `collection` array of an api-v2 list endpoint; empty (and logged) if the response has none.
+    fn collection_page(&self, path: &str, query: &[(&str, &str)], auth_resets_id: bool) -> Result<Vec<serde_json::Value>> {
+        self.require_auth()?;
+        let mut v = self.api_get_with(path, query, auth_resets_id)?;
+        match v.get_mut("collection").map(serde_json::Value::take) {
+            Some(serde_json::Value::Array(items)) => Ok(items),
+            _ => {
+                let keys: Vec<&String> = v.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+                log::warn!("soundcloud: {path}: no 'collection' array, top-level keys {keys:?}");
+                Ok(vec![])
+            }
+        }
+    }
+
     /// The current user's own playlists, as `(id, title)`.
     /// MVP: first page only (up to 200) — mirrors `SpotifyApi::playlists`.
     fn playlists(&self) -> Result<Vec<(String, String)>> {
-        self.require_auth()?;
-        let v = self.api_get("/me/playlists", &[("limit", "200")])?;
-        let Some(collection) = v.get("collection").and_then(|c| c.as_array()) else {
-            return Ok(vec![]);
-        };
-        Ok(collection
-            .iter()
-            .filter_map(|item| serde_json::from_value::<ApiPlaylist>(item.clone()).ok())
+        Ok(self
+            .collection_page("/me/playlists", &[("limit", "200")], true)?
+            .into_iter()
+            .filter_map(|item| serde_json::from_value::<ApiPlaylist>(item).ok())
             .map(|p| (p.id.to_string(), p.title))
             .collect())
     }
 
-    /// The personalized system playlists on the home feed's shelves, as `(urn, title)`.
-    fn recommendations(&self) -> Result<Vec<(String, String)>> {
-        self.require_auth()?;
-        let v = self.api_get_with("/mixed-selections", &[("limit", "20")], false)?;
-        let Some(shelves) = v.get("collection").and_then(|c| c.as_array()) else {
-            let keys: Vec<&String> = v.as_object().map(|o| o.keys().collect()).unwrap_or_default();
-            log::warn!("soundcloud: /mixed-selections: no 'collection' array, top-level keys {keys:?}");
-            return Ok(vec![]);
-        };
+    /// Playlists on the home feed's shelves, as `(node id, title)`: `system:<urn>` for personalized ones,
+    /// the numeric id for plain ones; ids in `skip` and stations are left out. Single page of shelves.
+    fn recommendations(&self, skip: &[(String, String)]) -> Result<Vec<(String, String)>> {
+        let shelves = self.collection_page("/mixed-selections", &[("limit", "20")], false)?;
         let mut out: Vec<(String, String)> = vec![];
         for item in shelves
             .iter()
             .filter_map(|s| s.get("items")?.get("collection")?.as_array())
             .flatten()
         {
-            let urn = item.get("urn").and_then(|u| u.as_str());
+            let urn = item.get("urn").and_then(|u| u.as_str()).unwrap_or_default();
+            let id = if urn.starts_with("soundcloud:system-playlists:") {
+                Some(format!("{SYSTEM_PREFIX}{urn}"))
+            } else if urn.starts_with("soundcloud:playlists:") || item.get("kind").and_then(|k| k.as_str()) == Some("playlist") {
+                item.get("id").and_then(|i| i.as_u64()).map(|i| i.to_string())
+            } else {
+                None
+            };
             let title = ["title", "short_title"].iter().find_map(|k| item.get(k)?.as_str());
-            if let (Some(urn), Some(title)) = (urn, title)
-                && urn.starts_with("soundcloud:system-playlists:")
-                && !out.iter().any(|(u, _)| u == urn)
+            if let (Some(id), Some(title)) = (id, title)
+                && !skip.iter().chain(&out).any(|(i, _)| *i == id)
             {
-                out.push((urn.to_string(), title.to_string()));
+                out.push((id, title.to_string()));
             }
         }
         if out.is_empty() {
-            log::debug!("soundcloud: /mixed-selections: {} shelf(s), no system playlists", shelves.len());
+            log::debug!("soundcloud: /mixed-selections: {} shelf(s), no playlists", shelves.len());
         }
         Ok(out)
     }
@@ -362,13 +373,11 @@ impl SoundcloudSource {
     /// api-v2 collection shape (`collection` + `next_href`) is shared with
     /// `/search/tracks` above, which *is* verified live.
     fn likes_page(&self, offset: usize, limit: usize) -> std::result::Result<RemotePage<Track>, String> {
-        self.require_auth().map_err(|e| e.to_string())?;
         let offset_s = offset.to_string();
         let limit_s = limit.to_string();
-        let v = self
-            .api_get("/me/track_likes", &[("offset", &offset_s), ("limit", &limit_s)])
+        let collection = self
+            .collection_page("/me/track_likes", &[("offset", &offset_s), ("limit", &limit_s)], true)
             .map_err(|e| e.to_string())?;
-        let collection = v.get("collection").and_then(|c| c.as_array()).cloned().unwrap_or_default();
         let consumed = collection.len();
         let hits: Vec<Track> = collection
             .into_iter()
@@ -571,12 +580,11 @@ impl Source for SoundcloudSource {
                         BrowseNode::Path(LIKED_TRACKS.to_string()),
                     ));
                     let playlists = self.playlists()?;
-                    folders.extend(playlists.into_iter().map(|(id, name)| (name, BrowseNode::Path(id))));
                     // Best effort: a failure here must not hide the rest of the root.
-                    match self.recommendations() {
-                        Ok(recs) => folders.extend(
-                            recs.into_iter().map(|(urn, title)| (title, BrowseNode::Path(format!("{SYSTEM_PREFIX}{urn}")))),
-                        ),
+                    let recs = self.recommendations(&playlists);
+                    folders.extend(playlists.into_iter().map(|(id, name)| (name, BrowseNode::Path(id))));
+                    match recs {
+                        Ok(recs) => folders.extend(recs.into_iter().map(|(id, title)| (title, BrowseNode::Path(id)))),
                         Err(Error::NotFound) => log::warn!("soundcloud: recommendations not available for this account"),
                         Err(e) => {
                             errored = true;

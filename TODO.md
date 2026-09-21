@@ -63,7 +63,7 @@
   receiving it as events from the live analysis (the stream engine lets it run while the track
   downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
   and stays quiet when no tempo is known.
-- [ ] SoundCloud: show charts, trending and genre explore playlists in the Playlists view, plus the plain (non-system) playlists and station shelves from `/mixed-selections`, which the `soundcloud:system-playlists:` urn filter in `recommendations` currently drops.
+- [ ] SoundCloud: show charts and genre explore playlists (their own endpoints) and station shelves from `/mixed-selections` in the Playlists view.
 - [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
   `browse_uri` that resolves the URL through `/resolve` to a playlist id and lists it with
   `playlist_tracks` (`sources/soundcloud/src/client.rs`); `TrackRef::parse` (`uri.rs`) currently
