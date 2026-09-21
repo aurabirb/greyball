@@ -7,7 +7,7 @@ use std::mem::Discriminant;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -627,6 +627,14 @@ pub struct StreamEngine {
     running: Arc<Mutex<HashMap<Key, Weak<Shared>>>>,
 }
 
+/// Below 32 kbps-equivalent for a track over 35 s: a cut-off preview, not a real file.
+fn truncated(path: &Path, duration_ms: u32) -> bool {
+    const MIN_DURATION_MS: u32 = 35_000;
+    const MIN_BYTES_PER_SEC: u64 = 4_000;
+    duration_ms > MIN_DURATION_MS
+        && std::fs::metadata(path).is_ok_and(|m| m.len() < u64::from(duration_ms) / 1000 * MIN_BYTES_PER_SEC)
+}
+
 impl StreamEngine {
     pub fn new(media: SharedMedia, cache: Arc<MediaCache>, bus: Bus) -> Self {
         Self { media, cache, bus, running: Arc::new(Mutex::new(HashMap::new())) }
@@ -641,7 +649,7 @@ impl StreamEngine {
         }
         let media = self.media.snapshot();
         let local = crate::resolver::is_local_source(&r.source) && !media.contains_key(&r.source);
-        let cached = self.cache.cached_path(&r.source, &r.uri).or_else(|| local.then(|| PathBuf::from(crate::resolver::local_path_from_uri(&r.uri))));
+        let cached = self.cache.cached_path(&r.source, &r.uri).filter(|p| !truncated(p, r.duration_ms)).or_else(|| local.then(|| PathBuf::from(crate::resolver::local_path_from_uri(&r.uri))));
         if let Some(path) = cached {
             let shared = Shared::complete(key, path, self.bus.clone(), self.cache.clone(), intent == Intent::Play).map_err(|e| Error::Other(format!("open {}: {e}", r.uri)))?;
             return Ok((StreamHandle { shared, intent }, Claim(None)));

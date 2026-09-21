@@ -273,8 +273,7 @@ impl SoundcloudSource {
     fn open_hls(&self, track: &ApiTrack) -> Result<Media> {
         let hls = track
             .media
-            .transcodings
-            .iter()
+            .full_transcodings()
             .find(|t| t.format.protocol == "hls" && t.format.mime_type.starts_with("audio/mp4"))
             .ok_or_else(|| src_err("no AAC HLS transcoding"))?;
 
@@ -497,10 +496,8 @@ impl MediaProvider for SoundcloudSource {
     fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
         let track_ref = TrackRef::parse(&r.uri)
             .ok_or_else(|| src_err(format!("not a SoundCloud track: {:?}", r.uri)))?;
-        let mut track = self.track_ref(&track_ref)?;
-        // A 30 s preview must never be cached or played as the full track.
-        track.media.transcodings.retain(|t| !t.snipped);
-        if track.media.transcodings.is_empty() {
+        let track = self.track_ref(&track_ref)?;
+        if track.media.full_transcodings().next().is_none() {
             return Err(src_err("only a 30 s preview is available"));
         }
 
@@ -514,8 +511,7 @@ impl MediaProvider for SoundcloudSource {
         // Pick the progressive (plain-file) transcoding; the player downloads it.
         let prog = track
             .media
-            .transcodings
-            .iter()
+            .full_transcodings()
             .find(|t| t.format.protocol == "progressive")
             .ok_or_else(|| src_err("MVP: track has only HLS streams, no progressive"))?;
 
@@ -605,6 +601,13 @@ struct ApiPublisher {
 struct ApiMedia {
     #[serde(default)]
     transcodings: Vec<ApiTranscoding>,
+}
+
+impl ApiMedia {
+    /// A snipped transcoding is a 30 s preview, never the full track.
+    fn full_transcodings(&self) -> impl Iterator<Item = &ApiTranscoding> {
+        self.transcodings.iter().filter(|t| !t.snipped)
+    }
 }
 
 #[derive(Deserialize)]
