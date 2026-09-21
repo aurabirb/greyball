@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
-use core::{BrowseNode, Command, HotkeyTarget, ItemKind, ListRef, PendingRows, Playlist, PlaylistId, ResultSet, Session, SourceId, TrackId};
+use core::{BrowseNode, BuiltinAction, Command, HotkeyTarget, ItemKind, ListRef, PendingRows, Playlist, PlaylistId, ResultSet, Session, SourceId, TrackId};
 
 use crate::keybindings;
 use crate::row::RowItem;
@@ -19,7 +19,7 @@ use crate::screen::{ListKind, Placement};
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
 use super::text::tail_fit;
-use super::rows::{BACK_LABEL, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, draw_row_list, plain_row, tracks_to_rows};
+use super::rows::{BACK_LABEL, action_spans, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -135,6 +135,8 @@ pub(super) struct ListFrame {
     collection: bool,
     /// The cursor is on a track, which `y` shares.
     track: bool,
+    /// The selected track row's clickable actions, in draw order; empty off a track.
+    actions: Vec<(BuiltinAction, String)>,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -171,6 +173,12 @@ pub(super) struct TrackList {
     top_all: Memo<(u64, u64, u64), Arc<[TopRow]>>,
     /// Search only: the collection rows after the tracks, albums then playlists, keyed on the list and view generations.
     collections: Memo<(u64, u64), Arc<[TopRow]>>,
+}
+
+impl ListFrame {
+    fn labels(&self) -> Vec<String> {
+        self.actions.iter().map(|(_, label)| label.clone()).collect()
+    }
 }
 
 impl TrackList {
@@ -696,6 +704,14 @@ impl TrackList {
                 playing: self.playing_index(s),
                 collection: self.collection_row(s).is_some(),
                 track: self.selected_track(s).is_some(),
+                actions: if self.selected_track(s).is_some() {
+                    [(BuiltinAction::CopyLink, "share"), (BuiltinAction::Like, "like")]
+                        .into_iter()
+                        .filter_map(|(action, name)| hint(&[s.effective_hotkey(&HotkeyTarget::Builtin(action))], name).map(|label| (action, label)))
+                        .collect()
+                } else {
+                    vec![]
+                },
                 keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
@@ -759,7 +775,7 @@ impl TrackList {
         let left = title_col(content_w);
         let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
-        draw_row_list(printer, (left, room, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
+        draw_row_list(printer, (left, room, shown, !matches!(self.open, Open::TopLevel)), &frame.rows, self.state, frame.total, frame.playing, &frame.labels());
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
@@ -830,6 +846,18 @@ impl TrackList {
                 if let Some(kind) = kind_bar::hit(&bar, local.x) {
                     self.set_kinds(kind);
                     return WindowOutcome::Consumed;
+                }
+            }
+            if matches!(mouse, MouseEvent::Press(MouseButton::Left))
+                && local.y >= LIST_TITLE_ROWS
+                && local.y - LIST_TITLE_ROWS + self.state.offset == self.state.cursor
+                && let Some(id) = self.selected_track(s)
+            {
+                let frame = self.frame(ctx, rect);
+                let spans = action_spans(&frame.rows[self.state.cursor - self.state.offset], &frame.labels(), rect.width().saturating_sub(1));
+                let hit = spans.iter().position(|&(x, w)| (x..x + w).contains(&local.x));
+                if let Some(keybindings::Action::Command(command)) = hit.map(|i| keybindings::builtin_action(frame.actions[i].0, Some(id), None)) {
+                    return WindowOutcome::Run(command);
                 }
             }
             let back = !matches!(self.open, Open::TopLevel);

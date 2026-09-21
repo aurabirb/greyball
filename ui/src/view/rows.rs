@@ -177,14 +177,14 @@ fn bpm_color(bpm: &str) -> Option<Color> {
 pub(super) const LIST_TITLE_ROWS: usize = 1;
 
 /// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
-pub(super) fn draw_row_list(printer: &Printer, (left, room, title): (usize, usize, &str), back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
+pub(super) fn draw_row_list(printer: &Printer, (left, room, title, back): (usize, usize, &str, bool), rows: &[Row], state: ListState, total: usize, playing: Option<usize>, actions: &[String]) {
     printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &truncate(title, room)));
     if back {
         printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
     }
     let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
     let body = printer.windowed(Rect::from_size((0, LIST_TITLE_ROWS), (printer.size.x, body_h)));
-    draw_list_body(&body, rows, state, total, playing);
+    draw_list_body(&body, rows, state, total, playing, actions);
 }
 
 pub(super) const TITLE_MARGIN: usize = 1;
@@ -198,7 +198,7 @@ pub(super) fn title_col(content_w: usize) -> usize {
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
-fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
+fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usize, playing: Option<usize>, actions: &[String]) {
     let ListState { cursor: sel, offset } = state;
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
@@ -221,6 +221,11 @@ fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usiz
             row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
         }
         printer.with_style(row_style, |p| p.print((0, y), &line));
+        if selected {
+            for (x, label) in action_spans(row, actions, content_w).into_iter().zip(actions).map(|((x, _), label)| (x, label)) {
+                printer.with_style(row_style, |p| p.print((x, y), label));
+            }
+        }
         // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
         let plain = !selected && !row.current;
         for (&(start, width, right_aligned), cell) in layout.iter().zip(cells).filter_map(|(l, c)| Some((l.as_ref()?, c))) {
@@ -246,6 +251,26 @@ fn draw_list_body(printer: &Printer, rows: &[Row], state: ListState, total: usiz
         }
     }
     draw_scrollbar(printer, content_w, list_h, offset, total, playing);
+}
+
+/// Gap between a title and the row's action labels, and between the labels.
+const ACTION_GAP: usize = 2;
+
+/// Each `(start, width)` of the leading `labels` that fit after `row`'s title inside the main column, the one layout draw and click share.
+pub(super) fn action_spans(row: &Row, labels: &[String], content_w: usize) -> Vec<(usize, usize)> {
+    let Some((start, width, _)) = column_layout(content_w.saturating_sub(ROW_MARK_W))[1] else { return vec![] };
+    let end = ROW_MARK_W + start + width;
+    let mut x = ROW_MARK_W + start + row.main.text().width() + ACTION_GAP;
+    let mut spans = vec![];
+    for label in labels {
+        let w = label.width();
+        if x + w > end {
+            break;
+        }
+        spans.push((x, w));
+        x += w + ACTION_GAP;
+    }
+    spans
 }
 
 /// Each `columns` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
