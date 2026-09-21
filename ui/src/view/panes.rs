@@ -4,7 +4,7 @@ use cursive::theme::ColorStyle;
 
 use core::{Axis, HotkeyTarget, PaneLayoutConfig, Session, Side};
 
-use crate::screen::{HELP, Kind, ListKind, Placement};
+use crate::screen::{HELP, Kind, ListKind, NOW_PLAYING, Placement};
 
 use super::{Focus, MedleyView};
 use super::track_list::{TrackList, top_rows};
@@ -206,6 +206,11 @@ impl MedleyView {
         if self.windows.placement(id) == Placement::Tabbed {
             self.activate(id);
         } else {
+            if self.windows.placement(id) == Placement::Docked {
+                while let Some(screen) = self.fullscreen() {
+                    self.close_window(screen);
+                }
+            }
             if !self.open.iter().any(|&(open, _)| open == id) {
                 self.open.push((id, self.focus));
             }
@@ -433,7 +438,7 @@ impl MedleyView {
     /// Opens the playlist the last-played track came from, else the Now Playing list, and puts the cursor on it.
     pub(super) fn select_last_played(&mut self) {
         let Some((last, opened)) = self.to_select.clone() else { return };
-        let (Some(playlists), Some(playing)) = (self.windows.named("playlists"), self.windows.named("now-playing")) else {
+        let (Some(playlists), Some(playing)) = (self.windows.named("playlists"), self.windows.named(NOW_PLAYING)) else {
             self.to_select = None;
             return;
         };

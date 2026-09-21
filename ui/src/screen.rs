@@ -148,6 +148,9 @@ const fn companion(name: &'static str, kind: Kind, home: Home, of: &'static str)
     Startup { companion_of: Some(of), ..startup(name, kind, home) }
 }
 
+/// The Now Playing tab.
+pub const NOW_PLAYING: &str = "now-playing";
+
 /// The window the `OpenHelp` key and `:help` open as a tab; closed, it sits floating.
 pub const HELP: &str = "help";
 
@@ -156,7 +159,7 @@ pub const FILES: &str = "files";
 
 /// Every window startup builds, tabs first in tab order; each tab has a companion instance.
 pub const WINDOWS: [Startup; 15] = [
-    startup("now-playing", Kind::List(ListKind::NowPlaying), Home::Tab),
+    startup(NOW_PLAYING, Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
     startup("history-tab", Kind::List(ListKind::History), Home::Tab),
@@ -164,7 +167,7 @@ pub const WINDOWS: [Startup; 15] = [
     startup("log", Kind::Log, Home::Pane),
     startup("settings", Kind::Settings, Home::Pane),
     startup("vis", Kind::Vis, Home::Pane),
-    companion("playing", Kind::List(ListKind::NowPlaying), Home::Pane, "now-playing"),
+    companion("playing", Kind::List(ListKind::NowPlaying), Home::Pane, NOW_PLAYING),
     companion("results", Kind::List(ListKind::Search), Home::Pane, "search"),
     companion("queue", Kind::List(ListKind::Queue), Home::Pane, "queue-tab"),
     companion("history", Kind::List(ListKind::History), Home::Pane, "history-tab"),

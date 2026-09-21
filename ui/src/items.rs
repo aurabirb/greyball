@@ -146,7 +146,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::ToggleShuffle, "toggle queue shuffle", ""),
     builtin(Section::Player, BuiltinAction::LikePlaying, "like the playing track, or unlike it (asks first)", ""),
     builtin(Section::Player, BuiltinAction::ToggleVis, "toggle the visualizer pane", ""),
-    builtin(Section::Player, BuiltinAction::RevealPlaying, "show the playing track in its playlist, else Now Playing (seeking only selects it in place)", ""),
+    builtin(Section::Player, BuiltinAction::RevealPlaying, "show the playing track in its playlist, else Now Playing", ""),
     fixed(
         Section::Hotkeys,
         "any key",
