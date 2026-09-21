@@ -100,6 +100,14 @@
   `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
   status lines from scratch. The window-resize handler needs exactly this too (see the stale
   rightmost-column bug), so share one function between the two.
+- [ ] A default local playlist for likes that no source can hold: when the like action (`l` /
+  `LikePlaying`, `Command::Like` → `Session::set_liked`, `core/src/app.rs`) is dispatched on a track
+  none of whose sources can take a like (e.g. SoundCloud with no login, a source without
+  `liked_songs_node`, a local file), add the track to a built-in local playlist instead, created on
+  first use through `Catalog`'s playlist write path (`playlists_gen` bumps). Unliking removes it
+  from there. Show the track as liked in rows/status the same way as a source-side like, and tell
+  the user in a notice which playlist it went to. The playlist's name should be configurable in
+  Settings.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
