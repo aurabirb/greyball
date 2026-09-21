@@ -748,7 +748,7 @@ impl TrackList {
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
         let bar_start = kind_bar::start(&bar);
-        let left = if matches!(self.open, Open::TopLevel) { 1 } else { main_col_start(content_w) };
+        let left = main_col_start(content_w);
         let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
         draw_row_list(printer, (left, room, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
