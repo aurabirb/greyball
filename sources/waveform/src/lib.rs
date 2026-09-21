@@ -36,6 +36,20 @@ impl ScanPlugin for WaveformPlugin {
     }
 
     fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
+        let outcome = self.decode(track, audio, wanted);
+        if !matches!(outcome, Outcome::Done(_)) {
+            waveform::clear_live(track.id);
+        }
+        outcome
+    }
+
+    fn min_interval(&self) -> Duration {
+        self.min_interval
+    }
+}
+
+impl WaveformPlugin {
+    fn decode(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
         let stream = match audio() {
             Ok(s) => s,
             Err(outcome) => return outcome,
@@ -81,13 +95,9 @@ impl ScanPlugin for WaveformPlugin {
             return Outcome::Skip;
         };
         if live {
-            // The scan driver clears it once the persisted attr lands, so the bar never blanks between the two.
+            // The status line clears it once the persisted attr lands, so the bar never blanks between the two.
             waveform::publish_live(track.id, &buckets);
         }
         Outcome::Done(waveform::meta(&buckets))
-    }
-
-    fn min_interval(&self) -> Duration {
-        self.min_interval
     }
 }

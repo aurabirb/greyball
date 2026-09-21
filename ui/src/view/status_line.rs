@@ -90,7 +90,10 @@ impl StatusLine {
         Self {
             now_playing: core.now_playing.clone(),
             now_playing_id: core.now_playing_id,
-            waveform: if core.waveform.is_empty() { core.now_playing_id.and_then(waveform::live).unwrap_or_default() } else { core.waveform.clone() },
+            waveform: if core.waveform.is_empty() { core.now_playing_id.and_then(waveform::live).unwrap_or_default() } else {
+                core.now_playing_id.inspect(|&id| waveform::clear_live(id));
+                core.waveform.clone()
+            },
             state: core.state,
             position_ms: ps.position_ms,
             duration_ms: ps.duration_ms,

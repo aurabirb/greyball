@@ -133,6 +133,8 @@ pub(super) struct ListFrame {
     playing: Option<usize>,
     /// The cursor is on a collection row, which `q` enqueues whole.
     collection: bool,
+    /// The cursor is on a track, which `y` shares.
+    track: bool,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -693,6 +695,7 @@ impl TrackList {
                 kind_counts: self.kind_counts(s),
                 playing: self.playing_index(s),
                 collection: self.collection_row(s).is_some(),
+                track: self.selected_track(s).is_some(),
                 keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
         })
@@ -713,12 +716,12 @@ impl TrackList {
                 hints
             }
             (ListKind::Playlists, _) if tab => {
-                let mut hints: Vec<String> = hint(&[c.like_key], "like").into_iter().chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.copy_link_key], "share")).collect();
+                let mut hints: Vec<String> = hint(&[c.like_key], "like").into_iter().chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.copy_link_key], "share").filter(|_| frame.track)).collect();
                 hints.extend(status.keys_run("send to playlist", &hints, fit));
                 hints
             }
             (ListKind::Playlists, _) => {
-                let mut hints: Vec<String> = hint(&[c.copy_link_key], "share").into_iter().collect();
+                let mut hints: Vec<String> = hint(&[c.copy_link_key], "share").filter(|_| frame.track).into_iter().collect();
                 let others: Vec<String> = hints.iter().chain(&tail).cloned().collect();
                 hints.extend(status.keys_run("playlist", &others, fit));
                 hints
@@ -733,7 +736,7 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
-            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.copy_link_key], "share")]
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.copy_link_key], "share").filter(|_| frame.track)]
                 .into_iter()
                 .flatten()
                 .collect(),

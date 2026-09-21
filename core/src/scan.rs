@@ -14,7 +14,6 @@ use crate::media_cache::MediaCache;
 use crate::stream::{Claim, Intent, StreamEngine, StreamHandle, StreamState};
 use crate::traits::{Error, Store};
 use crate::types::{Rendition, SourceId, Track, TrackId};
-use crate::waveform;
 
 /// One background-scan extension point (bpm, later genre-ml, ...). A new
 /// plugin means a new `attrs` key, never a driver or `Track` change.
@@ -646,23 +645,19 @@ impl Worker {
             let open_audio = || self.open_stream(track, access, &used);
             let outcome = plugin.analyze(track, &open_audio, wanted);
             let stream = used.into_inner();
-            if !matches!(outcome, Outcome::Done(_)) {
-                waveform::clear_live(track.id);
-            }
             let source = stream.as_ref().map(|h| h.key().0.clone());
             match outcome {
                 Outcome::Done(meta) => {
                     log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs);
                     // `patch` re-reads the track under `Catalog`'s lock and merges into whatever's current.
                     let _ = self.catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
-                    waveform::clear_live(track.id);
                     self.inner.status.lock().unwrap().remove(&key);
                     self.inner.failures.lock().unwrap().remove(&key);
                     if let Some(source) = &source {
                         self.note_source(source, false);
                     }
                 }
-                Outcome::Skip if stream.is_none() && access == Access::Peek => {
+                Outcome::Skip if plugin.needs_audio() && stream.is_none() && access == Access::Peek => {
                     // No stream to peek at (not playing, not cached): not a verdict.
                     log::debug!("scan[{}]: \"{}\" ({:?}) has no cached or running stream yet", plugin.id(), track.title, track.id);
                     self.inner.status.lock().unwrap().remove(&key);

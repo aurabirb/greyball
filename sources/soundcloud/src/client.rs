@@ -24,7 +24,7 @@ const LIKED_TRACKS: &str = "__liked__";
 /// documented api-v2 limit cap.
 const LIKED_PAGE_SIZE: usize = 50;
 
-fn source_id() -> SourceId {
+pub(crate) fn source_id() -> SourceId {
     SourceId::from("soundcloud")
 }
 
