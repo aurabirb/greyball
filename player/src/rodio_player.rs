@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
-    Bus, Claim, CoreEvent, Intent, Player, PlayerEvent, PlayerState, PlayerStatus, Rendition,
+    Bus, Claim, CoreEvent, Player, PlayerEvent, PlayerState, PlayerStatus, Rendition,
     SourceId, StreamEngine, StreamHandle, StreamReader, StreamState,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -482,6 +482,9 @@ fn start_load(
 
 /// Runs on the background thread `start_load` spawns: opens the stream, waits for its first bytes and
 /// builds the decoder — nothing here touches worker-thread-only state.
+/// A cached file decoding to under 1/this of the catalog length is a truncated preview.
+const TRUNCATED_FACTOR: u32 = 2;
+
 fn open_and_decode(
     engine: &StreamEngine,
     r: &Rendition,
@@ -489,15 +492,14 @@ fn open_and_decode(
     inner: &Arc<Mutex<Snapshot>>,
     current: &dyn Fn() -> bool,
 ) -> core::Result<LoadedTrack> {
-    let from_cache = engine.is_cached(r);
-    let (handle, claim) = engine.open(r, Intent::Play)?;
+    let (handle, claim, from_cache) = engine.open_play(r)?;
     let (loaded, decoded_ms) = decode_stream(r, handle, claim, tap, inner, current)?;
-    // A cached file much shorter than the catalog says is a truncated preview: fetch the real one once.
-    if from_cache && decoded_ms > 0 && r.duration_ms > 0 && decoded_ms.saturating_mul(2) < r.duration_ms {
+    if from_cache && decoded_ms > 0 && decoded_ms.saturating_mul(TRUNCATED_FACTOR) < r.duration_ms && current() {
         log::warn!("player: cached {} is {decoded_ms} ms but the catalog says {} ms; re-fetching", r.uri, r.duration_ms);
-        drop(loaded);
-        let (handle, claim) = engine.open_with(r, Intent::Play, false)?;
-        return decode_stream(r, handle, claim, tap, inner, current).map(|(loaded, _)| loaded);
+        let fresh = engine.refetch(r).and_then(Result::ok).and_then(|(handle, claim)| decode_stream(r, handle, claim, tap, inner, current).ok());
+        if let Some((fresh, _)) = fresh.filter(|(_, ms)| *ms > decoded_ms) {
+            return Ok(fresh);
+        }
     }
     Ok(loaded)
 }

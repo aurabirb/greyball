@@ -625,35 +625,48 @@ pub struct StreamEngine {
     cache: Arc<MediaCache>,
     bus: Bus,
     running: Arc<Mutex<HashMap<Key, Weak<Shared>>>>,
+    refetched: Arc<Mutex<std::collections::HashSet<Key>>>,
 }
 
 impl StreamEngine {
     pub fn new(media: SharedMedia, cache: Arc<MediaCache>, bus: Bus) -> Self {
-        Self { media, cache, bus, running: Arc::new(Mutex::new(HashMap::new())) }
+        Self { media, cache, bus, running: Arc::new(Mutex::new(HashMap::new())), refetched: Arc::default() }
     }
 
     /// Returns at once: a cache hit or local file is complete, anything else is `Connecting` while a
     /// core thread runs the provider's `open` and fetches. A running download of the same key is shared.
     pub fn open(&self, r: &Rendition, intent: Intent) -> Result<(StreamHandle, Claim)> {
-        self.open_with(r, intent, true)
+        self.open_inner(r, intent, true).map(|(h, c, _)| (h, c))
     }
 
-    pub fn is_cached(&self, r: &Rendition) -> bool {
-        self.cache.cached_path(&r.source, &r.uri).is_some()
+    /// Plays `r`, also reporting whether the bytes came from the media cache.
+    pub fn open_play(&self, r: &Rendition) -> Result<(StreamHandle, Claim, bool)> {
+        self.open_inner(r, Intent::Play, true)
     }
 
-    /// Like `open`, but with `use_cache` false it re-fetches from the source; the fresh file replaces the entry.
-    pub fn open_with(&self, r: &Rendition, intent: Intent, use_cache: bool) -> Result<(StreamHandle, Claim)> {
+    /// Re-fetches `r` from its source so the fresh file replaces the cache entry. `None` if this key was
+    /// already re-fetched this run or a download of it is running.
+    pub fn refetch(&self, r: &Rendition) -> Option<Result<(StreamHandle, Claim)>> {
         let key: Key = (r.source.clone(), r.uri.clone());
-        if let Some(found) = self.attach_running(&key, intent) {
-            return Ok(found);
+        if self.is_running(&key) || !self.refetched.lock().unwrap_or_else(|e| e.into_inner()).insert(key) {
+            return None;
+        }
+        Some(self.open_inner(r, Intent::Play, false).map(|(h, c, _)| (h, c)))
+    }
+
+    fn open_inner(&self, r: &Rendition, intent: Intent, use_cache: bool) -> Result<(StreamHandle, Claim, bool)> {
+        let key: Key = (r.source.clone(), r.uri.clone());
+        if let Some((h, c)) = self.attach_running(&key, intent) {
+            return Ok((h, c, false));
         }
         let media = self.media.snapshot();
         let local = crate::resolver::is_local_source(&r.source) && !media.contains_key(&r.source);
-        let cached = self.cache.cached_path(&r.source, &r.uri).filter(|_| use_cache).or_else(|| local.then(|| PathBuf::from(crate::resolver::local_path_from_uri(&r.uri))));
+        let cache_hit = self.cache.cached_path(&r.source, &r.uri).filter(|_| use_cache);
+        let from_cache = cache_hit.is_some();
+        let cached = cache_hit.or_else(|| local.then(|| PathBuf::from(crate::resolver::local_path_from_uri(&r.uri))));
         if let Some(path) = cached {
             let shared = Shared::complete(key, path, self.bus.clone(), self.cache.clone(), intent == Intent::Play).map_err(|e| Error::Other(format!("open {}: {e}", r.uri)))?;
-            return Ok((StreamHandle { shared, intent }, Claim(None)));
+            return Ok((StreamHandle { shared, intent }, Claim(None), from_cache));
         }
         if intent == Intent::Peek {
             return Err(Error::NotFound);
@@ -670,7 +683,7 @@ impl StreamEngine {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             running.retain(|_, w| w.strong_count() > 0);
             if let Some(existing) = running.get(&key).and_then(Weak::upgrade).and_then(|s| attach(s, intent)) {
-                return Ok(existing);
+                return Ok((existing.0, existing.1, false));
             }
             running.insert(key.clone(), Arc::downgrade(&shared));
         }
@@ -692,7 +705,7 @@ impl StreamEngine {
                 }
             })
             .map_err(|e| Error::Other(format!("spawn stream thread: {e}")))?;
-        Ok((handle, claim))
+        Ok((handle, claim, false))
     }
 
     /// Whether a download of `key` is running right now (something a `Peek` could join).
