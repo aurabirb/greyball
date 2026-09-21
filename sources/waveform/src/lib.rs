@@ -54,8 +54,7 @@ impl WaveformPlugin {
             Ok(s) => s,
             Err(outcome) => return outcome,
         };
-        let decoded_ms = track.renditions.iter().find(|r| (&r.source, &r.uri) == (&stream.key().0, &stream.key().1)).map_or(0, |r| r.duration_ms);
-        let duration_ms = if decoded_ms > 0 { decoded_ms } else { track.known_duration_ms() } as u64;
+        let duration_ms = track.known_duration_ms() as u64;
         let live = duration_ms > 0;
         let mut levels: Vec<f32> = Vec::new();
         let mut partial = vec![0.0_f32; BUCKETS];

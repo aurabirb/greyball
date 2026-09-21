@@ -2017,7 +2017,7 @@ impl Session {
         self.shown.write().now_playing = Some(track.id);
         // The player's own status still describes the previous track until it processes the load.
         self.shown.write().player_state = PlayerState::Playing;
-        self.progress = (0, if r.duration_ms > 0 { r.duration_ms } else { track.duration_ms });
+        self.progress = (0, track.duration_ms);
         self.now_playing_player = Some(p);
         self.now_playing_rendition = Some((r.source.clone(), r.uri.clone(), track.id));
         if record && let Some(played_at) = self.queue.record_played(track.id) {

@@ -635,11 +635,8 @@ pub(crate) const WAVEFORM_URL_ATTR: &str = "soundcloud_waveform_url";
 
 impl ApiTrack {
     fn into_track(self) -> Option<Track> {
-        if self.media.transcodings.is_empty() {
-            return None;
-        }
         if self.media.full_transcodings().next().is_none() {
-            log::info!("soundcloud: skipping preview-only track {:?} (soundcloud:track:{})", self.title, self.id);
+            log::debug!("soundcloud: skipping preview-only track {:?} (soundcloud:track:{})", self.title, self.id);
             return None;
         }
         let (mut artists, title) = core::parse_artist_title(&self.title);

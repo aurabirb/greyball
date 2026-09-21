@@ -82,18 +82,6 @@ impl Catalog {
         if let Some(mut t) = self.store.track_by_rendition(&r.source, &r.uri)? {
             // A fresh import's attrs are all source-owned, so they refresh on re-import.
             let mut changed = false;
-            let fresh = hit.rendition();
-            if let Some(own) = t.renditions.iter_mut().find(|x| x.source == fresh.source && x.uri == fresh.uri)
-                && (own.quality != fresh.quality || own.duration_ms != fresh.duration_ms)
-            {
-                let from_rendition = t.duration_ms == own.duration_ms;
-                own.quality = fresh.quality.clone();
-                own.duration_ms = fresh.duration_ms;
-                if t.duration_ms == 0 || from_rendition {
-                    t.duration_ms = hit.duration_ms;
-                }
-                changed = true;
-            }
             for (k, v) in &hit.attrs {
                 if t.attrs.get(k) != Some(v) {
                     t.attrs.insert(k.clone(), v.clone());
