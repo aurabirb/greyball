@@ -417,6 +417,12 @@ pub struct HotkeyMembership {
     pub pending: HashSet<TrackId>,
 }
 
+struct LikedLocal {
+    name: String,
+    id: Option<PlaylistId>,
+    members: HashSet<TrackId>,
+}
+
 struct HotkeyMemo {
     table: Arc<Vec<HotkeyMembership>>,
     dirty: bool,
@@ -470,8 +476,8 @@ pub struct Session {
     /// being hand-added to `ui::command`.
     plugin_commands: HashMap<String, Arc<dyn Plugin>>,
     pub cfg: Arc<Config>,
-    /// The local playlist named `cfg.liked_playlist`, when it exists.
-    liked_local: Option<PlaylistId>,
+    /// Memoized `liked_local`, rebuilt when the playlists or the configured name change.
+    liked_local: Mutex<Option<(u64, Arc<LikedLocal>)>>,
     /// Background scan driver (bpm, later genre/...), if any plugin is
     /// registered. Built and spawned in `session_builder::build_session`.
     pub scan: Option<Arc<crate::scan::ScanDriver>>,
@@ -612,7 +618,7 @@ impl Session {
             players,
             plugins,
             plugin_commands,
-            liked_local: None,
+            liked_local: Mutex::new(None),
             cfg: Arc::new(cfg),
             scan: None,
             media_cache,
@@ -637,7 +643,6 @@ impl Session {
             pending_enqueues: Vec::new(),
             enqueue_timer: None,
         };
-        session.liked_local = session.find_playlist_named(&session.cfg.liked_playlist);
         session.refresh_plugin_health();
         session
     }
@@ -1640,7 +1645,7 @@ impl Session {
         self.sources
             .iter()
             .filter_map(|(id, src)| self.view.liked_mark(id, &src.liked_songs_node()?, track))
-            .chain(self.liked_local.filter(|&id| self.playlist_track_ids(id).contains(&track)).map(|_| false))
+            .chain(self.liked_local().members.contains(&track).then_some(false))
             .reduce(|a, b| a || b)
     }
 
@@ -1849,12 +1854,26 @@ impl Session {
         }
         self.touch();
         Arc::make_mut(&mut self.cfg).liked_playlist = name.to_string();
-        self.liked_local = self.find_playlist_named(name);
         Ok(())
     }
 
-    fn find_playlist_named(&self, name: &str) -> Option<PlaylistId> {
-        self.playlists().into_iter().find(|p| p.name == name).map(|p| p.id)
+    /// The local playlist named `cfg.liked_playlist` (the lowest id among duplicates) and its members.
+    fn liked_local(&self) -> Arc<LikedLocal> {
+        let mut memo = self.liked_local.lock().unwrap();
+        let generation = self.playlists_gen();
+        match &*memo {
+            Some((g, l)) if *g == generation && l.name == self.cfg.liked_playlist => return l.clone(),
+            _ => {}
+        }
+        let name = self.cfg.liked_playlist.clone();
+        let found = self.playlists().into_iter().filter(|p| p.name == name).min_by_key(|p| p.id.0);
+        let liked = Arc::new(LikedLocal {
+            name,
+            id: found.as_ref().map(|p| p.id),
+            members: found.map(|p| p.items.into_iter().collect()).unwrap_or_default(),
+        });
+        *memo = Some((generation, liked.clone()));
+        liked
     }
 
     fn blank_playlist(name: String) -> Playlist {
@@ -2655,18 +2674,16 @@ impl Session {
             }
             Command::Like(track) => {
                 let t = self.store.get_track(*track).ok().flatten()?;
-                self.is_liked(&t).then(|| format!("Remove {:?} from Liked Songs?", t.display_name()))
+                let from = if self.liked_targets(&t).is_empty() { self.cfg.liked_playlist.clone() } else { "Liked Songs".to_string() };
+                self.is_liked(&t).then(|| format!("Remove {:?} from {from}?", t.display_name()))
             }
             _ => None,
         }
     }
 
     fn is_liked(&self, track: &Track) -> bool {
-        let targets = self.liked_targets(track);
-        if targets.is_empty() {
-            return self.liked_local.is_some_and(|id| self.playlist_track_ids(id).contains(&track.id));
-        }
-        targets.iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
+        self.liked_local().members.contains(&track.id)
+            || self.liked_targets(track).iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
     }
 
     fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode, position: Option<usize>) -> Dispatch {
@@ -2780,10 +2797,13 @@ impl Session {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
-        let targets = self.liked_targets(&t);
+        let mut targets = self.liked_targets(&t);
         let name = t.display_name();
         let like = !self.is_liked(&t);
-        if targets.is_empty() {
+        if !like {
+            targets.retain(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, t.id) > 0);
+        }
+        if targets.is_empty() && (like || self.liked_local().members.contains(&t.id)) {
             return self.set_liked_locally(&t, like);
         }
         let mut started = false;
@@ -2794,14 +2814,18 @@ impl Session {
         if !started {
             return Ok(Dispatch::Refused(format!("Still updating {name:?} in Liked Songs")));
         }
+        if !like && self.liked_local().members.contains(&t.id) {
+            return self.set_liked_locally(&t, false);
+        }
         Ok(Dispatch::Ok)
     }
 
     /// Likes into the default local playlist, created on first use, when no source of the track can hold a like.
     fn set_liked_locally(&mut self, track: &Track, like: bool) -> Result<Dispatch> {
-        let mut p = match self.liked_local.and_then(|id| self.store.get_playlist(id).ok().flatten()) {
+        let liked = self.liked_local();
+        let mut p = match liked.id.and_then(|id| self.store.get_playlist(id).ok().flatten()) {
             Some(p) => p,
-            None => Self::blank_playlist(self.cfg.liked_playlist.clone()),
+            None => Self::blank_playlist(liked.name.clone()),
         };
         if like {
             p.items.push(track.id);
@@ -2809,7 +2833,6 @@ impl Session {
             p.items.retain(|&t| t != track.id);
         }
         self.save_playlist(&p)?;
-        self.liked_local = Some(p.id);
         Ok(Dispatch::MembershipSet { track: track.display_name(), playlist: p.name, added: like })
     }
 

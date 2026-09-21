@@ -71,33 +71,23 @@ fn state_path() -> PathBuf {
 }
 
 fn load_volume() -> Option<f32> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get("volume")?.as_float().map(|f| f as f32)
+    load_state_value("volume")?.as_float().map(|f| f as f32)
 }
 
 fn load_vis_fps() -> Option<u32> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    u32::try_from(v.get("vis_fps")?.as_integer()?).ok()
+    u32::try_from(load_state_value("vis_fps")?.as_integer()?).ok()
 }
 
 fn load_status_line() -> Option<bool> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get("status_line")?.as_bool()
+    load_state_value("status_line")?.as_bool()
 }
 
 fn load_show_hints() -> Option<bool> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get("show_hints")?.as_bool()
+    load_state_value("show_hints")?.as_bool()
 }
 
 fn load_auto_update() -> Option<bool> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get("auto_update")?.as_bool()
+    load_state_value("auto_update")?.as_bool()
 }
 
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
@@ -121,12 +111,7 @@ fn scan_mode_from_str(s: &str) -> Option<ScanMode> {
 /// `save_state`) when it was an explicit override of the config default, so
 /// a later default change isn't masked by a stale value.
 fn load_scan_mode(default: ScanMode) -> ScanMode {
-    (|| -> Option<ScanMode> {
-        let text = std::fs::read_to_string(state_path()).ok()?;
-        let v: toml::Value = text.parse().ok()?;
-        scan_mode_from_str(v.get("scan_mode")?.as_str()?)
-    })()
-    .unwrap_or(default)
+    load_state_string("scan_mode").and_then(|s| scan_mode_from_str(&s)).unwrap_or(default)
 }
 
 /// Settings-pane source overrides, same shape/precedent as `load_scan_mode`.
@@ -215,16 +200,12 @@ fn load_hotkeys() -> HashMap<char, HotkeyTarget> {
 
 /// The `[layout]` table; one that is absent or doesn't parse whole means the default layout.
 fn load_layout() -> Option<Layout> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get("layout")?.clone().try_into().ok()
+    load_state_value("layout")?.try_into().ok()
 }
 
 /// The `[last_played]` table: the track id and, when it played from a playlist, that playlist's target string.
 fn load_last_played() -> Option<LastPlayed> {
-    let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    let table = v.get("last_played")?;
+    let table = load_state_value("last_played")?;
     let track = TrackId(Uuid::parse_str(table.get("track")?.as_str()?).ok()?);
     let playlist = table.get("playlist").and_then(|p| p.as_str()).and_then(hotkey_target_from_string);
     Some(LastPlayed { track, playlist })
@@ -249,10 +230,13 @@ fn save_last_played(last: &LastPlayed) {
     }
 }
 
-fn load_state_string(key: &str) -> Option<String> {
+fn load_state_value(key: &str) -> Option<toml::Value> {
     let text = std::fs::read_to_string(state_path()).ok()?;
-    let v: toml::Value = text.parse().ok()?;
-    v.get(key)?.as_str().map(str::to_string)
+    text.parse::<toml::Table>().ok()?.remove(key)
+}
+
+fn load_state_string(key: &str) -> Option<String> {
+    load_state_value(key)?.as_str().map(str::to_string)
 }
 
 fn load_state_path(key: &str) -> Option<PathBuf> {
