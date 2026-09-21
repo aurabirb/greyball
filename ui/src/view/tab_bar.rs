@@ -14,7 +14,7 @@ use super::status_line::StatusLine;
 use super::text::{active_style, in_span, scroll_title};
 use super::transport::{LIKED_ICON, TRANSPORT_GAP, Transport, heart_glyph, transport_labels, transport_layout};
 
-/// The resampled waveform of the last (track, width, envelope length).
+/// The resampled (or, without an envelope, constant placeholder) waveform of the last (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
 
 /// Narrower than this the waveform is not drawn.
@@ -104,7 +104,7 @@ struct Layout {
     heart: Option<usize>,
     /// `(start, width)` of the title, right-aligned in the room right of the buttons.
     title: (usize, usize),
-    /// `(start, width)` of the waveform, when there is an envelope and room for it.
+    /// `(start, width)` of the waveform, while a track plays and there is room for it.
     wave: Option<(usize, usize)>,
 }
 
@@ -150,7 +150,7 @@ impl TabBar<'_> {
         let has_heart = self.status.now_playing_id.is_some() && room >= HEART_W + HEART_TITLE_MIN;
         let detail_w = room.saturating_sub(if has_heart { HEART_W } else { 0 });
         let want = self.status.now_playing.width();
-        let has_wave = total_w >= WAVE_MIN_BAR && !self.status.waveform.is_empty() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
+        let has_wave = total_w >= WAVE_MIN_BAR && self.status.now_playing_id.is_some() && detail_w >= WAVE_MIN + TRANSPORT_GAP + TITLE_MIN;
         let title_w = if has_wave { want.min((detail_w / 2).max(TITLE_MIN)).min(detail_w - TRANSPORT_GAP - WAVE_MIN) } else { want.min(detail_w) };
         let wave = has_wave.then(|| (detail_start, detail_w - title_w - if title_w > 0 { TRANSPORT_GAP } else { 0 }));
         let title = (detail_start + room - title_w, title_w);
@@ -207,8 +207,8 @@ impl TabBar<'_> {
         if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
             let levels = levels_memo
-                .get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || resample(envelope, wave_w));
-            self.draw_waveform(printer, wave_start, &levels);
+                .get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || if envelope.is_empty() { vec![8; wave_w].into() } else { resample(envelope, wave_w) });
+            self.draw_waveform(printer, wave_start, &levels, envelope.is_empty());
         }
         if !text.is_empty() {
             let played = match self.status.duration_ms {
@@ -240,7 +240,7 @@ impl TabBar<'_> {
         }
     }
 
-    fn draw_waveform(&self, printer: &Printer, start: usize, levels: &[u8]) {
+    fn draw_waveform(&self, printer: &Printer, start: usize, levels: &[u8], placeholder: bool) {
         let played = match self.status.duration_ms {
             0 => 0,
             d => levels.len() * self.status.position_ms.min(d) as usize / d as usize,
@@ -253,7 +253,8 @@ impl TabBar<'_> {
                         p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
                     });
                 } else {
-                    printer.print((start + x, 0), glyph);
+                    let effect = if placeholder { Effect::Dim } else { Effect::Simple };
+                    printer.with_effect(effect, |p| p.print((start + x, 0), glyph));
                 }
             }
         }
