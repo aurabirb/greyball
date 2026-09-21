@@ -26,7 +26,7 @@ use crate::resolver::{Resolution, Resolver, Target, local_path_from_uri};
 use crate::revised::Revised;
 use crate::search::Search;
 use crate::traits::{
-    BrowseNode, Error, Player, PlayerState, PlayerStatus, Result, Source, Store,
+    BrowseNode, Error, NodeMeta, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
     LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
@@ -484,6 +484,8 @@ pub enum BindError {
     BuiltinKey(HotkeyTarget),
     /// The target is a synthetic node (e.g. Liked Songs), not a real playlist.
     SyntheticPlaylist,
+    /// The source reports the target read-only.
+    ReadOnly,
 }
 
 pub struct Session {
@@ -1728,6 +1730,16 @@ impl Session {
         self.sources.get(source).map(|s| s.is_synthetic(node)).unwrap_or(false)
     }
 
+    /// What `source` reported about `node`; default when unknown.
+    pub fn node_meta(&self, source: &SourceId, node: &BrowseNode) -> NodeMeta {
+        self.view.node_meta(source, node)
+    }
+
+    /// Whether `node` may be offered as a write target: only a node reported read-only is not.
+    pub fn is_writable(&self, source: &SourceId, node: &BrowseNode) -> bool {
+        self.node_meta(source, node).writable != Some(false)
+    }
+
     /// Cheap count of a remote playlist's ingested tracks so far.
     pub fn remote_playlist_len(&self, source: &SourceId, node: &BrowseNode) -> usize {
         self.view.remote_playlist_len(source, node, self.remote_ctx())
@@ -1831,7 +1843,7 @@ impl Session {
 
     /// Binds `key` to `target`, dropping `target`'s previous key and stealing `key` from any
     /// other playlist; returns who it was stolen from. Refuses a built-in's key and a
-    /// synthetic target — see `BindError`.
+    /// synthetic or read-only target — see `BindError`.
     pub fn bind_hotkey(
         &mut self,
         key: char,
@@ -1842,6 +1854,11 @@ impl Session {
             && self.is_synthetic_playlist(source, node)
         {
             return Err(BindError::SyntheticPlaylist);
+        }
+        if let HotkeyTarget::Remote(source, node) = &target
+            && !self.is_writable(source, node)
+        {
+            return Err(BindError::ReadOnly);
         }
         let stolen = self.hotkeys.bind(key, target).map_err(BindError::BuiltinKey)?;
         self.invalidate_hotkey_memberships();
@@ -2780,7 +2797,7 @@ impl Session {
         let Some(src) = self.sources.get(&source).cloned() else {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: {source} isn't available"));
         };
-        if src.is_synthetic(&node) {
+        if src.is_synthetic(&node) || !self.is_writable(&source, &node) {
             let msg = format!("Can't toggle {name:?}: that playlist is read-only");
             return refused("toggle_playlist_membership", msg);
         }
@@ -2828,7 +2845,7 @@ impl Session {
                         members: self.playlist_track_ids(*id).into_iter().collect(),
                         pending: HashSet::new(),
                     }),
-                    HotkeyTarget::Remote(sid, node) if !self.is_synthetic_playlist(sid, node) => {
+                    HotkeyTarget::Remote(sid, node) if !self.is_synthetic_playlist(sid, node) && self.is_writable(sid, node) => {
                         let members = self.remote_playlist_track_ids(sid, node).into_iter().collect();
                         loading |= self.remote_playlist_loading(sid, node);
                         let pending = self.remote_pending_ids(sid, node).into_iter().collect();

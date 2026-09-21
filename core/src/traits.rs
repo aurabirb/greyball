@@ -38,11 +38,23 @@ pub enum BrowseNode {
     Path(String),
 }
 
+/// Per-node facts a source reports beside `BrowsePage::folders`; `Default` is "nothing known".
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NodeMeta {
+    /// `None` = unknown (offered as a write target), `Some(false)` = read-only.
+    pub writable: Option<bool>,
+}
+
+/// A persisted folder list: `(name, path id)` pairs and the sparse `(path id, NodeMeta)` pairs beside them.
+pub type StoredFolders = (Vec<(String, String)>, Vec<(String, NodeMeta)>);
+
 #[derive(Clone, Debug)]
 pub struct BrowsePage {
     pub title: String,
     pub tracks: Vec<Track>,
     pub folders: Vec<(String, BrowseNode)>,
+    /// Sparse: only nodes of `folders` whose meta differs from the default.
+    pub node_meta: Vec<(BrowseNode, NodeMeta)>,
     /// `true` if `tracks` is a prefix of the real list and more may still
     /// land on a later `browse` call (a background fetch in progress) —
     /// `Session::remote_playlist_tracks` keeps re-browsing (and only
@@ -81,7 +93,7 @@ pub trait Source: Send + Sync {
     }
     /// Blocking, paced by `want` like `browse`: the user's saved albums as `BrowsePage.folders`; default has none.
     fn saved_albums(&self, _want: usize) -> Result<BrowsePage> {
-        Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], partial: false, errored: false })
+        Ok(BrowsePage { title: String::new(), tracks: vec![], folders: vec![], node_meta: vec![], partial: false, errored: false })
     }
     /// Blocking (may hit the network): the shareable web URL for `uri`; `None` when this source has no such URL.
     fn share_url(&self, _uri: &str) -> Option<String> {
@@ -275,6 +287,8 @@ pub trait Store: Send + Sync {
     /// `Serialize`/`Deserialize` derive, and a folder is always
     /// `BrowseNode::Path` in practice, so the id is stored raw and
     /// reconstructed into `BrowseNode::Path` on read.
-    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>>;
-    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()>;
+    /// Alongside the folders, the sparse `(path id, NodeMeta)` pairs of the same list.
+    fn remote_playlist_folders(&self, source: &str) -> Result<StoredFolders>;
+    /// Writes folders and meta in one transaction.
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)], meta: &[(String, NodeMeta)]) -> Result<()>;
 }

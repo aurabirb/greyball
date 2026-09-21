@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
 
 use crate::matcher::Matcher;
-use crate::traits::{Error, Result, Store};
+use crate::traits::{Error, NodeMeta, Result, Store, StoredFolders};
 use crate::types::{Playlist, PlaylistId, Track, TrackId};
 
 fn rendition_key(source: &str, uri: &str) -> String {
@@ -30,7 +30,7 @@ struct MemInner {
     by_rendition: HashMap<String, TrackId>,
     by_title_norm: HashMap<String, Vec<TrackId>>,
     remote_playlist_ids: HashMap<String, Vec<TrackId>>,
-    remote_playlist_folders: HashMap<String, Vec<(String, String)>>,
+    remote_playlist_folders: HashMap<String, StoredFolders>,
 }
 
 #[derive(Default)]
@@ -158,7 +158,7 @@ impl Store for MemStore {
         Ok(())
     }
 
-    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>> {
+    fn remote_playlist_folders(&self, source: &str) -> Result<StoredFolders> {
         Ok(self
             .inner
             .lock()
@@ -169,12 +169,12 @@ impl Store for MemStore {
             .unwrap_or_default())
     }
 
-    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()> {
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)], meta: &[(String, NodeMeta)]) -> Result<()> {
         self.inner
             .lock()
             .unwrap()
             .remote_playlist_folders
-            .insert(source.to_string(), folders.to_vec());
+            .insert(source.to_string(), (folders.to_vec(), meta.to_vec()));
         Ok(())
     }
 }
@@ -199,6 +199,8 @@ const REMOTE_PLAYLIST_IDS: TableDefinition<&str, &[u8]> = TableDefinition::new("
 /// playlist-folder list — see `Store::remote_playlist_folders`.
 const REMOTE_PLAYLIST_FOLDERS: TableDefinition<&str, &[u8]> =
     TableDefinition::new("remote_playlist_folders");
+/// `SourceId` string -> JSON `Vec<(path_id, NodeMeta)>`, written with `REMOTE_PLAYLIST_FOLDERS`.
+const NODE_META: TableDefinition<&str, &[u8]> = TableDefinition::new("node_meta");
 
 pub struct RedbStore {
     db: Database,
@@ -217,6 +219,7 @@ impl RedbStore {
             w.open_multimap_table(IDX_TITLE).map_err(store_err)?;
             w.open_table(REMOTE_PLAYLIST_IDS).map_err(store_err)?;
             w.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
+            w.open_table(NODE_META).map_err(store_err)?;
         }
         w.commit().map_err(store_err)?;
         Ok(Self { db })
@@ -486,21 +489,30 @@ impl Store for RedbStore {
         Ok(())
     }
 
-    fn remote_playlist_folders(&self, source: &str) -> Result<Vec<(String, String)>> {
+    fn remote_playlist_folders(&self, source: &str) -> Result<StoredFolders> {
         let r = self.db.begin_read().map_err(store_err)?;
-        let t = r.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
-        match t.get(source).map_err(store_err)? {
-            Some(g) => serde_json::from_slice(g.value()).map_err(store_err),
-            None => Ok(Vec::new()),
-        }
+        let folders = r.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
+        let meta = r.open_table(NODE_META).map_err(store_err)?;
+        let folders = match folders.get(source).map_err(store_err)? {
+            Some(g) => serde_json::from_slice(g.value()).map_err(store_err)?,
+            None => Vec::new(),
+        };
+        let meta = match meta.get(source).map_err(store_err)? {
+            Some(g) => serde_json::from_slice(g.value()).map_err(store_err)?,
+            None => Vec::new(),
+        };
+        Ok((folders, meta))
     }
 
-    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)]) -> Result<()> {
-        let json = serde_json::to_vec(folders).map_err(store_err)?;
+    fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)], meta: &[(String, NodeMeta)]) -> Result<()> {
+        let folders = serde_json::to_vec(folders).map_err(store_err)?;
+        let meta = serde_json::to_vec(meta).map_err(store_err)?;
         let w = self.db.begin_write().map_err(store_err)?;
         {
             let mut t = w.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
-            t.insert(source, json.as_slice()).map_err(store_err)?;
+            t.insert(source, folders.as_slice()).map_err(store_err)?;
+            let mut t = w.open_table(NODE_META).map_err(store_err)?;
+            t.insert(source, meta.as_slice()).map_err(store_err)?;
         }
         w.commit().map_err(store_err)?;
         Ok(())

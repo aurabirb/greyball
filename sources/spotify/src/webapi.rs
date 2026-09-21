@@ -50,6 +50,8 @@ struct Inner {
     /// established on first use, reused across pages of the same (or a
     /// different) playlist/album walk.
     web_player: Mutex<Option<crate::web_player::Session>>,
+    /// The current user's id from `/me`, fetched once.
+    user_id: Mutex<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -135,6 +137,19 @@ struct CollectionSearchResponse {
 struct ApiPlaylist {
     id: String,
     name: String,
+    owner: Option<PlaylistOwner>,
+    #[serde(default)]
+    collaborative: bool,
+}
+
+#[derive(Deserialize)]
+struct PlaylistOwner {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct Me {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +238,7 @@ impl WebApi {
                     .unwrap_or_default(),
                 gate: RateGate::new(API_MIN_INTERVAL, Duration::from_millis(API_JITTER_MAX_MS)),
                 web_player: Mutex::new(None),
+                user_id: Mutex::new(None),
             }),
         }
     }
@@ -399,18 +415,35 @@ impl WebApi {
         body.into_track().ok_or_else(|| "track has no id".to_string())
     }
 
+    /// The current user's id (`/me`), cached after the first success.
+    fn user_id(&self) -> Result<String, String> {
+        let mut cached = self.inner.user_id.lock().unwrap();
+        if let Some(id) = cached.as_ref() {
+            return Ok(id.clone());
+        }
+        let me: Me = self.get(&format!("{API}/me"))?.json().map_err(|e| e.to_string())?;
+        *cached = Some(me.id.clone());
+        Ok(me.id)
+    }
+
     /// One page of the current user's playlists (owned + followed), as
-    /// `(id, name)`, plus the API's reported `total` — the caller
+    /// `(id, name, writable)` — `None` when ownership can't be told — plus the API's reported `total` — the caller
     /// (`SpotifySource`'s `folders` `PagedList`) walks `offset` across
     /// repeated calls the same way `saved_tracks_page` does for Liked Songs.
-    pub fn playlists_page(&self, offset: usize, limit: usize) -> Result<RemotePage<(String, String)>, String> {
+    pub fn playlists_page(&self, offset: usize, limit: usize) -> Result<RemotePage<(String, String, Option<bool>)>, String> {
         let url = format!("{API}/me/playlists?limit={limit}&offset={offset}");
         let body: Playlists = self.get(&url)?.json().map_err(|e| e.to_string())?;
         let consumed = body.items.len();
+        let user = self.user_id().map_err(|e| log::warn!("spotify: /me failed, playlist ownership unknown: {e}")).ok();
+        let writable = |p: &ApiPlaylist| match (&user, &p.owner) {
+            _ if p.collaborative => Some(true),
+            (Some(user), Some(owner)) => Some(&owner.id == user),
+            _ => None,
+        };
         Ok(RemotePage {
             total: body.total,
             consumed,
-            hits: body.items.into_iter().map(|p| (p.id, p.name)).collect(),
+            hits: body.items.into_iter().map(|p| (writable(&p), p)).map(|(w, p)| (p.id, p.name, w)).collect(),
         })
     }
 

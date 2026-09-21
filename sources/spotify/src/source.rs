@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use core::{
-    BrowseNode, BrowsePage, Bus, Error, PagedList, PagedMap, RemotePage, Result, Track, SearchQuery, Source,
+    BrowseNode, BrowsePage, Bus, Error, NodeMeta, PagedList, PagedMap, RemotePage, Result, Track, SearchQuery, Source,
     SourceId,
 };
 
@@ -13,6 +13,7 @@ use crate::webapi::WebApi;
 /// `BrowseNode::Path` sentinel for the synthetic "Liked Songs" folder — not a
 /// real Spotify id (those are base-62 alphanumeric), so it can't collide with
 /// one.
+const READ_ONLY: NodeMeta = NodeMeta { writable: Some(false) };
 const LIKED_SONGS: &str = "__liked__";
 
 /// Page size for walking `/v1/me/tracks` — the API's max for this endpoint.
@@ -54,7 +55,7 @@ pub struct SpotifySource {
     /// have hundreds of playlists, and this walk runs under the same
     /// `RemoteCtx`-driven `browse` call the UI's Playlists screen makes on
     /// every redraw, so it must never block.
-    folders: PagedList<(String, BrowseNode)>,
+    folders: PagedList<(String, BrowseNode, NodeMeta)>,
     /// The user's `/me/albums`, paged like `folders`.
     saved_albums: PagedList<(String, BrowseNode)>,
 }
@@ -248,7 +249,8 @@ impl Source for SpotifySource {
                 hits: page.hits.into_iter().map(|(id, name)| (name, BrowseNode::Path(format!("{ALBUM_PREFIX}{id}")))).collect(),
             })
         });
-        Ok(BrowsePage { title: String::new(), tracks: vec![], folders, partial, errored: self.saved_albums.errored() })
+        let node_meta = folders.iter().map(|(_, node)| (node.clone(), READ_ONLY)).collect();
+        Ok(BrowsePage { title: String::new(), tracks: vec![], folders, node_meta, partial, errored: self.saved_albums.errored() })
     }
 
     fn browse(&self, node: &BrowseNode, want: usize) -> Result<BrowsePage> {
@@ -265,19 +267,24 @@ impl Source for SpotifySource {
                         hits: page
                             .hits
                             .into_iter()
-                            .map(|(id, name)| (name, BrowseNode::Path(id)))
+                            .map(|(id, name, writable)| (name, BrowseNode::Path(id), NodeMeta { writable }))
                             .collect(),
                     })
                 });
-                let mut folders = vec![(
-                    "Liked Songs".to_string(),
-                    BrowseNode::Path(LIKED_SONGS.to_string()),
-                )];
-                folders.extend(playlists);
+                let liked = BrowseNode::Path(LIKED_SONGS.to_string());
+                let mut folders = vec![("Liked Songs".to_string(), liked.clone())];
+                let mut node_meta = vec![(liked, READ_ONLY)];
+                for (name, node, meta) in playlists {
+                    if meta != NodeMeta::default() {
+                        node_meta.push((node.clone(), meta));
+                    }
+                    folders.push((name, node));
+                }
                 Ok(BrowsePage {
                     title: "spotify".to_string(),
                     tracks: vec![],
                     folders,
+                    node_meta,
                     partial,
                     errored: self.folders.errored(),
                 })
@@ -291,6 +298,7 @@ impl Source for SpotifySource {
                     title: "Liked Songs".to_string(),
                     tracks,
                     folders: vec![],
+                    node_meta: vec![],
                     partial,
                     errored: self.liked.errored(),
                 })
@@ -307,6 +315,7 @@ impl Source for SpotifySource {
                     title: id.clone(),
                     tracks,
                     folders: vec![],
+                    node_meta: vec![],
                     partial,
                     errored: list.errored(),
                 })
@@ -323,6 +332,7 @@ impl Source for SpotifySource {
                     title: id.clone(),
                     tracks,
                     folders: vec![],
+                    node_meta: vec![],
                     partial,
                     errored: list.errored(),
                 })

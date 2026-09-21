@@ -172,6 +172,7 @@ impl Source for SoulseekSource {
                 title: "Soulseek".to_string(),
                 tracks: vec![],
                 folders: vec![],
+                node_meta: vec![],
                 partial: false,
                 errored: false,
             }),

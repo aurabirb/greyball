@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core::{
-    Bus, BrowseNode, BrowsePage, CoreEvent, Error, Media, MediaProvider, PagedList, PagedMap, Quality, RateGate,
+    Bus, BrowseNode, BrowsePage, CoreEvent, Error, Media, MediaProvider, NodeMeta, PagedList, PagedMap, Quality, RateGate,
     Rendition, RemotePage, Result, Track, SearchQuery, Source, SourceId,
 };
 use regex::Regex;
@@ -655,6 +655,11 @@ impl SoundcloudSource {
     }
 }
 
+/// What is known of a folder node; no playlist writes exist yet, so every node is read-only.
+fn node_meta(_node: &BrowseNode) -> NodeMeta {
+    NodeMeta { writable: Some(false) }
+}
+
 /// api-v2 reports no totals on cursor-paged lists: report one that is never reached while more pages remain.
 fn remote_page<T>(hits: Vec<T>, offset: usize, consumed: usize, more: bool) -> RemotePage<T> {
     RemotePage { hits, total: offset + consumed + usize::from(more && consumed > 0), consumed }
@@ -846,7 +851,8 @@ impl Source for SoundcloudSource {
                     partial = own_partial || shelf_partial;
                     errored = self.playlists.list.errored() || self.shelves.list.errored();
                 }
-                Ok(BrowsePage { title: "SoundCloud".to_string(), tracks: vec![], folders, partial, errored })
+                let node_meta = folders.iter().map(|(_, node)| (node.clone(), node_meta(node))).collect();
+                Ok(BrowsePage { title: "SoundCloud".to_string(), tracks: vec![], folders, node_meta, partial, errored })
             }
             BrowseNode::Path(id) if id == LIKED_TRACKS => {
                 let (tracks, partial) = self.liked.snapshot(self, want, Self::likes_page);
@@ -854,6 +860,7 @@ impl Source for SoundcloudSource {
                     title: "Liked Tracks".to_string(),
                     tracks,
                     folders: vec![],
+                    node_meta: vec![],
                     partial,
                     errored: self.liked.list.errored(),
                 })
@@ -865,7 +872,7 @@ impl Source for SoundcloudSource {
                 let pid = id.clone();
                 let (tracks, partial) = list.snapshot(&self.bus, want, move |offset| src.playlist_page(&pid, offset));
                 let title = self.playlist_docs.lock().unwrap().get(id).map_or_else(|| id.clone(), |d| d.title.clone());
-                Ok(BrowsePage { title, tracks, folders: vec![], partial, errored: list.errored() })
+                Ok(BrowsePage { title, tracks, folders: vec![], node_meta: vec![], partial, errored: list.errored() })
             }
         }
     }

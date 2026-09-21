@@ -67,7 +67,7 @@
   receiving it as events from the live analysis (the stream engine lets it run while the track
   downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
   and stays quiet when no tempo is known.
-- [ ] A source-level capability (e.g. `Source::can_write(node)`) that core consults to hide read-only playlists (all SoundCloud playlists, system playlists) from the Add-to-Playlist picker and hotkey membership column.
+- [ ] SoundCloud playlist writes: add/remove tracks in own playlists (PUT the playlist's track list), likes (`PUT/DELETE /users/{id}/track_likes/{track_id}`) with a `liked_songs_node`, and playlist creation; then report `writable` from playlist ownership in `node_meta`.
 - [ ] SoundCloud: show charts and genre explore playlists (their own endpoints) and station shelves from `/mixed-selections` in the Playlists view.
 - [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
   `browse_uri` that resolves the URL through `/resolve` to a playlist id and lists it with

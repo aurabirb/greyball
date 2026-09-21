@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
 use crate::event::{Bus, CoreEvent, MembershipOutcome};
-use crate::traits::{BrowseNode, BrowsePage, Error, Source, Store};
+use crate::traits::{BrowseNode, BrowsePage, Error, NodeMeta, Source, Store};
 use crate::types::{ItemKind, SourceId, Track, TrackId};
 
 /// Cache entry behind `ViewCache::remote_playlist_track_ids`/`_len`/`_window`.
@@ -166,6 +166,7 @@ fn remote_playlist_cache_key(source: &SourceId, node: &BrowseNode) -> String {
 #[derive(Default)]
 struct RemotePlaylistsEntry {
     folders: Vec<(String, BrowseNode)>,
+    node_meta: HashMap<BrowseNode, NodeMeta>,
     /// Bumped by `set_folders`, the one way `folders` changes.
     generation: u64,
     /// A background `Source::browse(Root, want)` for this source is in flight.
@@ -350,6 +351,14 @@ impl ViewCache {
             .unwrap_or_default()
     }
 
+    /// What the source reported about `node` in its landed folder lists; default when unknown.
+    pub fn node_meta(&self, source: &SourceId, node: &BrowseNode) -> NodeMeta {
+        [&self.remote_playlists, &self.remote_albums]
+            .iter()
+            .find_map(|m| m.lock().unwrap().get(source)?.node_meta.get(node).cloned())
+            .unwrap_or_default()
+    }
+
     /// A source's landed saved albums — a pure read; `ensure_remote_playlists` fetches.
     pub fn remote_albums(&self, source: &SourceId) -> Vec<(String, BrowseNode)> {
         self.remote_albums.lock().unwrap().get(source).map(|e| e.folders.clone()).unwrap_or_default()
@@ -406,15 +415,10 @@ impl ViewCache {
             let entry = cache.entry(source.clone()).or_insert_with(|| {
                 // First touch this session — hydrate from whatever a
                 // previous session persisted instead of starting empty.
-                let folders = ctx
-                    .store
-                    .remote_playlist_folders(&key)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(name, id)| (name, BrowseNode::Path(id)))
-                    .collect();
+                let (folders, meta) = ctx.store.remote_playlist_folders(&key).unwrap_or_default();
                 let mut entry = RemotePlaylistsEntry::default();
-                entry.set_folders(folders);
+                entry.set_folders(folders.into_iter().map(|(name, id)| (name, BrowseNode::Path(id))).collect());
+                entry.node_meta = meta.into_iter().map(|(id, meta)| (BrowseNode::Path(id), meta)).collect();
                 entry
             });
             if entry.browsing
@@ -450,6 +454,13 @@ impl ViewCache {
                         entry.set_folders(page.folders.clone());
                     }
                     if clean {
+                        entry.node_meta = page.node_meta.iter().cloned().collect();
+                    } else {
+                        for (node, meta) in &page.node_meta {
+                            entry.node_meta.entry(node.clone()).or_insert_with(|| meta.clone());
+                        }
+                    }
+                    if clean {
                         entry.settled = !walks_root || page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
                     }
                 }
@@ -463,7 +474,15 @@ impl ViewCache {
                             BrowseNode::Root => None,
                         })
                         .collect();
-                    if let Err(e) = store.set_remote_playlist_folders(&key, &folders) {
+                    let meta: Vec<(String, NodeMeta)> = page
+                        .node_meta
+                        .iter()
+                        .filter_map(|(node, meta)| match node {
+                            BrowseNode::Path(id) => Some((id.clone(), meta.clone())),
+                            BrowseNode::Root => None,
+                        })
+                        .collect();
+                    if let Err(e) = store.set_remote_playlist_folders(&key, &folders, &meta) {
                         log::warn!("{source}: failed to persist {what} folders: {e}");
                     }
                     break None;

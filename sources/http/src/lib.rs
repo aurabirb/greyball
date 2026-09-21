@@ -274,6 +274,7 @@ impl Source for HttpDirSource {
                     title: "http roots".to_string(),
                     tracks: vec![],
                     folders,
+                    node_meta: vec![],
                     partial: false,
                     errored: false,
                 })
@@ -301,6 +302,7 @@ impl Source for HttpDirSource {
                     title: dir.to_string(),
                     tracks,
                     folders,
+                    node_meta: vec![],
                     partial: false,
                     errored: false,
                 })
