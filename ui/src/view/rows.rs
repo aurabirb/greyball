@@ -194,6 +194,7 @@ pub(super) struct ListBody<'a, A> {
     pub total: usize,
     pub playing: Option<usize>,
     pub actions: &'a [(A, String, &'static str)],
+    pub reserve_hotkeys: bool,
 }
 
 pub(super) const TITLE_MARGIN: usize = 1;
@@ -202,16 +203,16 @@ pub(super) const TITLE_MARGIN: usize = 1;
 pub(super) const BACK_LABEL: &str = "<back";
 
 /// Where the title row's title starts: the tags column, pushed right when the back button needs more room.
-pub(super) fn title_col(content_w: usize) -> usize {
-    main_col_start(content_w).max(BACK_LABEL.len() + 1)
+pub(super) fn title_col(content_w: usize, reserve_hotkeys: bool) -> usize {
+    main_col_start(content_w, reserve_hotkeys).max(BACK_LABEL.len() + 1)
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
-fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, actions }: ListBody<A>) {
+fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, actions, reserve_hotkeys }: ListBody<A>) {
     let ListState { cursor: sel, offset } = state;
     let content_w = printer.size.x.saturating_sub(1);
     let list_h = printer.size.y;
-    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
+    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W), reserve_hotkeys);
     for (y, row) in rows.iter().enumerate() {
         let selected = y + offset == sel;
         let mark = if row.current { "> " } else { "  " };
@@ -319,9 +320,10 @@ pub(super) fn action_spans<'a, A>(row: &Row, actions: &'a [(A, String, &'static 
 /// Each `columns` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
 pub(super) type Layout = [Option<(usize, usize, bool)>; 5];
 
-pub(super) fn column_layout(width: usize) -> Layout {
+pub(super) fn column_layout(width: usize, reserve_hotkeys: bool) -> Layout {
     let wide = width + ROW_MARK_W + 1 >= WIDE_MIN_LIST_W;
-    let hotkeys_w = HOTKEYS_COL_W + 1;
+    let hotkeys = wide || reserve_hotkeys;
+    let hotkeys_w = if hotkeys { HOTKEYS_COL_W + 1 } else { 0 };
     let source_w = if wide { SOURCE_COL_W + 1 } else { 0 };
     let fixed = TAGS_COL_W + hotkeys_w + 1 + source_w + DURATION_COL_W;
     if width <= fixed {
@@ -335,21 +337,21 @@ pub(super) fn column_layout(width: usize) -> Layout {
     [
         Some((0, TAGS_COL_W, true)),
         Some((main_start, main_w, false)),
-        Some((hotkeys_start, HOTKEYS_COL_W, false)),
+        hotkeys.then_some((hotkeys_start, HOTKEYS_COL_W, false)),
         wide.then_some((source_start, SOURCE_COL_W, false)),
         Some((duration_start, DURATION_COL_W, false)),
     ]
 }
 
-/// Narrowest list (including mark and scrollbar gutter) that still shows the source column; the hotkeys column is always reserved.
+/// Narrowest list (including mark and scrollbar gutter) that still shows the hotkeys and source columns.
 const WIDE_MIN_LIST_W: usize = 80;
 
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).
 pub(super) const ROW_MARK_W: usize = 2;
 
 /// Column a row's title text starts at (after the liked-marker slot) — what the title row is indented by.
-pub(super) fn main_col_start(content_w: usize) -> usize {
-    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W));
+pub(super) fn main_col_start(content_w: usize, reserve_hotkeys: bool) -> usize {
+    let layout = column_layout(content_w.saturating_sub(ROW_MARK_W), reserve_hotkeys);
     ROW_MARK_W + layout[1].map_or(0, |(start, ..)| start + LIKED_MARK_W)
 }
 

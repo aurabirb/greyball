@@ -206,11 +206,6 @@ impl MedleyView {
         if self.windows.placement(id) == Placement::Tabbed {
             self.activate(id);
         } else {
-            if self.windows.placement(id) == Placement::Docked {
-                while let Some(screen) = self.fullscreen() {
-                    self.close_window(screen);
-                }
-            }
             if !self.open.iter().any(|&(open, _)| open == id) {
                 self.open.push((id, self.focus));
             }

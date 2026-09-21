@@ -623,7 +623,9 @@ impl TrackList {
                 let collections = self.collections(s);
                 rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|row| {
                     let name = top_row_name(row, &[]);
-                    plain_row(if self.kinds == KindFilter::All { format!("[{}] {name}", kind_bar::noun(row.kind())) } else { name })
+                    let mut r = plain_row(if self.kinds == KindFilter::All { format!("[{}] {name}", kind_bar::noun(row.kind())) } else { name });
+                    r.hotkeys = Cell::plain(s.playlist_hotkey(&row.target()).map(String::from).unwrap_or_default());
+                    r
                 }));
                 rows
             }
@@ -767,13 +769,13 @@ impl TrackList {
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
         let bar_start = kind_bar::start(&bar);
-        let left = title_col(content_w);
+        let left = title_col(content_w, self.at_playlists_top());
         let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
         draw_row_list(
             printer,
             (left, room, shown, !matches!(self.open, Open::TopLevel)),
-            ListBody { rows: &frame.rows, state: self.state, total: frame.total, playing: frame.playing, actions: &frame.actions },
+            ListBody { rows: &frame.rows, state: self.state, total: frame.total, playing: frame.playing, actions: &frame.actions, reserve_hotkeys: self.at_playlists_top() },
         );
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
@@ -853,7 +855,7 @@ impl TrackList {
                 && let Some(id) = self.selected_track(s)
             {
                 let frame = self.frame(ctx, rect);
-                let layout = column_layout(rect.width().saturating_sub(1 + ROW_MARK_W));
+                let layout = column_layout(rect.width().saturating_sub(1 + ROW_MARK_W), self.at_playlists_top());
                 let hit = frame
                     .rows
                     .get(self.state.cursor - self.state.offset)

@@ -238,6 +238,11 @@ impl MedleyView {
         let found = ids.into_iter().find(|&id| self.windows[id].list_mut().is_some_and(|list| list.reveal(&s)));
         drop(s);
         let Some(id) = found else { return self.notify(Notice::not_in_list()) };
+        if self.windows.placement(id) == Placement::Docked {
+            while let Some(screen) = self.fullscreen() {
+                self.close_window(screen);
+            }
+        }
         self.show(id);
         self.clamp_scroll();
         EventResult::consumed()
