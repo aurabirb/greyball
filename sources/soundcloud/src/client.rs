@@ -638,12 +638,10 @@ impl ApiTrack {
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
         let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None });
-        let attrs = self
-            .waveform_url
-            .filter(|u| !u.is_empty())
-            .map(|u| (WAVEFORM_URL_ATTR.to_string(), u))
-            .into_iter()
-            .collect();
+        let mut attrs = std::collections::BTreeMap::new();
+        if let Some(u) = self.waveform_url.filter(|u| !u.trim().is_empty()) {
+            attrs.insert(WAVEFORM_URL_ATTR.to_string(), u);
+        }
         Some(Track { isrc, attrs, ..Track::fresh(title, artists, rendition) })
     }
 }
