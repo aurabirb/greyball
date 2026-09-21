@@ -713,11 +713,16 @@ impl TrackList {
                 hints
             }
             (ListKind::Playlists, _) if tab => {
-                let mut hints: Vec<String> = hint(&[c.like_key], "like").into_iter().chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).collect();
+                let mut hints: Vec<String> = hint(&[c.like_key], "like").into_iter().chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.copy_link_key], "share")).collect();
                 hints.extend(status.keys_run("send to playlist", &hints, fit));
                 hints
             }
-            (ListKind::Playlists, _) => status.keys_run("playlist", &tail, fit).into_iter().collect(),
+            (ListKind::Playlists, _) => {
+                let mut hints: Vec<String> = hint(&[c.copy_link_key], "share").into_iter().collect();
+                let others: Vec<String> = hints.iter().chain(&tail).cloned().collect();
+                hints.extend(status.keys_run("playlist", &others, fit));
+                hints
+            }
             (ListKind::NowPlaying, _) => {
                 let transport = match (c.prev_key, c.next_key) {
                     (Some(_), Some(_)) => hint(&[c.prev_key, c.next_key], "prev/next").into_iter().collect(),
@@ -728,7 +733,7 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
-            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection)]
+            (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.copy_link_key], "share")]
                 .into_iter()
                 .flatten()
                 .collect(),
