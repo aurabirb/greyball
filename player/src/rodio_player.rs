@@ -494,10 +494,14 @@ fn open_and_decode(
 ) -> core::Result<LoadedTrack> {
     let (handle, claim, from_cache) = engine.open_play(r)?;
     let (loaded, decoded_ms) = decode_stream(r, handle, claim, tap, inner, current)?;
-    if from_cache && decoded_ms > 0 && u64::from(decoded_ms) * 100 < u64::from(r.duration_ms) * TRUNCATED_PERCENT && current() {
+    if from_cache && decoded_ms > 0 && u64::from(decoded_ms) * 100 < u64::from(r.duration_ms) * TRUNCATED_PERCENT
+        && current()
+        && let Some(fetch) = engine.refetch(r)
+    {
         log::warn!("player: cached {} is {decoded_ms} ms but the catalog says {} ms; re-fetching", r.uri, r.duration_ms);
-        let fresh = engine.refetch(r).and_then(Result::ok).and_then(|(handle, claim)| decode_stream(r, handle, claim, tap, inner, current).ok());
-        if let Some((fresh, _)) = fresh.filter(|(_, ms)| *ms > decoded_ms) {
+        let fresh = fetch.ok().and_then(|(handle, claim)| decode_stream(r, handle, claim, tap, inner, current).ok());
+        // An unknown fresh length falls back to the catalog's, which is longer than the truncated copy.
+        if let Some((fresh, _)) = fresh.filter(|(f, _)| f.duration_ms > decoded_ms) {
             return Ok(fresh);
         }
     }
