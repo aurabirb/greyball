@@ -35,9 +35,9 @@ pub(super) const LIKED_ICON: &str = "♥";
 
 const LIKED_LOCAL_ICON: &str = "♡";
 
-const LIKED_DOT: &str = "●";
+const LIKED_DOT: &str = "•";
 
-const LIKED_LOCAL_DOT: &str = "○";
+const LIKED_LOCAL_DOT: &str = "∘";
 
 /// The glyph a like mark draws as, and whether it is italic (in flight).
 fn like_glyph(mark: core::LikeMark, full: &'static str, hollow: &'static str) -> (&'static str, bool) {
