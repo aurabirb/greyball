@@ -48,6 +48,16 @@ pub use view::{
 /// the Vis pane must never drop below this floor.
 pub const BASELINE_FPS: u32 = 4;
 
+/// Longest a frame may follow the previous one while scrolling.
+pub const SCROLL_FRAME: std::time::Duration = std::time::Duration::from_micros(1_000_000 / 45);
+
+static SCROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a scroll gesture was handled since the last call.
+pub fn take_scrolled() -> bool {
+    SCROLLED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Shared handle to the single [`Session`]. Not application state — the same
 /// `Rc` the `app` event loop pumps `on_event` on.
 pub type SessionHandle = std::sync::Arc<Mutex<Session>>;

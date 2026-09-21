@@ -514,6 +514,9 @@ impl View for MedleyView {
         if event == Event::Refresh {
             return self.sync_vis_fps();
         }
+        if scroll::Nav::of(&event).is_some() {
+            crate::SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let result = self.route(&event);
         // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away.
         self.layout();

@@ -679,7 +679,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             siv.quit();
             break;
         }
+        let step_start = std::time::Instant::now();
         siv.step();
+        // Sleeping after a scrolled frame lets the next scroll events queue up, so cursive handles them in one step and draws once.
+        if ui::take_scrolled() {
+            std::thread::sleep(ui::SCROLL_FRAME.saturating_sub(step_start.elapsed()));
+        }
         // Re-arm wake coalescing for this iteration, then drain. Drain first,
         // then lock: never hold the Session mutex across a cursive call, and
         // keep the lock span here as short as the events themselves.
