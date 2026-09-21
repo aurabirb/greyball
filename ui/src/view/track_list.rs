@@ -136,7 +136,7 @@ pub(super) struct ListFrame {
     /// The cursor is on a track, which `y` shares.
     track: bool,
     /// The selected track row's clickable actions, in draw order; empty off a track.
-    actions: Vec<(BuiltinAction, String)>,
+    actions: Vec<(BuiltinAction, String, &'static str)>,
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -700,9 +700,9 @@ impl TrackList {
                 collection: self.collection_row(s).is_some(),
                 track: self.selected_track(s).is_some(),
                 actions: if self.selected_track(s).is_some() {
-                    [(BuiltinAction::CopyLink, "share"), (BuiltinAction::Like, "like")]
+                    [(BuiltinAction::CopyLink, "share", "↗"), (BuiltinAction::Like, "like", "♥")]
                         .into_iter()
-                        .filter_map(|(action, name)| hint(&[s.effective_hotkey(&HotkeyTarget::Builtin(action))], name).map(|label| (action, label)))
+                        .filter_map(|(action, name, glyph)| hint(&[s.effective_hotkey(&HotkeyTarget::Builtin(action))], name).map(|label| (action, label, glyph)))
                         .collect()
                 } else {
                     vec![]

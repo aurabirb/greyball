@@ -193,7 +193,7 @@ pub(super) struct ListBody<'a, A> {
     pub state: ListState,
     pub total: usize,
     pub playing: Option<usize>,
-    pub actions: &'a [(A, String)],
+    pub actions: &'a [(A, String, &'static str)],
 }
 
 pub(super) const TITLE_MARGIN: usize = 1;
@@ -272,29 +272,41 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
 /// Gap between a title and the row's action labels, and between the labels.
 const ACTION_GAP: usize = 2;
 
-/// Narrowest title kept beside the action labels.
-const MIN_TITLE_W: usize = 8;
+/// Narrowest title kept beside the action labels; below it the labels shrink to their glyphs.
+const MIN_TITLE_W: usize = 10;
 
-/// Each `(x, width, label)` of `actions`, right-aligned to the end of the main column, the one layout draw and click share; the leading ones that leave the title its minimum width; none on a pending row.
-pub(super) fn action_spans<'a, A>(row: &Row, actions: &'a [(A, String)], layout: &Layout) -> Vec<(usize, usize, &'a str)> {
+/// Each `(x, width, text)` of `actions`, right-aligned to the end of the main column, the one layout draw and click share: full labels if they leave the title its minimum width, else glyphs, keeping the leading ones that fit; none on a pending row.
+pub(super) fn action_spans<'a, A>(row: &Row, actions: &'a [(A, String, &'static str)], layout: &Layout) -> Vec<(usize, usize, &'a str)> {
     let Some((start, width, _)) = layout[1] else { return vec![] };
-    let budget = width.saturating_sub(ACTION_GAP + LIKED_MARK_W + MIN_TITLE_W);
-    let mut shown = 0;
-    let mut labels_w = 0;
-    for (_, label) in actions.iter().take_while(|_| !row.pending) {
-        let next = labels_w + label.width() + if shown > 0 { ACTION_GAP } else { 0 };
-        if next > budget {
-            break;
-        }
-        labels_w = next;
-        shown += 1;
+    if row.pending {
+        return vec![];
     }
+    let budget = width.saturating_sub(ACTION_GAP + LIKED_MARK_W + MIN_TITLE_W);
+    let fit = |texts: &[&'a str]| {
+        let mut w = 0;
+        let mut shown = 0;
+        for text in texts {
+            let next = w + text.width() + if shown > 0 { ACTION_GAP } else { 0 };
+            if next > budget {
+                break;
+            }
+            w = next;
+            shown += 1;
+        }
+        (shown, w)
+    };
+    let full: Vec<&str> = actions.iter().map(|(_, label, _)| label.as_str()).collect();
+    let glyphs: Vec<&str> = actions.iter().map(|&(.., glyph)| glyph).collect();
+    let (texts, (shown, labels_w)) = match fit(&full) {
+        (n, w) if n == full.len() => (full, (n, w)),
+        _ => (glyphs.clone(), fit(&glyphs)),
+    };
     let mut x = ROW_MARK_W + start + width - labels_w;
-    actions[..shown]
+    texts[..shown]
         .iter()
-        .map(|(_, label)| {
-            let w = label.width();
-            let span = (x, w, label.as_str());
+        .map(|&text| {
+            let w = text.width();
+            let span = (x, w, text);
             x += w + ACTION_GAP;
             span
         })
