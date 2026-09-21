@@ -55,8 +55,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Move the share/like menu (the clickable row action labels after the selected track row's title)
-  to the right edge of the selected track row.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid

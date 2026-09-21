@@ -217,7 +217,10 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
         let mark = if row.current { "> " } else { "  " };
         let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
         let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
-        let cols = columns([&tags, &main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
+        let spans = if selected { action_spans(row, actions, &layout) } else { vec![] };
+        let title_end = spans.first().map(|&(x, ..)| x - ACTION_GAP);
+        let main = &title_end.map_or_else(|| main.clone(), |end| truncate(&main, end.saturating_sub(ROW_MARK_W + layout[1].map_or(0, |l| l.0))));
+        let cols = columns([&tags, main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
         let line = pad(&format!("{mark}{cols}"), content_w);
         let mut row_style = Style::from(if selected {
             ColorStyle::highlight()
@@ -230,18 +233,19 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
             row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
         }
         printer.with_style(row_style, |p| p.print((0, y), &line));
-        if selected {
-            for (x, _, label) in action_spans(row, actions, &layout) {
-                printer.with_style(row_style, |p| p.print((x, y), label));
-            }
+        for (x, _, label) in spans {
+            printer.with_style(row_style, |p| p.print((x, y), label));
         }
         // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
         let plain = !selected && !row.current;
-        for (&(start, width, right_aligned), cell) in layout.iter().zip(cells).filter_map(|(l, c)| Some((l.as_ref()?, c))) {
+        for (i, (&(start, width, right_aligned), cell)) in layout.iter().zip(cells).enumerate().filter_map(|(i, (l, c))| Some((i, (l.as_ref()?, c)))) {
             if !cell.styled() {
                 continue;
             }
-            let end = ROW_MARK_W + start + width;
+            let mut end = ROW_MARK_W + start + width;
+            if i == 1 && let Some(title_end) = title_end {
+                end = end.min(title_end);
+            }
             let indent = if right_aligned { width.saturating_sub(cell.text().width()) } else { 0 };
             let mut x = ROW_MARK_W + start + indent;
             for span in &cell.spans {
@@ -265,24 +269,26 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
 /// Gap between a title and the row's action labels, and between the labels.
 const ACTION_GAP: usize = 2;
 
-/// Each `(x, width, label)` of the leading `actions` that fit after `row`'s title inside the main column, the one layout draw and click share; none on a pending row.
+/// Narrowest title kept beside the action labels; below it the labels are hidden.
+const MIN_TITLE_W: usize = 8;
+
+/// Each `(x, width, label)` of `actions`, right-aligned to the end of the main column, the one layout draw and click share; none on a pending row or when the title would be squeezed.
 pub(super) fn action_spans<'a, A>(row: &Row, actions: &'a [(A, String)], layout: &Layout) -> Vec<(usize, usize, &'a str)> {
     let Some((start, width, _)) = layout[1] else { return vec![] };
-    if row.pending {
+    let labels_w = actions.iter().map(|(_, l)| l.width() + ACTION_GAP).sum::<usize>();
+    if row.pending || actions.is_empty() || labels_w + LIKED_MARK_W + MIN_TITLE_W > width {
         return vec![];
     }
-    let end = ROW_MARK_W + start + width;
-    let mut x = ROW_MARK_W + start + row.main.text().width() + ACTION_GAP;
-    let mut spans = vec![];
-    for (_, label) in actions {
-        let w = label.width();
-        if x + w > end {
-            break;
-        }
-        spans.push((x, w, label.as_str()));
-        x += w + ACTION_GAP;
-    }
-    spans
+    let mut x = ROW_MARK_W + start + width - labels_w + ACTION_GAP;
+    actions
+        .iter()
+        .map(|(_, label)| {
+            let w = label.width();
+            let span = (x, w, label.as_str());
+            x += w + ACTION_GAP;
+            span
+        })
+        .collect()
 }
 
 /// Each `columns` column's `(start, width, right-aligned)` in `Row` field order; `None` when hidden.
