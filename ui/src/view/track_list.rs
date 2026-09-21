@@ -19,7 +19,7 @@ use crate::screen::{ListKind, Placement};
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
 use super::text::tail_fit;
-use super::rows::{BACK_LABEL, action_spans, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, draw_row_list, plain_row, tracks_to_rows};
+use super::rows::{BACK_LABEL, action_spans, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, ListBody, column_layout, draw_row_list, ROW_MARK_W, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -175,11 +175,6 @@ pub(super) struct TrackList {
     collections: Memo<(u64, u64), Arc<[TopRow]>>,
 }
 
-impl ListFrame {
-    fn labels(&self) -> Vec<String> {
-        self.actions.iter().map(|(_, label)| label.clone()).collect()
-    }
-}
 
 impl TrackList {
     pub(super) fn new(kind: ListKind, keyed_first: bool) -> Self {
@@ -775,7 +770,11 @@ impl TrackList {
         let left = title_col(content_w);
         let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
-        draw_row_list(printer, (left, room, shown, !matches!(self.open, Open::TopLevel)), &frame.rows, self.state, frame.total, frame.playing, &frame.labels());
+        draw_row_list(
+            printer,
+            (left, room, shown, !matches!(self.open, Open::TopLevel)),
+            ListBody { rows: &frame.rows, state: self.state, total: frame.total, playing: frame.playing, actions: &frame.actions },
+        );
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
@@ -854,9 +853,13 @@ impl TrackList {
                 && let Some(id) = self.selected_track(s)
             {
                 let frame = self.frame(ctx, rect);
-                let spans = action_spans(&frame.rows[self.state.cursor - self.state.offset], &frame.labels(), rect.width().saturating_sub(1));
-                let hit = spans.iter().position(|&(x, w)| (x..x + w).contains(&local.x));
+                let layout = column_layout(rect.width().saturating_sub(1 + ROW_MARK_W));
+                let hit = frame
+                    .rows
+                    .get(self.state.cursor - self.state.offset)
+                    .and_then(|row| action_spans(row, &frame.actions, &layout).iter().position(|&(x, w, _)| (x..x + w).contains(&local.x)));
                 if let Some(keybindings::Action::Command(command)) = hit.map(|i| keybindings::builtin_action(frame.actions[i].0, Some(id), None)) {
+                    self.last_click = None;
                     return WindowOutcome::Run(command);
                 }
             }
