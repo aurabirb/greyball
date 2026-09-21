@@ -747,21 +747,23 @@ impl TrackList {
         let title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
-        let bar_end = kind_bar::end(&bar);
-        let left = bar_end.map_or(main_col_start(content_w), |end| end + 1);
-        let room = content_w.saturating_sub(left + TITLE_MARGIN);
+        let bar_start = kind_bar::start(&bar);
+        let left = if matches!(self.open, Open::TopLevel) { 1 } else { main_col_start(content_w) };
+        let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
-        draw_row_list(printer, (left, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
+        draw_row_list(printer, (left, room, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
-            let at = left + room.saturating_sub(typed.width() + tip.width());
             let label = typed.strip_prefix(SEARCH_LABEL).map_or("", |_| SEARCH_LABEL);
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((at, 0), label));
-            printer.with_color(ColorStyle::primary(), |p| p.print((at + label.width(), 0), &typed[label.len()..]));
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((at + typed.width(), 0), tip));
-        } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(shown.width().min(room))) {
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &label));
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), label));
+            printer.with_color(ColorStyle::primary(), |p| p.print((left + label.width(), 0), &typed[label.len()..]));
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((left + typed.width(), 0), tip));
+        } else if let (Some(start), Some(label)) = (bar_start, hint(&[kind_key], "filter")) {
+            let at = start.saturating_sub(label.width() + 1);
+            if left + shown.width().min(room) < at {
+                printer.with_color(ColorStyle::title_primary(), |p| p.print((at, 0), &label));
+            }
         }
     }
 

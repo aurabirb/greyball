@@ -177,10 +177,10 @@ fn bpm_color(bpm: &str) -> Option<Color> {
 pub(super) const LIST_TITLE_ROWS: usize = 1;
 
 /// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
-pub(super) fn draw_row_list(printer: &Printer, (left, title): (usize, &str), back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
+pub(super) fn draw_row_list(printer: &Printer, (left, room, title): (usize, usize, &str), back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
     // Reserve the rightmost column of the list body as a scrollbar gutter.
     let content_w = printer.size.x.saturating_sub(1);
-    printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &pad_right_aligned(title, content_w.saturating_sub(left + TITLE_MARGIN))));
+    printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &truncate(title, room)));
     if back && back_button_fits(content_w) {
         printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
     }

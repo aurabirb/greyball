@@ -1,6 +1,7 @@
 use cursive::Printer;
 use core::ItemKind;
 
+use super::rows::TITLE_MARGIN;
 use super::text::{active_style, in_span};
 
 /// Columns right of the kind bar reserved for the title or search entry.
@@ -91,9 +92,9 @@ pub(super) struct Segment {
     text: String,
 }
 
-/// `kinds`' segments left-aligned from the tags column of a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks; `counts` runs parallel to `kinds`.
+/// `kinds`' segments right-aligned in a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks; `counts` runs parallel to `kinds`.
 pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], active: KindFilter) -> Vec<Segment> {
-    let room = content_w.saturating_sub(1 + QUERY_MIN);
+    let room = content_w.saturating_sub(1 + TITLE_MARGIN + QUERY_MIN);
     let seg = |kind: KindFilter, n: usize, short: bool, count: bool| {
         let name = if short { kind.short() } else { kind.title() };
         if count { format!(" {name} {n} ") } else { format!(" {name} ") }
@@ -114,7 +115,7 @@ pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], a
     if width(&segs) > room {
         return Vec::new();
     }
-    let mut x = 1;
+    let mut x = content_w.saturating_sub(TITLE_MARGIN + width(&segs));
     segs.into_iter()
         .map(|(kind, text)| {
             let w = text.chars().count();
@@ -124,9 +125,9 @@ pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], a
         .collect()
 }
 
-/// The column just past the bar, if any segment is shown.
-pub(super) fn end(segs: &[Segment]) -> Option<usize> {
-    segs.last().map(|seg| seg.start + seg.width)
+/// The bar's first column, if any segment is shown.
+pub(super) fn start(segs: &[Segment]) -> Option<usize> {
+    segs.first().map(|seg| seg.start)
 }
 
 pub(super) fn draw(printer: &Printer, segs: &[Segment], active: KindFilter) {
