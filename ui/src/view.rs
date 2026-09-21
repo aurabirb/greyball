@@ -271,6 +271,12 @@ impl MedleyView {
         std::iter::once((self.main_id(), main_rect)).chain(docked).map(plain).chain(floating).collect()
     }
 
+    /// The topmost shown window whose frame contains a mouse `position`.
+    fn hit(&self, offset: Vec2, position: Vec2) -> Option<Placed> {
+        let pos = position.checked_sub(offset)?;
+        self.placed().into_iter().rev().find(|placed| placed.frame.contains(pos))
+    }
+
     fn bar_rows(&self) -> usize {
         usize::from(self.status_line)
     }
@@ -561,8 +567,7 @@ impl MedleyView {
         if self.modal.is_some() {
             return Some(None);
         }
-        let pos = position.checked_sub(offset)?;
-        self.placed().into_iter().rev().find(|placed| placed.frame.contains(pos)).map(|placed| Some(placed.id))
+        self.hit(offset, position).map(|placed| Some(placed.id))
     }
 
     fn push_wheel(&mut self, offset: Vec2, position: Vec2, up: bool) {
@@ -652,10 +657,7 @@ impl MedleyView {
 
         // A mouse event goes to the topmost window whose box it lands in; a press focuses it even when it has no use for it.
         if let Event::Mouse { offset, position, event: mouse } = event {
-            let hit = position
-                .checked_sub(*offset)
-                .and_then(|pos| self.placed().into_iter().rev().find(|placed| placed.frame.contains(pos)));
-            let Some(Placed { id, .. }) = hit else { return EventResult::Ignored };
+            let Some(Placed { id, .. }) = self.hit(*offset, *position) else { return EventResult::Ignored };
             let outcome = self.send(&[id], event);
             let pressed = matches!(mouse, MouseEvent::Press(_));
             if outcome.is_some() || pressed {
