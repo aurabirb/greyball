@@ -22,7 +22,7 @@ pub struct SoundcloudPlugin {
     /// Why the configured `oauth_token` or the cached token file was unusable.
     config_error: Option<String>,
     hls: bool,
-    /// The source `wiring()` last built, shared with the waveform scan plugin.
+    /// The wired source, kept across rewires and replaced only by a successful `setup()`; shared with the waveform scan plugin.
     source: Mutex<Option<Arc<SoundcloudSource>>>,
 }
 
@@ -101,13 +101,13 @@ impl Plugin for SoundcloudPlugin {
     }
 
     fn wiring(&self) -> Wiring {
-        // A fresh `SoundcloudSource` every call rather than one built once
-        // and mutated — it has no interior mutability for its token, and
-        // this is already only called at startup and right after `setup()`,
-        // never per-frame.
-        let token = self.token.locked().clone();
-        let sc = Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls));
-        *self.source.locked() = Some(sc.clone());
+        let mut slot = self.source.locked();
+        let sc = slot
+            .get_or_insert_with(|| {
+                let token = self.token.locked().clone();
+                Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls))
+            })
+            .clone();
         Wiring {
             source: Some(sc.clone() as Arc<dyn Source>),
             media: Some(sc as Arc<dyn MediaProvider>),
@@ -135,6 +135,8 @@ impl Plugin for SoundcloudPlugin {
                     log.say(format!("Could not save the token, you will need to log in again next launch: {e}"));
                 }
                 *self.token.locked() = Some(token);
+                // A new login gets fresh lists and caches, so another account never sees the old one's.
+                *self.source.locked() = Some(Arc::new(source));
                 PluginHealth::Ok
             }
             Ok(None) => PluginHealth::Warn(
