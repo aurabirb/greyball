@@ -72,8 +72,8 @@ Building with the `spotify` feature additionally needs OpenSSL dev headers
 ### 3. Build and install
 
 ```sh
-git clone https://github.com/aurabirb/spotclean
-cd spotclean
+git clone https://github.com/aurabirb/greyball
+cd greyball
 cargo install --path app --locked --features spotify,soundcloud
 ```
 
@@ -88,9 +88,7 @@ tree without installing:
 cargo run --all-features
 ```
 
-### Prebuilt binary (alternative to 3)
-
-Latest release, no Rust needed (`:update` keeps it current):
+Or skip Rust and download a prebuilt binary of the latest release (`:update` keeps it current):
 
 | Platform | Download |
 | --- | --- |
@@ -99,7 +97,13 @@ Latest release, no Rust needed (`:update` keeps it current):
 | macOS x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-x86_64 |
 | macOS arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-aarch64 |
 
-Download, `chmod +x`, and move it onto your `PATH` as `medley`.
+```sh
+install -Dm755 medley-<platform> ~/.local/bin/medley
+```
+
+`~/.local/bin` must be on your `PATH`; it is where `:update` installs. On macOS,
+run `xattr -d com.apple.quarantine ~/.local/bin/medley` if the binary was
+downloaded in a browser (or fetch it with `curl -fLo`).
 
 ### 4. Run
 
