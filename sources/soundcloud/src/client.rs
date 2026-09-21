@@ -550,7 +550,9 @@ struct ApiTrack {
     #[serde(default)]
     permalink_url: Option<String>,
     #[serde(default)]
-    duration: u32, // ms
+    duration: u32, // ms; only the 30 s snippet's length on snipped tracks
+    #[serde(default)]
+    full_duration: Option<u32>,
     #[serde(default)]
     user: Option<ApiUser>,
     #[serde(default)]
@@ -647,7 +649,7 @@ impl ApiTrack {
             .publisher_metadata
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
-        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None });
+        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.full_duration.unwrap_or(self.duration), Quality::Lossy { kbps: None });
         let mut attrs = std::collections::BTreeMap::new();
         if let Some(u) = self.waveform_url.filter(|u| !u.trim().is_empty()) {
             attrs.insert(WAVEFORM_URL_ATTR.to_string(), u);
