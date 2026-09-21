@@ -433,7 +433,7 @@ impl View for MedleyView {
         // A fullscreen window covers the tab bar, the scrubber line and the docked windows.
         let covered = self.fullscreen().is_some();
         if !covered && self.open_in(Placement::Docked).next().is_some() {
-            draw_separator(self.pane_cfg.side, printer, self.windows[self.main_id()].rect());
+            draw_separator(self.pane_cfg.side, printer, placed[0].rect);
         }
         for (placed, window_frame) in placed.iter().zip(&frame.windows) {
             let window = &self.windows[placed.id];

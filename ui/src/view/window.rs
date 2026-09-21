@@ -149,10 +149,6 @@ impl Window {
         }
     }
 
-    pub(super) fn rect(&self) -> Rect {
-        self.rect
-    }
-
     /// A window with a status row offers both bottom corners in it.
     pub(super) const CORNERS: Corners = Corners::BOTH;
 
