@@ -204,7 +204,7 @@ impl SoundcloudSource {
             .and_then(|r| r.json())
             .map_err(|e| src_err(format!("waveform {url}: {e}")))?;
         let samples = json.get("samples").and_then(|s| s.as_array());
-        Ok(samples.map(|a| a.iter().filter_map(|v| v.as_f64()).map(|v| v as f32).collect()))
+        Ok(samples.map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()))
     }
 
     fn resolve_permalink(&self, url: &str) -> Result<ApiTrack> {

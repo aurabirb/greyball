@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, Source, SourceId, StreamHandle, Track, TrackMeta, Wiring, waveform};
+use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, Source, SourceId, StreamHandle, Track, Wiring, waveform};
 
 use crate::auth;
 use crate::client::SoundcloudSource;
@@ -20,6 +20,8 @@ pub struct SoundcloudPlugin {
     /// a config value, a cached file, or a `setup()` call provides one.
     token: Mutex<Option<String>>,
     hls: bool,
+    /// The source `wiring()` last built, shared with the waveform scan plugin.
+    source: Mutex<Option<Arc<SoundcloudSource>>>,
 }
 
 impl SoundcloudPlugin {
@@ -33,13 +35,12 @@ impl SoundcloudPlugin {
         let token = configured_token
             .filter(|s| !s.trim().is_empty())
             .or_else(|| auth::load_cached(&cache_dir));
-        Self { client_id, cache_dir, bus, token: Mutex::new(token), hls }
+        Self { client_id, cache_dir, bus, token: Mutex::new(token), hls, source: Mutex::default() }
     }
 
     /// The scan plugin that reads SoundCloud's ready-made waveforms; register it before the decoding one.
-    pub fn waveform_scan_plugin(&self) -> Arc<dyn ScanPlugin> {
-        let token = self.token.lock().unwrap().clone();
-        Arc::new(WaveformPlugin(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls)))
+    pub fn waveform_scan_plugin(self: &Arc<Self>) -> Arc<dyn ScanPlugin> {
+        Arc::new(WaveformPlugin(self.clone()))
     }
 }
 
@@ -75,6 +76,7 @@ impl Plugin for SoundcloudPlugin {
         // never per-frame.
         let token = self.token.lock().unwrap().clone();
         let sc = Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls));
+        *self.source.lock().unwrap() = Some(sc.clone());
         Wiring {
             source: Some(sc.clone() as Arc<dyn Source>),
             media: Some(sc as Arc<dyn MediaProvider>),
@@ -94,7 +96,11 @@ impl Plugin for SoundcloudPlugin {
 }
 
 /// Fills the waveform attr from SoundCloud's own drawn waveform, so the decode plugin never runs for its tracks.
-struct WaveformPlugin(SoundcloudSource);
+struct WaveformPlugin(Arc<SoundcloudPlugin>);
+
+fn soundcloud_uri(track: &Track) -> Option<&str> {
+    track.renditions.iter().find(|r| r.source.as_str() == "soundcloud").map(|r| r.uri.as_str())
+}
 
 impl ScanPlugin for WaveformPlugin {
     fn id(&self) -> &'static str {
@@ -106,18 +112,16 @@ impl ScanPlugin for WaveformPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        !track.attrs.contains_key(waveform::ATTR) && track.renditions.iter().any(|r| r.source.as_str() == "soundcloud")
+        !track.attrs.contains_key(waveform::ATTR) && soundcloud_uri(track).is_some()
     }
 
     fn analyze(&self, track: &Track, _audio: &dyn Fn() -> Result<StreamHandle, Outcome>, _wanted: &dyn Fn() -> bool) -> Outcome {
-        let Some(rendition) = track.renditions.iter().find(|r| r.source.as_str() == "soundcloud") else {
+        let source = self.0.source.lock().unwrap().clone();
+        let (Some(source), Some(uri)) = (source, soundcloud_uri(track)) else {
             return Outcome::Skip;
         };
-        match self.0.waveform_samples(&rendition.uri) {
-            Ok(Some(samples)) => match waveform::envelope(&samples) {
-                Some(buckets) => Outcome::Done(TrackMeta { attrs: [(waveform::ATTR.to_string(), waveform::encode(&buckets))].into() }),
-                None => Outcome::Skip,
-            },
+        match source.waveform_samples(uri) {
+            Ok(Some(samples)) => waveform::envelope(&samples).map_or(Outcome::Skip, |b| Outcome::Done(waveform::meta(&b))),
             Ok(None) => Outcome::Skip,
             Err(e) => {
                 log::warn!("soundcloud-waveform: {e}");
@@ -128,5 +132,9 @@ impl ScanPlugin for WaveformPlugin {
 
     fn min_interval(&self) -> Duration {
         Duration::ZERO
+    }
+
+    fn needs_audio(&self) -> bool {
+        false
     }
 }

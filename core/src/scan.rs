@@ -14,6 +14,7 @@ use crate::media_cache::MediaCache;
 use crate::stream::{Claim, Intent, StreamEngine, StreamHandle, StreamState};
 use crate::traits::{Error, Store};
 use crate::types::{Rendition, SourceId, Track, TrackId};
+use crate::waveform;
 
 /// One background-scan extension point (bpm, later genre-ml, ...). A new
 /// plugin means a new `attrs` key, never a driver or `Track` change.
@@ -35,6 +36,11 @@ pub trait ScanPlugin: Send + Sync {
     /// a slow/rate-limited source from being hammered.
     fn min_interval(&self) -> Duration {
         Duration::from_secs(15)
+    }
+
+    /// False for a plugin that never opens audio, so it skips the stream gate.
+    fn needs_audio(&self) -> bool {
+        true
     }
 }
 
@@ -583,6 +589,7 @@ impl Worker {
             if !plugin.needs(track) {
                 continue;
             }
+            let gated = plugin.needs_audio() && !has_stream;
             let key = (plugin.id(), track.id);
             match self.inner.status.lock().unwrap().get(&key) {
                 // A prior `Outcome::Skip` means "not this plugin's job" for the rest of this run.
@@ -600,7 +607,7 @@ impl Worker {
                     continue;
                 }
             }
-            if !has_stream {
+            if gated {
                 if access == Access::Peek {
                     block(Verdict::Waiting);
                     continue;
@@ -612,7 +619,7 @@ impl Worker {
             }
             // `min_interval` spaces real downloads; a cached or running stream costs the source nothing.
             let mut last_run: Option<MutexGuard<HashMap<&'static str, Instant>>> = None;
-            if !has_stream {
+            if gated {
                 let guard = self.inner.last_run.lock().unwrap();
                 if let Some(t) = guard.get(plugin.id())
                     && t.elapsed() < plugin.min_interval()
@@ -639,12 +646,16 @@ impl Worker {
             let open_audio = || self.open_stream(track, access, &used);
             let outcome = plugin.analyze(track, &open_audio, wanted);
             let stream = used.into_inner();
+            if !matches!(outcome, Outcome::Done(_)) {
+                waveform::clear_live(track.id);
+            }
             let source = stream.as_ref().map(|h| h.key().0.clone());
             match outcome {
                 Outcome::Done(meta) => {
                     log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs);
                     // `patch` re-reads the track under `Catalog`'s lock and merges into whatever's current.
                     let _ = self.catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
+                    waveform::clear_live(track.id);
                     self.inner.status.lock().unwrap().remove(&key);
                     self.inner.failures.lock().unwrap().remove(&key);
                     if let Some(source) = &source {

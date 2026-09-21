@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-use crate::TrackId;
+use crate::{TrackId, TrackMeta};
 
 pub const ATTR: &str = "waveform";
 
@@ -46,19 +46,24 @@ pub fn bucket_of(index: usize, total: usize) -> usize {
     (index * BUCKETS / total).min(BUCKETS - 1)
 }
 
-/// `levels` max-reduced to `BUCKETS` with the live placement, empty buckets taking the nearest level, then `normalise`d.
+/// `levels` max-reduced to `BUCKETS` with the live placement (or stretched when fewer), then `normalise`d.
 pub fn envelope(levels: &[f32]) -> Option<Vec<u8>> {
-    let mut buckets = vec![0.0_f32; BUCKETS];
-    for (i, &level) in levels.iter().enumerate() {
-        let b = bucket_of(i, levels.len());
-        buckets[b] = buckets[b].max(level);
-    }
-    if levels.len() < BUCKETS {
-        for (i, b) in buckets.iter_mut().enumerate() {
-            *b = levels[(i * levels.len() / BUCKETS).min(levels.len().saturating_sub(1))..].first().copied().unwrap_or(0.0);
+    let buckets: Vec<f32> = if levels.len() < BUCKETS {
+        (0..BUCKETS).map(|i| levels.get(i * levels.len() / BUCKETS).copied().unwrap_or(0.0)).collect()
+    } else {
+        let mut buckets = vec![0.0_f32; BUCKETS];
+        for (i, &level) in levels.iter().enumerate() {
+            let b = bucket_of(i, levels.len());
+            buckets[b] = buckets[b].max(level);
         }
-    }
+        buckets
+    };
     normalise(&buckets)
+}
+
+/// The scan result carrying `buckets` as the track's waveform attr.
+pub fn meta(buckets: &[u8]) -> TrackMeta {
+    TrackMeta { attrs: [(ATTR.to_string(), encode(buckets))].into() }
 }
 
 /// `buckets` scaled so the loudest is 255; `None` for silence or no audio.

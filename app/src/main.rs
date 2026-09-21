@@ -497,7 +497,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     #[allow(unused_mut)]
     let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
     #[allow(unused_mut)]
-    let mut sc_waveform: Option<Arc<dyn ScanPlugin>> = None;
+    let mut extra_scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
     let http_enabled = cfg.http.enabled;
     if http_enabled {
         let http = Arc::new(HttpDirSource::from_cfg(&cfg));
@@ -518,8 +518,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // SoundCloud never populates `Wiring::player` (its playback goes
         // through the shared `rodio` below, not yet built at this point in
         // startup) — a throwaway map here loses nothing.
-        sc_waveform = Some(plugin.waveform_scan_plugin());
-        register_plugin(plugin, &mut sources, &media, &mut HashMap::new(), &mut plugins);
+        register_plugin(plugin.clone(), &mut sources, &media, &mut HashMap::new(), &mut plugins);
+        extra_scan_plugins.push(plugin.waveform_scan_plugin());
     }
 
     #[cfg(feature = "soulseek")]
@@ -630,7 +630,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
         // only seeds the initial mode.
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
-        if let Some(p) = sc_waveform {
+        for p in extra_scan_plugins {
             scan.register_plugin(p);
         }
         scan.register_plugin(Arc::new(waveform::WaveformPlugin::new(bpm_min_interval_secs)));
