@@ -169,10 +169,24 @@ impl SoundcloudSource {
         }
     }
 
+    /// A fresh source for `token` on a detached bus, so validating it raises no events; see `with_bus`.
+    pub(crate) fn with_token(&self, token: String) -> Self {
+        Self::new(self.configured_id.clone(), Some(token), Bus::new(), self.hls)
+    }
+
+    pub(crate) fn with_bus(mut self, bus: Bus) -> Self {
+        self.bus = bus;
+        self
+    }
+
+    pub(crate) fn has_token(&self) -> bool {
+        self.oauth_token.is_some()
+    }
+
     /// The `client_id` query param every endpoint needs. Configured value wins;
     /// otherwise scraped from the public web bundle and cached; the lock is held
     /// through the scrape so concurrent callers wait for it instead of repeating it,
-    /// and a failed scrape is replayed for `SCRAPE_RETRY_AFTER` rather than repeated.
+    /// and a scrape that found no id (not a network error) is replayed for `SCRAPE_RETRY_AFTER` rather than repeated.
     fn client_id(&self) -> Result<String> {
         let mut cached = self.cached_id.lock().unwrap();
         if let Some(id) = &cached.id {
@@ -185,10 +199,14 @@ impl SoundcloudSource {
         }
         let id = match &self.configured_id {
             Some(id) => id.clone(),
-            None => self.scrape_client_id().map_err(|message| {
-                cached.failure = Some((Instant::now(), message.clone()));
-                src_err(message)
-            })?,
+            None => match self.scrape_client_id().map_err(src_err)? {
+                Some(id) => id,
+                None => {
+                    let message = "could not scrape a client_id; set [soundcloud] client_id in config".to_string();
+                    cached.failure = Some((Instant::now(), message.clone()));
+                    return Err(src_err(message));
+                }
+            },
         };
         cached.failure = None;
         cached.id = Some(id.clone());
@@ -214,16 +232,14 @@ impl SoundcloudSource {
         }
     }
 
-    fn scrape_client_id(&self) -> std::result::Result<String, String> {
+    /// `Ok(None)` when the bundles hold no client_id; `Err` for a network failure.
+    fn scrape_client_id(&self) -> std::result::Result<Option<String>, String> {
+        let unreachable = |e: reqwest::Error| format!("web player unreachable: {}", e.without_url());
         log::debug!("soundcloud: GET {WEB} (scraping client_id)");
         self.gate.wait_turn();
-        let resp = self.client.get(WEB).send().map_err(|e| format!("web player unreachable: {}", e.without_url()))?;
+        let resp = self.client.get(WEB).send().map_err(unreachable)?;
         log::debug!("soundcloud: GET {WEB} -> {}", resp.status());
-        let home = resp
-            .error_for_status()
-            .map_err(|e| format!("web player unreachable: {}", e.without_url()))?
-            .text()
-            .map_err(|e| format!("web player unreachable: {}", e.without_url()))?;
+        let home = resp.error_for_status().map_err(unreachable)?.text().map_err(unreachable)?;
 
         let script_re = Regex::new(r#"src="(https://a-v2\.sndcdn\.com/assets/[^"]+\.js)""#).unwrap();
         let id_re = Regex::new(r#"client_id\s*[:=]\s*"([0-9A-Za-z-]{16,})""#).unwrap();
@@ -249,10 +265,10 @@ impl SoundcloudSource {
                 continue;
             };
             if let Some(c) = id_re.captures(&body) {
-                return Ok(c.get(1).unwrap().as_str().to_string());
+                return Ok(Some(c.get(1).unwrap().as_str().to_string()));
             }
         }
-        Err("could not scrape a client_id; set [soundcloud] client_id in config".to_string())
+        Ok(None)
     }
 
     /// The oauth token, or an error naming the config key — for endpoints
@@ -284,9 +300,15 @@ impl SoundcloudSource {
         if let Some(id) = *self.user_id.lock().unwrap() {
             return Ok(id);
         }
-        let id = self.me_doc()?.and_then(|me| me.get("id")?.as_u64()).ok_or_else(|| self.denied_error("/me", Denied::StaleClientId))?;
+        let me = self.me_doc()?.ok_or_else(|| self.denied_error("/me", Denied::StaleClientId))?;
+        let id = me.get("id").and_then(|id| id.as_u64()).ok_or_else(|| src_err("no user id in /me"))?;
         *self.user_id.lock().unwrap() = Some(id);
         Ok(id)
+    }
+
+    fn get_while(&self, target: &str, query: &[(&str, &str)], wanted: &dyn Fn() -> bool) -> Result<serde_json::Value> {
+        let denied = Denied::StaleClientId;
+        self.send_while(target, query, denied, wanted)?.ok_or_else(|| self.denied_error(target, denied))
     }
 
     fn api_get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value> {
@@ -309,13 +331,20 @@ impl SoundcloudSource {
     /// GET `target` (an api-v2 path or an absolute `next_href`); `None` when denied. Idempotent, so
     /// 429s, 5xx and network errors are retried with backoff, up to `MAX_ATTEMPTS`.
     fn send(&self, target: &str, query: &[(&str, &str)], denied: Denied) -> Result<Option<serde_json::Value>> {
+        self.send_while(target, query, denied, &|| true)
+    }
+
+    /// `send` that stops retrying and waiting, with an error, once `wanted` turns false.
+    fn send_while(&self, target: &str, query: &[(&str, &str)], denied: Denied, wanted: &dyn Fn() -> bool) -> Result<Option<serde_json::Value>> {
         let mut rescraped = false;
         for attempt in 0..MAX_ATTEMPTS {
             let client_id = self.client_id()?;
             let url = request_url(target, query, &client_id)?;
             let path = url.path().to_string();
             log::debug!("soundcloud: GET {path} {query:?}");
-            self.gate.wait_turn();
+            if !self.gate.wait_turn_while(wanted) {
+                return Err(src_err("no longer wanted"));
+            }
             let mut req = self.client.get(url);
             if let Some(token) = &self.oauth_token {
                 req = req.header("Authorization", format!("OAuth {token}"));
@@ -354,9 +383,9 @@ impl SoundcloudSource {
                     }
                     return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {}", e.without_url())));
                 }
-                // The token authenticates on its own: with one, a 401 is the login, never the client_id.
+                // The token authenticates on its own: with one, a 401 on any endpoint means the login expired.
                 Outcome::Denied if self.oauth_token.is_some() => {
-                    if status.as_u16() == 401 && user_scoped(&path) {
+                    if status.as_u16() == 401 {
                         self.set_login_expired(true);
                     }
                     return Ok(None);
@@ -373,8 +402,8 @@ impl SoundcloudSource {
         Ok(None)
     }
 
-    fn track_by_id(&self, id: u64) -> Result<ApiTrack> {
-        let v = self.api_get(&format!("/tracks/{id}"), &[])?;
+    fn track_by_id(&self, id: u64, wanted: &dyn Fn() -> bool) -> Result<ApiTrack> {
+        let v = self.get_while(&format!("/tracks/{id}"), &[], wanted)?;
         serde_json::from_value(v).map_err(|e| src_err(format!("track {id}: {e}")))
     }
 
@@ -392,18 +421,18 @@ impl SoundcloudSource {
         Ok(samples.map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()))
     }
 
-    fn resolve_permalink(&self, url: &str) -> Result<ApiTrack> {
-        let v = self.api_get("/resolve", &[("url", url)])?;
+    fn resolve_permalink(&self, url: &str, wanted: &dyn Fn() -> bool) -> Result<ApiTrack> {
+        let v = self.get_while("/resolve", &[("url", url)], wanted)?;
         if v.get("kind").and_then(|k| k.as_str()) != Some("track") {
             return Err(src_err("that SoundCloud URL is not a track"));
         }
         serde_json::from_value(v).map_err(|e| src_err(format!("resolve {url}: {e}")))
     }
 
-    fn track_ref(&self, r: &TrackRef) -> Result<ApiTrack> {
+    fn track_ref(&self, r: &TrackRef, wanted: &dyn Fn() -> bool) -> Result<ApiTrack> {
         match r {
-            TrackRef::Id(id) => self.track_by_id(*id),
-            TrackRef::Permalink(url) => self.resolve_permalink(url),
+            TrackRef::Id(id) => self.track_by_id(*id, wanted),
+            TrackRef::Permalink(url) => self.resolve_permalink(url, wanted),
         }
     }
 
@@ -560,40 +589,34 @@ impl SoundcloudSource {
 
     /// Best-quality HLS path: resolves the AAC-160k transcoding's signed playlist here, then returns a
     /// stream that appends the init segment and every media segment in order (one fMP4 `symphonia`
-    /// decodes like any other). A setup failure is soft — `open` falls back to the progressive stream.
-    fn open_hls(&self, track: &ApiTrack) -> Result<Media> {
-        let hls = track
+    /// decodes like any other). `None` when the track or its playlist is unusable, so `open` falls back
+    /// to progressive; an API failure (retries already exhausted) is an error.
+    fn open_hls(&self, track: &ApiTrack, wanted: &dyn Fn() -> bool) -> Result<Option<Media>> {
+        let Some(hls) = track
             .media
             .full_transcodings()
             .find(|t| t.format.protocol == "hls" && t.format.mime_type.starts_with("audio/mp4"))
-            .ok_or_else(|| src_err("no AAC HLS transcoding"))?;
+        else {
+            return Ok(None);
+        };
 
-        let v = self.api_get(&hls.url, &[])?;
-        let playlist_url = v
-            .get("url")
-            .and_then(|u| u.as_str())
-            .ok_or_else(|| src_err("hls stream url: no 'url' in response"))?;
-
-        log::debug!("soundcloud: GET {playlist_url} (HLS playlist, preset {})", hls.preset);
-        let playlist_text = self
-            .client
-            .get(playlist_url)
-            .send()
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?
-            .text()
-            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?;
-
-        let base = url::Url::parse(playlist_url).map_err(|e| src_err(format!("hls playlist url: {e}")))?;
-        let playlist = parse_hls_playlist(&playlist_text, &base)?;
-        if playlist.segments.is_empty() {
-            return Err(src_err("hls playlist: no media segments"));
-        }
+        let v = self.get_while(&hls.url, &[], wanted)?;
+        let Some(playlist_url) = v.get("url").and_then(|u| u.as_str()) else {
+            log::debug!("soundcloud: hls stream url: no 'url' in response");
+            return Ok(None);
+        };
+        let playlist = match self.hls_playlist(playlist_url, hls.preset.as_str()) {
+            Ok(p) => p,
+            Err(e) => {
+                log::debug!("soundcloud: HLS path unavailable, falling back to progressive: {e}");
+                return Ok(None);
+            }
+        };
 
         log::info!("soundcloud: playing via HLS (preset {}) instead of 128kbps progressive", hls.preset);
         let client = self.client.clone();
         let urls: Vec<url::Url> = playlist.init.into_iter().chain(playlist.segments).collect();
-        Ok(Media::Stream(Box::new(move |mut w| {
+        Ok(Some(Media::Stream(Box::new(move |mut w| {
             let (start, mut offset) = w.checkpoint();
             for (i, url) in urls.iter().enumerate().skip(start) {
                 let bytes = match core::stream_retry(&w, "hls fetch", || fetch_segment(&client, url)) {
@@ -608,7 +631,25 @@ impl SoundcloudSource {
                 w.set_progress((i + 1) as f32 / urls.len() as f32);
             }
             w.finish();
-        })))
+        }))))
+    }
+
+    fn hls_playlist(&self, playlist_url: &str, preset: &str) -> Result<HlsPlaylist> {
+        log::debug!("soundcloud: GET {playlist_url} (HLS playlist, preset {preset})");
+        let text = self
+            .client
+            .get(playlist_url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?
+            .text()
+            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?;
+        let base = url::Url::parse(playlist_url).map_err(|e| src_err(format!("hls playlist url: {e}")))?;
+        let playlist = parse_hls_playlist(&text, &base)?;
+        if playlist.segments.is_empty() {
+            return Err(src_err("hls playlist: no media segments"));
+        }
+        Ok(playlist)
     }
 }
 
@@ -617,12 +658,12 @@ fn remote_page<T>(hits: Vec<T>, offset: usize, consumed: usize, more: bool) -> R
     RemotePage { hits, total: offset + consumed + usize::from(more && consumed > 0), consumed }
 }
 
-/// `target` is an api-v2 path or an absolute `next_href`; its own `client_id` is replaced with the current one.
-/// Endpoints that answer for the token's account; public ones say nothing about the login.
+/// Endpoints that answer for the token's account; a success elsewhere says nothing about the login.
 fn user_scoped(path: &str) -> bool {
     path == "/me" || ["/me/", "/users/", "/mixed-selections", "/system-playlists/"].iter().any(|p| path.starts_with(p))
 }
 
+/// `target` is an api-v2 path or an absolute `next_href`; its own `client_id` is replaced with the current one.
 fn request_url(target: &str, query: &[(&str, &str)], client_id: &str) -> Result<url::Url> {
     let full = if target.starts_with('/') { format!("{API}{target}") } else { target.to_string() };
     let mut url = url::Url::parse(&full).map_err(|e| src_err(format!("bad url {target:?}: {e}")))?;
@@ -725,7 +766,7 @@ impl Source for SoundcloudSource {
     fn share_url(&self, uri: &str) -> Option<String> {
         match TrackRef::parse(uri)? {
             TrackRef::Permalink(url) => Some(url),
-            TrackRef::Id(id) => match self.track_by_id(id) {
+            TrackRef::Id(id) => match self.track_by_id(id, &|| true) {
                 Ok(t) => t.permalink_url,
                 Err(e) => {
                     log::warn!("soundcloud: share_url: track {id}: {e}");
@@ -759,7 +800,7 @@ impl Source for SoundcloudSource {
 
     fn resolve(&self, uri: &str) -> Result<Track> {
         let r = TrackRef::parse(uri).ok_or_else(|| src_err(format!("not a SoundCloud track: {uri:?}")))?;
-        self.track_ref(&r)?
+        self.track_ref(&r, &|| true)?
             .into_track()
             .ok_or_else(|| src_err("track has no full-length stream (preview-only or unavailable)"))
     }
@@ -838,19 +879,18 @@ impl MediaProvider for SoundcloudSource {
         source_id()
     }
 
-    fn open(&self, r: &Rendition, _wanted: &dyn Fn() -> bool) -> Result<Media> {
+    fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media> {
         let track_ref = TrackRef::parse(&r.uri)
             .ok_or_else(|| src_err(format!("not a SoundCloud track: {:?}", r.uri)))?;
-        let track = self.track_ref(&track_ref)?;
+        let track = self.track_ref(&track_ref, wanted)?;
         if track.media.full_transcodings().next().is_none() {
             return Err(src_err("only a 30 s preview is available"));
         }
 
-        if self.hls {
-            match self.open_hls(&track) {
-                Ok(media) => return Ok(media),
-                Err(e) => log::debug!("soundcloud: HLS path unavailable, falling back to progressive: {e}"),
-            }
+        if self.hls
+            && let Some(media) = self.open_hls(&track, wanted)?
+        {
+            return Ok(media);
         }
 
         // Pick the progressive (plain-file) transcoding; the player downloads it.
@@ -860,7 +900,7 @@ impl MediaProvider for SoundcloudSource {
             .find(|t| t.format.protocol == "progressive")
             .ok_or_else(|| src_err("MVP: track has only HLS streams, no progressive"))?;
 
-        let v = self.api_get(&prog.url, &[])?;
+        let v = self.get_while(&prog.url, &[], wanted)?;
         let cdn = v
             .get("url")
             .and_then(|u| u.as_str())

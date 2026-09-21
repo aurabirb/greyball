@@ -59,11 +59,19 @@ impl RateGate {
     }
 
     pub fn wait_turn(&self) {
+        self.wait_turn_while(&|| true);
+    }
+
+    /// Like `wait_turn`, but gives up (returning false) once `wanted` turns false while waiting out a cool-down.
+    pub fn wait_turn_while(&self, wanted: &dyn Fn() -> bool) -> bool {
         loop {
+            if !wanted() {
+                return false;
+            }
             let until = *self.cooldown_until.lock().unwrap();
             match until {
                 Some(t) => match t.checked_duration_since(Instant::now()) {
-                    Some(remaining) => std::thread::sleep(remaining.min(Duration::from_secs(2))),
+                    Some(remaining) => std::thread::sleep(remaining.min(Duration::from_millis(250))),
                     None => {
                         *self.cooldown_until.lock().unwrap() = None;
                         break;
@@ -73,6 +81,7 @@ impl RateGate {
             }
         }
         self.limiter.throttle();
+        true
     }
 
     /// Make every caller back off for at least `wait`.

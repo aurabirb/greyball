@@ -13,17 +13,12 @@ use crate::auth;
 use crate::client::{SoundcloudSource, WAVEFORM_URL_ATTR, source_id};
 
 pub struct SoundcloudPlugin {
-    client_id: Option<String>,
     cache_dir: PathBuf,
     bus: Bus,
-    /// The token `wiring()` builds a `SoundcloudSource` with — `None` until
-    /// a config value, a cached file, or a `setup()` call provides one.
-    token: Mutex<Option<String>>,
     /// Why the configured `oauth_token` or the cached token file was unusable.
     config_error: Option<String>,
-    hls: bool,
-    /// The wired source, kept across rewires and replaced only by a successful `setup()`; shared with the waveform scan plugin.
-    source: Mutex<Option<Arc<SoundcloudSource>>>,
+    /// The wired source; only a successful `setup()` replaces it.
+    source: Mutex<Arc<SoundcloudSource>>,
 }
 
 impl SoundcloudPlugin {
@@ -46,7 +41,8 @@ impl SoundcloudPlugin {
         if let Some(e) = &config_error {
             log::warn!("soundcloud: {e}");
         }
-        Self { client_id, cache_dir, bus, token: Mutex::new(token), config_error, hls, source: Mutex::default() }
+        let source = Arc::new(SoundcloudSource::new(client_id, token, bus.clone(), hls));
+        Self { cache_dir, bus, config_error, source: Mutex::new(source) }
     }
 
     /// The scan plugin that reads SoundCloud's ready-made waveforms; register it before the decoding one.
@@ -61,8 +57,9 @@ impl Plugin for SoundcloudPlugin {
     }
 
     fn probe(&self) -> PluginHealth {
-        if self.token.locked().is_some() {
-            if self.source.locked().as_ref().is_some_and(|s| s.login_expired()) {
+        let source = self.source.locked().clone();
+        if source.has_token() {
+            if source.login_expired() {
                 return PluginHealth::Warn("SoundCloud login expired — set up again".to_string());
             }
             PluginHealth::Ok
@@ -101,13 +98,7 @@ impl Plugin for SoundcloudPlugin {
     }
 
     fn wiring(&self) -> Wiring {
-        let mut slot = self.source.locked();
-        let sc = slot
-            .get_or_insert_with(|| {
-                let token = self.token.locked().clone();
-                Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls))
-            })
-            .clone();
+        let sc = self.source.locked().clone();
         Wiring {
             source: Some(sc.clone() as Arc<dyn Source>),
             media: Some(sc as Arc<dyn MediaProvider>),
@@ -123,7 +114,7 @@ impl Plugin for SoundcloudPlugin {
             return PluginHealth::Warn("cancelled".to_string());
         }
         log.say("Checking the token with SoundCloud…");
-        let source = SoundcloudSource::new(self.client_id.clone(), Some(token.clone()), self.bus.clone(), self.hls);
+        let source = self.source.locked().with_token(token.clone());
         let checked = source.me();
         if log.cancelled() {
             return PluginHealth::Warn("cancelled".to_string());
@@ -134,9 +125,8 @@ impl Plugin for SoundcloudPlugin {
                 if let Err(e) = auth::persist(&self.cache_dir, &token) {
                     log.say(format!("Could not save the token, you will need to log in again next launch: {e}"));
                 }
-                *self.token.locked() = Some(token);
                 // A new login gets fresh lists and caches, so another account never sees the old one's.
-                *self.source.locked() = Some(Arc::new(source));
+                *self.source.locked() = Arc::new(source.with_bus(self.bus.clone()));
                 PluginHealth::Ok
             }
             Ok(None) => PluginHealth::Warn(
@@ -169,7 +159,7 @@ impl ScanPlugin for WaveformPlugin {
 
     fn analyze(&self, track: &Track, _audio: &dyn Fn() -> Result<StreamHandle, Outcome>, _wanted: &dyn Fn() -> bool) -> Outcome {
         let source = self.0.source.locked().clone();
-        let (Some(source), Some(url)) = (source, track.attrs.get(WAVEFORM_URL_ATTR)) else {
+        let Some(url) = track.attrs.get(WAVEFORM_URL_ATTR) else {
             return Outcome::Skip;
         };
         match source.waveform_samples(url) {
