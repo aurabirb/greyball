@@ -563,7 +563,7 @@ pub struct Session {
     /// Memoized hotkeys-column lookup — see `hotkey_memberships`.
     hotkey_memberships: Mutex<HotkeyMemo>,
 
-    /// Last finished `Plugin::setup` outcome per plugin; a fresh probe that is `Ok` supersedes it.
+    /// Last finished not-`Ok` `Plugin::setup` outcome per plugin; a new setup or an `Ok` probe drops it.
     last_setup: HashMap<SourceId, PluginHealth>,
 
     /// Plugins with a setup thread still running (an abandoned one included).
@@ -1082,12 +1082,16 @@ impl Session {
 
     /// `probe()` only ever returns a few generic canned strings, so a real
     /// setup failure (`last_setup`) is more informative and wins until a
-    /// fresh probe comes back `Ok` again, which always supersedes it.
-    fn overlay_setup(&self, probed: Vec<(SourceId, PluginHealth)>) -> Vec<(SourceId, PluginHealth)> {
+    /// probe comes back `Ok`, which drops it.
+    fn overlay_setup(&mut self, probed: Vec<(SourceId, PluginHealth)>) -> Vec<(SourceId, PluginHealth)> {
         probed
             .into_iter()
             .map(|(id, h)| {
-                let health = if h.is_ok() { h } else { self.last_setup.get(&id).cloned().unwrap_or(h) };
+                if h.is_ok() {
+                    self.last_setup.remove(&id);
+                    return (id, h);
+                }
+                let health = self.last_setup.get(&id).cloned().unwrap_or(h);
                 (id, health)
             })
             .collect()
@@ -1119,22 +1123,26 @@ impl Session {
         true
     }
 
-    /// Keeps `id`'s last setup result for `overlay_setup`; the caller sends `PluginStatusChanged`.
-    pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
-        self.touch();
-        self.last_setup.insert(id, health);
-    }
-
     pub fn setup_running(&self, id: &SourceId) -> bool {
         self.setups_running.contains(id)
     }
 
-    pub fn mark_setup(&mut self, id: &SourceId, running: bool) {
-        if running {
-            self.setups_running.insert(id.clone());
-        } else {
-            self.setups_running.remove(id);
+    /// Ends `id`'s setup run, keeping a not-`Ok` `result` for `overlay_setup`; the caller sends `PluginStatusChanged`.
+    pub fn end_setup(&mut self, id: &SourceId, result: Option<PluginHealth>) {
+        self.touch();
+        self.setups_running.remove(id);
+        if let Some(health) = result.filter(|h| !h.is_ok()) {
+            self.last_setup.insert(id.clone(), health);
         }
+    }
+
+    /// Marks `id`'s setup running and forgets its last result; `false` when one is already running.
+    pub fn begin_setup(&mut self, id: &SourceId) -> bool {
+        if !self.setups_running.insert(id.clone()) {
+            return false;
+        }
+        self.last_setup.remove(id);
+        true
     }
 
     /// A cloned handle to one plugin, for calling its blocking methods off the session lock.

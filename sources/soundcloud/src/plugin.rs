@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, SetupLog, SetupPrompt, Source, SourceId, StreamHandle, Track, Wiring, waveform};
+use core::{Bus, MediaProvider, MutexExt, Outcome, Plugin, PluginHealth, ScanPlugin, SetupLog, SetupPrompt, Source, SourceId, StreamHandle, Track, Wiring, waveform};
 
 use crate::auth;
 use crate::client::{SoundcloudSource, WAVEFORM_URL_ATTR, source_id};
@@ -50,7 +50,7 @@ impl Plugin for SoundcloudPlugin {
     }
 
     fn probe(&self) -> PluginHealth {
-        if self.token.lock().unwrap().is_some() {
+        if self.token.locked().is_some() {
             PluginHealth::Ok
         } else {
             PluginHealth::Warn(
@@ -76,9 +76,9 @@ impl Plugin for SoundcloudPlugin {
         // and mutated — it has no interior mutability for its token, and
         // this is already only called at startup and right after `setup()`,
         // never per-frame.
-        let token = self.token.lock().unwrap().clone();
+        let token = self.token.locked().clone();
         let sc = Arc::new(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls));
-        *self.source.lock().unwrap() = Some(sc.clone());
+        *self.source.locked() = Some(sc.clone());
         Wiring {
             source: Some(sc.clone() as Arc<dyn Source>),
             media: Some(sc as Arc<dyn MediaProvider>),
@@ -92,7 +92,7 @@ impl Plugin for SoundcloudPlugin {
             return PluginHealth::Warn("no token entered".to_string());
         };
         auth::persist(&self.cache_dir, &token);
-        *self.token.lock().unwrap() = Some(token);
+        *self.token.locked() = Some(token);
         PluginHealth::Ok
     }
 }
@@ -118,7 +118,7 @@ impl ScanPlugin for WaveformPlugin {
     }
 
     fn analyze(&self, track: &Track, _audio: &dyn Fn() -> Result<StreamHandle, Outcome>, _wanted: &dyn Fn() -> bool) -> Outcome {
-        let source = self.0.source.lock().unwrap().clone();
+        let source = self.0.source.locked().clone();
         let (Some(source), Some(url)) = (source, track.attrs.get(WAVEFORM_URL_ATTR)) else {
             return Outcome::Skip;
         };

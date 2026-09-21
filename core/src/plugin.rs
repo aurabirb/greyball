@@ -12,12 +12,23 @@
 //! called except by an explicit user action from the UI — see the
 //! "warnings" panel.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::event::{Bus, CoreEvent};
 use crate::traits::{MediaProvider, Player, Source};
 use crate::types::SourceId;
+
+/// `lock()` that survives a poisoning panic (a crashed setup) instead of failing every later call.
+pub trait MutexExt<T> {
+    fn locked(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for Mutex<T> {
+    fn locked(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// One question of a plugin's setup: `text` may span lines, and the answer is an input line under it.
 #[derive(Clone, PartialEq, Eq)]

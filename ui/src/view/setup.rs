@@ -22,6 +22,24 @@ const CLOSE: &str = "[ Close ]";
 const MAX_WIDTH: usize = 100;
 const TRANSCRIPT_LINES: usize = 2000;
 
+fn still_running(id: &SourceId) -> String {
+    format!("Setup of {id} is still running (or was abandoned mid-login); if it does not finish, restart medley")
+}
+
+/// Unmarks the plugin's setup as running however the thread ends, or if it never starts.
+struct SetupRun {
+    session: SessionHandle,
+    id: SourceId,
+}
+
+impl Drop for SetupRun {
+    fn drop(&mut self) {
+        if let Ok(mut s) = self.session.lock() {
+            s.end_setup(&self.id, None);
+        }
+    }
+}
+
 enum Phase {
     Asking(SetupPrompt),
     Running(SetupLog),
@@ -107,27 +125,32 @@ impl SetupModal {
 
     /// Runs `setup` off the UI thread; the outcome comes back as `SetupDone`, dropped when the user abandoned it.
     fn start(&mut self, session: &SessionHandle, bus: &Bus) {
+        if !session.lock().unwrap().begin_setup(&self.id) {
+            self.stop(&still_running(&self.id));
+            return;
+        }
         let log = SetupLog::new(self.id.clone(), bus.clone());
         self.phase = Phase::Running(log.clone());
         let (plugin, answers, session, bus) = (self.plugin.clone(), self.answers.clone(), session.clone(), bus.clone());
-        session.lock().unwrap().mark_setup(log.id(), true);
+        let run = SetupRun { session: session.clone(), id: self.id.clone() };
         thread::spawn(move || {
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-                let health = plugin.setup(answers, &log);
-                if health.is_ok() { plugin.probe() } else { health }
+                let mut health = plugin.setup(answers, &log);
+                if health.is_ok() {
+                    health = plugin.probe();
+                }
+                let wiring = plugin.wiring();
+                let mut guard = session.lock().unwrap();
+                guard.apply_wiring(log.id(), wiring);
+                if !log.cancelled() {
+                    guard.end_setup(log.id(), Some(health.clone()));
+                }
+                health
             }));
             let health = outcome.unwrap_or_else(|_| PluginHealth::Fail("setup crashed".to_string()));
-            let abandoned = log.cancelled();
-            let wiring = plugin.wiring();
-            let mut guard = session.lock().unwrap();
-            guard.apply_wiring(log.id(), wiring);
-            if !abandoned {
-                guard.record_setup_result(log.id().clone(), health.clone());
-            }
-            guard.mark_setup(log.id(), false);
-            drop(guard);
+            drop(run);
             bus.send(CoreEvent::PluginStatusChanged);
-            if abandoned {
+            if log.cancelled() {
                 return;
             }
             if health.is_ok() {
@@ -255,7 +278,7 @@ impl SetupModal {
                 format!("{}█", tail_fit(&format!("> {shown}"), input.size.x.saturating_sub(1)))
             }
             Phase::Running(_) => "Working on it…".to_string(),
-                    Phase::Stopped => String::new(),
+            Phase::Stopped => String::new(),
         };
         input.print((0, 0), &pad(&line, input.size.x));
     }
@@ -266,7 +289,7 @@ impl MedleyView {
     pub(super) fn open_setup(&mut self, id: &SourceId) {
         self.with_session_mut(|s| s.refresh_plugin_health());
         if self.with_session(|s| s.setup_running(id)) {
-            self.set_flash(format!("An earlier setup of {id} is still running; try again in a moment"));
+            self.set_flash(still_running(id));
             return;
         }
         let Some(plugin) = self.with_session(|s| s.plugin(id)) else { return };
