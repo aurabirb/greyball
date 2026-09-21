@@ -57,6 +57,8 @@ enum Denied {
     StaleClientId,
     /// Not available to this account: no error, just no data.
     Unavailable,
+    /// A write: any rejection is an error carrying the HTTP status.
+    Write,
 }
 
 enum Outcome {
@@ -131,7 +133,7 @@ pub struct SoundcloudSource {
     login_expired: Arc<AtomicBool>,
     user_id: Arc<Mutex<Option<u64>>>,
     bus: Bus,
-    liked: CursorList<Track>,
+    liked: Arc<Mutex<CursorList<Track>>>,
     playlists: CursorList<(String, BrowseNode, NodeMeta)>,
     /// Playlists on the home feed's shelves.
     shelves: CursorList<(String, BrowseNode)>,
@@ -161,7 +163,7 @@ impl SoundcloudSource {
             login_expired: Arc::default(),
             user_id: Arc::default(),
             bus,
-            liked: CursorList::new("soundcloud: liked tracks"),
+            liked: Arc::new(Mutex::new(CursorList::new("soundcloud: liked tracks"))),
             playlists: CursorList::new("soundcloud: playlists"),
             shelves: CursorList::new("soundcloud: shelf playlists"),
             shelf_seen: Arc::default(),
@@ -332,7 +334,7 @@ impl SoundcloudSource {
         match denied {
             _ if self.login_expired() => src_err("SoundCloud login expired — set up again in Settings"),
             Denied::Unavailable => Error::NotFound,
-            Denied::StaleClientId => src_err(format!("{}: denied (client_id or token rejected)", target.split('?').next().unwrap_or(target))),
+            Denied::Write | Denied::StaleClientId => src_err(format!("{}: denied (client_id or token rejected)", target.split('?').next().unwrap_or(target))),
         }
     }
 
@@ -343,13 +345,11 @@ impl SoundcloudSource {
     /// PUT/DELETE `target` with an optional JSON body, ignoring any response body.
     fn api_write(&self, method: reqwest::Method, target: &str, body: Option<&serde_json::Value>) -> Result<()> {
         self.require_auth()?;
-        self.send_request(method, target, &[], body, Denied::StaleClientId, &|| true)?.ok_or_else(|| self.denied_error(target, Denied::StaleClientId))?;
+        self.send_request(method, target, &[], body, Denied::Write, &|| true)?.ok_or_else(|| self.denied_error(target, Denied::Write))?;
         Ok(())
     }
 
-    /// `method` on `target` (an api-v2 path or an absolute `next_href`); `None` when denied. Every
-    /// caller is idempotent, so 429s, 5xx and network errors are retried with backoff, up to
-    /// `MAX_ATTEMPTS`; stops with an error once `wanted` turns false. A non-GET empty body is `Null`.
+    /// `method` on `target`; `None` when denied. Retried with backoff (callers are idempotent); a non-GET empty body is `Null`.
     fn send_request(
         &self,
         method: reqwest::Method,
@@ -407,11 +407,20 @@ impl SoundcloudSource {
                     if self.oauth_token.is_some() {
                         self.set_login_expired(false);
                     }
-                    if method != reqwest::Method::GET {
-                        let text = resp.text().map_err(|e| src_err(format!("{path}: {}", e.without_url())))?;
-                        return Ok(Some(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)));
+                    let text = resp.text().map_err(|e| src_err(format!("{path}: {}", e.without_url())))?;
+                    return match serde_json::from_str(&text) {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) if method != reqwest::Method::GET => Ok(Some(serde_json::Value::Null)),
+                        Err(e) => Err(src_err(format!("{path}: bad json: {e}"))),
+                    };
+                }
+                Outcome::Denied if matches!(denied, Denied::Write) => {
+                    if self.oauth_token.is_some() && status.as_u16() == 401 {
+                        self.set_login_expired(true);
+                        return Ok(None);
                     }
-                    return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {}", e.without_url())));
+                    let body: String = resp.text().unwrap_or_default().chars().take(200).collect();
+                    return Err(src_err(format!("{path}: HTTP {status} {body}")));
                 }
                 // The token authenticates on its own: with one, a 401 on any endpoint means the login expired.
                 Outcome::Denied if self.oauth_token.is_some() => {
@@ -426,7 +435,10 @@ impl SoundcloudSource {
                     log::warn!("soundcloud: client_id rejected ({status}), re-scraping");
                 }
                 Outcome::Denied => return Ok(None),
-                Outcome::Failed => return Err(src_err(format!("{path}: HTTP {status}"))),
+                Outcome::Failed => {
+                    let body: String = if matches!(denied, Denied::Write) { resp.text().unwrap_or_default().chars().take(200).collect() } else { String::new() };
+                    return Err(src_err(format!("{path}: HTTP {status} {body}").trim_end().to_string()));
+                }
             }
         }
         Ok(None)
@@ -547,6 +559,18 @@ impl SoundcloudSource {
         }
     }
 
+    fn fetch_playlist_doc(&self, id: &str) -> Result<PlaylistDoc> {
+        let (path, denied) = match id.strip_prefix(SYSTEM_PREFIX) {
+            Some(urn) => (format!("/system-playlists/{urn}"), Denied::Unavailable),
+            None => (format!("/playlists/{id}"), Denied::StaleClientId),
+        };
+        let v = self.api_get_with(&path, &[], denied, &|| true)?;
+        Ok(PlaylistDoc {
+            title: v.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string(),
+            items: v.get("tracks").and_then(|t| t.as_array()).cloned().unwrap_or_default(),
+        })
+    }
+
     /// The playlist object for `id`, fetched at the list's start and reused for later pages.
     fn playlist_doc(&self, id: &str, offset: usize) -> Result<Arc<PlaylistDoc>> {
         if offset > 0
@@ -554,15 +578,7 @@ impl SoundcloudSource {
         {
             return Ok(doc.clone());
         }
-        let (path, denied) = match id.strip_prefix(SYSTEM_PREFIX) {
-            Some(urn) => (format!("/system-playlists/{urn}"), Denied::Unavailable),
-            None => (format!("/playlists/{id}"), Denied::StaleClientId),
-        };
-        let v = self.api_get_with(&path, &[], denied, &|| true)?;
-        let doc = Arc::new(PlaylistDoc {
-            title: v.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string(),
-            items: v.get("tracks").and_then(|t| t.as_array()).cloned().unwrap_or_default(),
-        });
+        let doc = Arc::new(self.fetch_playlist_doc(id)?);
         self.playlist_docs.lock().unwrap().insert(id.to_string(), doc.clone());
         Ok(doc)
     }
@@ -616,28 +632,32 @@ impl SoundcloudSource {
 
     fn set_like(&self, uri: &str, like: bool) -> Result<()> {
         let target = format!("/users/{}/track_likes/{}", self.user_id()?, Self::track_id(uri)?);
-        self.api_write(if like { reqwest::Method::PUT } else { reqwest::Method::DELETE }, &target, None)
+        self.api_write(if like { reqwest::Method::PUT } else { reqwest::Method::DELETE }, &target, None)?;
+        *self.liked.lock().unwrap() = CursorList::new("soundcloud: liked tracks");
+        Ok(())
     }
 
-    /// Rewrites playlist `id`'s full track list through `edit`; the cached copy is dropped afterwards.
+    fn liked(&self) -> CursorList<Track> {
+        self.liked.lock().unwrap().clone()
+    }
+
+    /// Rewrites playlist `id`'s full track list through `edit`; cached listings are dropped afterwards.
     fn edit_playlist(&self, id: &str, edit: impl FnOnce(&mut Vec<u64>) -> Result<()>) -> Result<()> {
         if id.starts_with(SYSTEM_PREFIX) {
             return Err(Error::Unsupported("playlist writes: personalized playlists are read-only"));
         }
-        let path = format!("/playlists/{id}");
-        let doc = self.api_get(&path, &[])?;
-        let mut ids: Vec<u64> = doc.get("tracks").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.get("id")?.as_u64()).collect();
+        let mut ids: Vec<u64> = self.fetch_playlist_doc(id)?.items.iter().filter_map(|t| t.get("id")?.as_u64()).collect();
         edit(&mut ids)?;
         let tracks: Vec<_> = ids.iter().map(|id| serde_json::json!({ "id": id })).collect();
-        let result = self.api_write(reqwest::Method::PUT, &path, Some(&serde_json::json!({ "playlist": { "tracks": tracks } })));
-        self.playlist_docs.lock().unwrap().remove(id);
+        let result = self.api_write(reqwest::Method::PUT, &format!("/playlists/{id}"), Some(&serde_json::json!({ "playlist": { "tracks": tracks } })));
+        self.forget_playlist(&BrowseNode::Path(id.to_string()));
         result
     }
 
     /// One page of the user's `track_likes`.
     fn likes_page(&self, offset: usize) -> std::result::Result<RemotePage<Track>, String> {
         let path = format!("/users/{}/track_likes", self.user_id().map_err(|e| e.to_string())?);
-        self.list_page(&self.liked, offset, (&path, LIKED_PAGE_SIZE, Denied::StaleClientId), usize::MAX, |items| {
+        self.list_page(&self.liked(), offset, (&path, LIKED_PAGE_SIZE, Denied::StaleClientId), usize::MAX, |items| {
             items
                 .into_iter()
                 .filter_map(|item| serde_json::from_value::<ApiLike>(item).ok())
@@ -893,12 +913,18 @@ impl Source for SoundcloudSource {
             BrowseNode::Path(id) => {
                 let track = Self::track_id(track_uri)?;
                 self.edit_playlist(id, |ids| {
-                    match position {
-                        Some(at) if ids.get(at) == Some(&track) => {
+                    // Listing rows skip unavailable tracks, so `position` only disambiguates duplicates.
+                    let hits: Vec<usize> = (0..ids.len()).filter(|&i| ids[i] == track).collect();
+                    match (hits.as_slice(), position) {
+                        ([at], _) => {
+                            ids.remove(*at);
+                        }
+                        ([], _) => return Err(src_err("the playlist changed: that track is no longer in it")),
+                        (_, Some(at)) if ids.get(at) == Some(&track) => {
                             ids.remove(at);
                         }
-                        Some(_) => return Err(src_err("the playlist changed: that row is no longer this track")),
-                        None => ids.retain(|id| *id != track),
+                        (_, Some(_)) => return Err(src_err("the playlist changed: that row is no longer this track")),
+                        (_, None) => ids.retain(|id| *id != track),
                     }
                     Ok(())
                 })
@@ -913,7 +939,7 @@ impl Source for SoundcloudSource {
                 self.playlists.list.retry();
                 self.shelves.list.retry();
             }
-            BrowseNode::Path(id) if id == LIKED_TRACKS => self.liked.list.retry(),
+            BrowseNode::Path(id) if id == LIKED_TRACKS => self.liked().list.retry(),
             BrowseNode::Path(id) => {
                 if let Some(list) = self.playlist_tracks.get(id) {
                     list.retry();
@@ -955,14 +981,15 @@ impl Source for SoundcloudSource {
                 Ok(BrowsePage { title: "SoundCloud".to_string(), tracks: vec![], folders, node_meta, partial, errored })
             }
             BrowseNode::Path(id) if id == LIKED_TRACKS => {
-                let (tracks, partial) = self.liked.snapshot(self, want, Self::likes_page);
+                let liked = self.liked();
+                let (tracks, partial) = liked.snapshot(self, want, Self::likes_page);
                 Ok(BrowsePage {
                     title: "Liked Tracks".to_string(),
                     tracks,
                     folders: vec![],
                     node_meta: vec![],
                     partial,
-                    errored: self.liked.list.errored(),
+                    errored: liked.list.errored(),
                 })
             }
             // A playlist id: its tracks.
