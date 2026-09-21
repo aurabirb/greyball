@@ -307,7 +307,7 @@ impl HelpPane {
                         p.print((0, y), &pad(text, body.width()));
                         let x = text.chars().count();
                         p.print((x, y), key);
-                        if *bindable {
+                        if *bindable && key.trim().is_empty() {
                             let symbol = key.chars().next().unwrap_or(' ').to_string();
                             p.with_effect(Effect::Underline, |p| p.print((x, y), &symbol));
                         }
