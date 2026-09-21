@@ -217,6 +217,9 @@ impl SoundcloudSource {
             log::warn!("soundcloud: client_id rejected ({status}), will re-scrape next call");
             return Err(src_err(format!("{path}: {status} (client_id rejected)")));
         }
+        if !auth_resets_id && matches!(status.as_u16(), 401 | 403 | 404) {
+            return Err(Error::NotFound);
+        }
         let resp = resp
             .error_for_status()
             .map_err(|e| src_err(format!("{path}: {e}")))?;
@@ -561,6 +564,7 @@ impl Source for SoundcloudSource {
             // which need a login — no folders at all without one.
             BrowseNode::Root => {
                 let mut folders = vec![];
+                let mut errored = false;
                 if self.oauth_token.is_some() {
                     folders.push((
                         "Liked Tracks".to_string(),
@@ -573,7 +577,11 @@ impl Source for SoundcloudSource {
                         Ok(recs) => folders.extend(
                             recs.into_iter().map(|(urn, title)| (title, BrowseNode::Path(format!("{SYSTEM_PREFIX}{urn}")))),
                         ),
-                        Err(e) => log::warn!("soundcloud: recommendations unavailable: {e}"),
+                        Err(Error::NotFound) => log::warn!("soundcloud: recommendations not available for this account"),
+                        Err(e) => {
+                            errored = true;
+                            log::warn!("soundcloud: recommendations unavailable: {e}");
+                        }
                     }
                 }
                 Ok(BrowsePage {
@@ -581,7 +589,7 @@ impl Source for SoundcloudSource {
                     tracks: vec![],
                     folders,
                     partial: false,
-                    errored: false,
+                    errored,
                 })
             }
             BrowseNode::Path(id) if id == LIKED_TRACKS => {
