@@ -707,7 +707,7 @@ impl TrackList {
         let c = status.chrome;
         let tab = placement == Placement::Tabbed;
         let mut tail = status.tail(placement);
-        tail.retain(|_| !(tab && self.kind == ListKind::Playlists));
+        tail.retain(|hint| !(tab && self.kind == ListKind::Playlists) && !(self.kind == ListKind::NowPlaying && status.place.as_ref() == Some(hint)));
         let hints: Vec<String> = match (self.kind, &self.open) {
             (ListKind::Playlists, Open::TopLevel) => {
                 let assign = if frame.keyed { "[Bksp] clear" } else { "[any key] assign" };
