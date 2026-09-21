@@ -9,6 +9,9 @@ use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta, waveform};
 /// Frames per RMS window before the windows are max-reduced into buckets.
 const WINDOW: usize = 1024;
 
+/// Buckets between live publishes, so the bar advances in 20 chunks.
+const LIVE_STEP: usize = BUCKETS / 20;
+
 pub struct WaveformPlugin {
     min_interval: Duration,
 }
@@ -57,7 +60,7 @@ impl ScanPlugin for WaveformPlugin {
                     partial[bucket] = partial[bucket].max(level);
                     levels.push(level);
                     (sum, n) = (0.0, 0);
-                    if live.is_some() && bucket > filled {
+                    if live.is_some() && bucket >= filled + LIVE_STEP {
                         filled = bucket;
                         if let Some(prefix) = normalise(&partial[..filled]) {
                             waveform::publish_live(track.id, &prefix);
