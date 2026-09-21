@@ -88,6 +88,19 @@ tree without installing:
 cargo run --all-features
 ```
 
+### Prebuilt binary (alternative to 3)
+
+Latest release, no Rust needed (`:update` keeps it current):
+
+| Platform | Download |
+| --- | --- |
+| Linux x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64 |
+| Linux arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-arm64 |
+| macOS x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-x86_64 |
+| macOS arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-aarch64 |
+
+Download, `chmod +x`, and move it onto your `PATH` as `medley`.
+
 ### 4. Run
 
 ```sh
