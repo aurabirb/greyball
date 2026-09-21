@@ -3,7 +3,7 @@ use cursive::theme::{BaseColor, Color, ColorStyle, Effect};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use core::{Command, TrackId};
+use core::{Command, TrackId, waveform};
 
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -53,11 +53,12 @@ fn bar(eighths: usize) -> &'static str {
 
 /// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
 fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
+    let total = envelope.len().max(waveform::BUCKETS);
     (0..width)
         .map(|x| {
-            let lo = x * envelope.len() / width;
-            let hi = ((x + 1) * envelope.len() / width).max(lo + 1).min(envelope.len());
-            let peak = envelope[lo..hi].iter().copied().max().unwrap_or(0);
+            let lo = x * total / width;
+            let hi = ((x + 1) * total / width).max(lo + 1).min(total);
+            let peak = envelope.get(lo..hi.min(envelope.len())).and_then(|s| s.iter().copied().max()).unwrap_or(0);
             (peak as usize * 8).div_ceil(255).min(8) as u8
         })
         .collect()

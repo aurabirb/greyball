@@ -182,12 +182,13 @@ impl Track {
         }
     }
 
+    /// The track's own length, else its best rendition's; 0 when unknown.
+    pub fn known_duration_ms(&self) -> u32 {
+        if self.duration_ms > 0 { self.duration_ms } else { self.best_rendition().map_or(0, |r| r.duration_ms) }
+    }
+
     pub fn duration_str(&self) -> String {
-        let ms = if self.duration_ms > 0 {
-            self.duration_ms
-        } else {
-            self.best_rendition().map(|r| r.duration_ms).unwrap_or(0)
-        };
+        let ms = self.known_duration_ms();
         if ms == 0 {
             return "?:??".to_string();
         }

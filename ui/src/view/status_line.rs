@@ -19,7 +19,7 @@ const BAR_WIDTH: usize = 24;
 pub(super) struct StatusCore {
     now_playing: String,
     now_playing_id: Option<TrackId>,
-    /// Empty until the track has been scanned.
+    /// Empty until the track has been scanned; the persisted envelope only.
     waveform: Arc<[u8]>,
     state: PlayerState,
     shuffle: bool,
@@ -50,6 +50,7 @@ pub(super) struct StatusLine {
     /// "artist - title" of the playing track.
     pub(super) now_playing: String,
     pub(super) now_playing_id: Option<TrackId>,
+    /// Shorter than `waveform::BUCKETS` while the track is still being analyzed: the rest is blank.
     pub(super) waveform: Arc<[u8]>,
     pub(super) state: PlayerState,
     pub(super) position_ms: u32,
@@ -89,7 +90,7 @@ impl StatusLine {
         Self {
             now_playing: core.now_playing.clone(),
             now_playing_id: core.now_playing_id,
-            waveform: core.waveform.clone(),
+            waveform: if core.waveform.is_empty() { core.now_playing_id.and_then(waveform::live).unwrap_or_default() } else { core.waveform.clone() },
             state: core.state,
             position_ms: ps.position_ms,
             duration_ms: ps.duration_ms,

@@ -53,15 +53,15 @@ pub enum DecodeError {
     Interrupted,
 }
 
-/// Streams `stream` as stereo f32 frames in decoder-sized blocks; `on_block` returns `false` to stop early.
+/// Streams `stream` as stereo f32 frames in decoder-sized blocks (with the sample rate); `on_block` returns `false` to stop early.
 /// Decodes progressively while the stream is still filling (a read waits for the next bytes), and seekably once
 /// it is complete. The sample rate on success.
-pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]]) -> bool) -> Result<u32, DecodeError> {
+pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]], u32) -> bool) -> Result<u32, DecodeError> {
     let mut delivered = false;
     let complete = stream.info().state == StreamState::Done;
-    let mut result = decode_once(stream, complete, &mut |b| {
+    let mut result = decode_once(stream, complete, &mut |b, rate| {
         delivered = true;
-        on_block(b)
+        on_block(b, rate)
     });
     if result == Err(DecodeError::NoAudio) && !complete && !delivered && !stream.stopped() {
         // The container needs the whole file first: wait for it, then decode seekably.
@@ -76,7 +76,7 @@ pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]]
     result
 }
 
-fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&[[f32; 2]]) -> bool) -> Result<u32, DecodeError> {
+fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&[[f32; 2]], u32) -> bool) -> Result<u32, DecodeError> {
     let len = seekable.then(|| stream.info().len).flatten();
     let source = StreamSource { reader: stream.reader(), len, seekable };
     let mss = MediaSourceStream::new(Box::new(source), Default::default());
@@ -100,7 +100,7 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
         let Ok(decoded) = decoder.decode(&packet) else { continue };
         block.clear();
         push_frames(decoded, &mut block);
-        if !on_block(&block) {
+        if !on_block(&block, sample_rate) {
             return Ok(sample_rate);
         }
     }
@@ -116,7 +116,7 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
 pub fn decode_stereo_prefix(stream: &StreamHandle, max_frames: Option<usize>, wanted: &dyn Fn() -> bool) -> Result<(Vec<[f32; 2]>, u32), DecodeError> {
     let mut frames: Vec<[f32; 2]> = Vec::new();
     let mut abandoned = false;
-    let sample_rate = decode_blocks(stream, |block| {
+    let sample_rate = decode_blocks(stream, |block, _| {
         if !wanted() {
             abandoned = true;
             return false;
