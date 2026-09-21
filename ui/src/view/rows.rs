@@ -217,10 +217,13 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
         let mark = if row.current { "> " } else { "  " };
         let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
         let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
-        let spans = if selected { action_spans(row, actions, &layout) } else { vec![] };
+        let spans = if selected { action_spans(row, actions, &layout) } else { Vec::new() };
         let title_end = spans.first().map(|&(x, ..)| x - ACTION_GAP);
-        let main = &title_end.map_or_else(|| main.clone(), |end| truncate(&main, end.saturating_sub(ROW_MARK_W + layout[1].map_or(0, |l| l.0))));
-        let cols = columns([&tags, main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
+        let main = match (title_end, layout[1]) {
+            (Some(end), Some((start, ..))) => truncate(&main, end.saturating_sub(ROW_MARK_W + start)),
+            _ => main,
+        };
+        let cols = columns([&tags, &main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
         let line = pad(&format!("{mark}{cols}"), content_w);
         let mut row_style = Style::from(if selected {
             ColorStyle::highlight()
@@ -269,18 +272,25 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
 /// Gap between a title and the row's action labels, and between the labels.
 const ACTION_GAP: usize = 2;
 
-/// Narrowest title kept beside the action labels; below it the labels are hidden.
+/// Narrowest title kept beside the action labels.
 const MIN_TITLE_W: usize = 8;
 
-/// Each `(x, width, label)` of `actions`, right-aligned to the end of the main column, the one layout draw and click share; none on a pending row or when the title would be squeezed.
+/// Each `(x, width, label)` of `actions`, right-aligned to the end of the main column, the one layout draw and click share; the leading ones that leave the title its minimum width; none on a pending row.
 pub(super) fn action_spans<'a, A>(row: &Row, actions: &'a [(A, String)], layout: &Layout) -> Vec<(usize, usize, &'a str)> {
     let Some((start, width, _)) = layout[1] else { return vec![] };
-    let labels_w = actions.iter().map(|(_, l)| l.width() + ACTION_GAP).sum::<usize>();
-    if row.pending || actions.is_empty() || labels_w + LIKED_MARK_W + MIN_TITLE_W > width {
-        return vec![];
+    let budget = width.saturating_sub(ACTION_GAP + LIKED_MARK_W + MIN_TITLE_W);
+    let mut shown = 0;
+    let mut labels_w = 0;
+    for (_, label) in actions.iter().take_while(|_| !row.pending) {
+        let next = labels_w + label.width() + if shown > 0 { ACTION_GAP } else { 0 };
+        if next > budget {
+            break;
+        }
+        labels_w = next;
+        shown += 1;
     }
-    let mut x = ROW_MARK_W + start + width - labels_w + ACTION_GAP;
-    actions
+    let mut x = ROW_MARK_W + start + width - labels_w;
+    actions[..shown]
         .iter()
         .map(|(_, label)| {
             let w = label.width();
