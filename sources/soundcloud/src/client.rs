@@ -38,8 +38,9 @@ const BACKOFF_STEP: Duration = Duration::from_secs(1);
 /// Ceiling on any one wait, so a `Retry-After` of hours fails the call instead of stalling the source.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-/// How long a failed client_id scrape is remembered before another is attempted.
-const SCRAPE_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// How long a failed client_id scrape is remembered: briefly for transient errors, longer when the site refuses or holds no id.
+const SCRAPE_RETRY_TRANSIENT: Duration = Duration::from_secs(10);
+const SCRAPE_RETRY_REFUSED: Duration = Duration::from_secs(60);
 
 /// Shelves walked on the home feed before stopping.
 const SHELF_CAP: usize = 60;
@@ -91,7 +92,7 @@ impl<T: Clone + Send + Sync + 'static> CursorList<T> {
 #[derive(Default)]
 struct ClientIdCache {
     id: Option<String>,
-    failure: Option<(Instant, String)>,
+    failure: Option<(Instant, Duration, String)>,
 }
 
 /// A playlist object fetched once; its pages are hydrated from `items`.
@@ -169,7 +170,7 @@ impl SoundcloudSource {
         }
     }
 
-    /// A fresh source for `token` on a detached bus, so validating it raises no events; see `with_bus`.
+    /// A fresh source for `token` on a detached bus, so validating it raises no events.
     pub(crate) fn with_token(&self, token: String) -> Self {
         Self::new(self.configured_id.clone(), Some(token), Bus::new(), self.hls)
     }
@@ -183,27 +184,24 @@ impl SoundcloudSource {
         self.oauth_token.is_some()
     }
 
-    /// The `client_id` query param every endpoint needs. Configured value wins;
-    /// otherwise scraped from the public web bundle and cached; the lock is held
-    /// through the scrape so concurrent callers wait for it instead of repeating it,
-    /// and a scrape that found no id (not a network error) is replayed for `SCRAPE_RETRY_AFTER` rather than repeated.
+    /// The `client_id` query param every endpoint needs: configured, else scraped and cached.
+    /// The lock is held through the scrape (single-flight); a failed scrape is replayed for its window.
     fn client_id(&self) -> Result<String> {
         let mut cached = self.cached_id.lock().unwrap();
         if let Some(id) = &cached.id {
             return Ok(id.clone());
         }
-        if let Some((at, message)) = &cached.failure
-            && at.elapsed() < SCRAPE_RETRY_AFTER
+        if let Some((at, window, message)) = &cached.failure
+            && at.elapsed() < *window
         {
             return Err(src_err(message.clone()));
         }
         let id = match &self.configured_id {
             Some(id) => id.clone(),
-            None => match self.scrape_client_id().map_err(src_err)? {
-                Some(id) => id,
-                None => {
-                    let message = "could not scrape a client_id; set [soundcloud] client_id in config".to_string();
-                    cached.failure = Some((Instant::now(), message.clone()));
+            None => match self.scrape_client_id() {
+                Ok(id) => id,
+                Err((window, message)) => {
+                    cached.failure = Some((Instant::now(), window, message.clone()));
                     return Err(src_err(message));
                 }
             },
@@ -232,14 +230,18 @@ impl SoundcloudSource {
         }
     }
 
-    /// `Ok(None)` when the bundles hold no client_id; `Err` for a network failure.
-    fn scrape_client_id(&self) -> std::result::Result<Option<String>, String> {
-        let unreachable = |e: reqwest::Error| format!("web player unreachable: {}", e.without_url());
+    /// The scraped client_id, or how long to remember the failure and its message.
+    fn scrape_client_id(&self) -> std::result::Result<String, (Duration, String)> {
+        let transient = |e: reqwest::Error| (SCRAPE_RETRY_TRANSIENT, format!("web player unreachable: {}", e.without_url()));
         log::debug!("soundcloud: GET {WEB} (scraping client_id)");
         self.gate.wait_turn();
-        let resp = self.client.get(WEB).send().map_err(unreachable)?;
-        log::debug!("soundcloud: GET {WEB} -> {}", resp.status());
-        let home = resp.error_for_status().map_err(unreachable)?.text().map_err(unreachable)?;
+        let resp = self.client.get(WEB).send().map_err(transient)?;
+        let status = resp.status();
+        log::debug!("soundcloud: GET {WEB} -> {status}");
+        if status.as_u16() == 403 {
+            return Err((SCRAPE_RETRY_REFUSED, format!("web player refused the request (HTTP {status}); set [soundcloud] client_id in config")));
+        }
+        let home = resp.error_for_status().map_err(transient)?.text().map_err(transient)?;
 
         let script_re = Regex::new(r#"src="(https://a-v2\.sndcdn\.com/assets/[^"]+\.js)""#).unwrap();
         let id_re = Regex::new(r#"client_id\s*[:=]\s*"([0-9A-Za-z-]{16,})""#).unwrap();
@@ -253,6 +255,7 @@ impl SoundcloudSource {
         scripts.dedup();
         log::debug!("soundcloud: {} script bundle(s) to scan for client_id", scripts.len());
 
+        let mut last_error = None;
         for url in scripts {
             log::debug!("soundcloud: GET {url} (scanning for client_id)");
             self.gate.wait_turn();
@@ -260,15 +263,23 @@ impl SoundcloudSource {
                 log::debug!("soundcloud: GET {url} -> {}", r.status());
                 r.error_for_status().and_then(|r| r.text())
             });
-            let Ok(body) = attempt else {
-                log::debug!("soundcloud: {url}: {}", attempt.unwrap_err());
-                continue;
-            };
-            if let Some(c) = id_re.captures(&body) {
-                return Ok(Some(c.get(1).unwrap().as_str().to_string()));
+            match attempt {
+                Ok(body) => {
+                    if let Some(c) = id_re.captures(&body) {
+                        return Ok(c.get(1).unwrap().as_str().to_string());
+                    }
+                }
+                Err(e) => {
+                    let e = e.without_url().to_string();
+                    log::debug!("soundcloud: {url}: {e}");
+                    last_error = Some(e);
+                }
             }
         }
-        Ok(None)
+        Err(match last_error {
+            Some(e) => (SCRAPE_RETRY_TRANSIENT, format!("web player bundles failed to load, last: {e}")),
+            None => (SCRAPE_RETRY_REFUSED, "could not scrape a client_id; set [soundcloud] client_id in config".to_string()),
+        })
     }
 
     /// The oauth token, or an error naming the config key — for endpoints
@@ -283,7 +294,7 @@ impl SoundcloudSource {
     /// The logged-in user's document, or `None` if SoundCloud rejects the token.
     fn me_doc(&self) -> Result<Option<serde_json::Value>> {
         self.require_auth()?;
-        self.send("/me", &[], Denied::StaleClientId)
+        self.send_while("/me", &[], Denied::StaleClientId, &|| true)
     }
 
     /// The logged-in username, or `None` if SoundCloud rejects the token.
@@ -306,18 +317,13 @@ impl SoundcloudSource {
         Ok(id)
     }
 
-    fn get_while(&self, target: &str, query: &[(&str, &str)], wanted: &dyn Fn() -> bool) -> Result<serde_json::Value> {
-        let denied = Denied::StaleClientId;
-        self.send_while(target, query, denied, wanted)?.ok_or_else(|| self.denied_error(target, denied))
-    }
-
     fn api_get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value> {
-        self.api_get_with(path, query, Denied::StaleClientId)
+        self.api_get_with(path, query, Denied::StaleClientId, &|| true)
     }
 
-    /// `Error::NotFound` when an `Unavailable` endpoint denies this account.
-    fn api_get_with(&self, target: &str, query: &[(&str, &str)], denied: Denied) -> Result<serde_json::Value> {
-        self.send(target, query, denied)?.ok_or_else(|| self.denied_error(target, denied))
+    /// `Error::NotFound` when an `Unavailable` endpoint denies this account; stops early once `wanted` turns false.
+    fn api_get_with(&self, target: &str, query: &[(&str, &str)], denied: Denied, wanted: &dyn Fn() -> bool) -> Result<serde_json::Value> {
+        self.send_while(target, query, denied, wanted)?.ok_or_else(|| self.denied_error(target, denied))
     }
 
     fn denied_error(&self, target: &str, denied: Denied) -> Error {
@@ -329,12 +335,8 @@ impl SoundcloudSource {
     }
 
     /// GET `target` (an api-v2 path or an absolute `next_href`); `None` when denied. Idempotent, so
-    /// 429s, 5xx and network errors are retried with backoff, up to `MAX_ATTEMPTS`.
-    fn send(&self, target: &str, query: &[(&str, &str)], denied: Denied) -> Result<Option<serde_json::Value>> {
-        self.send_while(target, query, denied, &|| true)
-    }
-
-    /// `send` that stops retrying and waiting, with an error, once `wanted` turns false.
+    /// 429s, 5xx and network errors are retried with backoff, up to `MAX_ATTEMPTS`; stops with an
+    /// error once `wanted` turns false.
     fn send_while(&self, target: &str, query: &[(&str, &str)], denied: Denied, wanted: &dyn Fn() -> bool) -> Result<Option<serde_json::Value>> {
         let mut rescraped = false;
         for attempt in 0..MAX_ATTEMPTS {
@@ -378,7 +380,7 @@ impl SoundcloudSource {
             }
             match classify_status(status, denied) {
                 Outcome::Success => {
-                    if self.oauth_token.is_some() && user_scoped(&path) {
+                    if self.oauth_token.is_some() {
                         self.set_login_expired(false);
                     }
                     return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {}", e.without_url())));
@@ -403,7 +405,7 @@ impl SoundcloudSource {
     }
 
     fn track_by_id(&self, id: u64, wanted: &dyn Fn() -> bool) -> Result<ApiTrack> {
-        let v = self.get_while(&format!("/tracks/{id}"), &[], wanted)?;
+        let v = self.api_get_with(&format!("/tracks/{id}"), &[], Denied::StaleClientId, wanted)?;
         serde_json::from_value(v).map_err(|e| src_err(format!("track {id}: {e}")))
     }
 
@@ -422,7 +424,7 @@ impl SoundcloudSource {
     }
 
     fn resolve_permalink(&self, url: &str, wanted: &dyn Fn() -> bool) -> Result<ApiTrack> {
-        let v = self.get_while("/resolve", &[("url", url)], wanted)?;
+        let v = self.api_get_with("/resolve", &[("url", url)], Denied::StaleClientId, wanted)?;
         if v.get("kind").and_then(|k| k.as_str()) != Some("track") {
             return Err(src_err("that SoundCloud URL is not a track"));
         }
@@ -439,7 +441,7 @@ impl SoundcloudSource {
     /// The `collection` array of an api-v2 list endpoint and its `next_href`; empty (and logged) if the response has none.
     fn collection_page(&self, target: &str, query: &[(&str, &str)], denied: Denied) -> Result<(Vec<serde_json::Value>, Option<String>)> {
         self.require_auth()?;
-        let mut v = self.api_get_with(target, query, denied)?;
+        let mut v = self.api_get_with(target, query, denied, &|| true)?;
         let next = v.get("next_href").and_then(|n| n.as_str()).filter(|n| !n.is_empty()).map(str::to_string);
         match v.get_mut("collection").map(serde_json::Value::take) {
             Some(serde_json::Value::Array(items)) => Ok((items, next)),
@@ -524,7 +526,7 @@ impl SoundcloudSource {
             Some(urn) => (format!("/system-playlists/{urn}"), Denied::Unavailable),
             None => (format!("/playlists/{id}"), Denied::StaleClientId),
         };
-        let v = self.api_get_with(&path, &[], denied)?;
+        let v = self.api_get_with(&path, &[], denied, &|| true)?;
         let doc = Arc::new(PlaylistDoc {
             title: v.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string(),
             items: v.get("tracks").and_then(|t| t.as_array()).cloned().unwrap_or_default(),
@@ -589,8 +591,8 @@ impl SoundcloudSource {
 
     /// Best-quality HLS path: resolves the AAC-160k transcoding's signed playlist here, then returns a
     /// stream that appends the init segment and every media segment in order (one fMP4 `symphonia`
-    /// decodes like any other). `None` when the track or its playlist is unusable, so `open` falls back
-    /// to progressive; an API failure (retries already exhausted) is an error.
+    /// decodes like any other). `None` when the track has no HLS transcoding or its playlist is unusable;
+    /// any error also means `open` falls back to progressive, unless it was cancelled.
     fn open_hls(&self, track: &ApiTrack, wanted: &dyn Fn() -> bool) -> Result<Option<Media>> {
         let Some(hls) = track
             .media
@@ -600,7 +602,7 @@ impl SoundcloudSource {
             return Ok(None);
         };
 
-        let v = self.get_while(&hls.url, &[], wanted)?;
+        let v = self.api_get_with(&hls.url, &[], Denied::StaleClientId, wanted)?;
         let Some(playlist_url) = v.get("url").and_then(|u| u.as_str()) else {
             log::debug!("soundcloud: hls stream url: no 'url' in response");
             return Ok(None);
@@ -656,11 +658,6 @@ impl SoundcloudSource {
 /// api-v2 reports no totals on cursor-paged lists: report one that is never reached while more pages remain.
 fn remote_page<T>(hits: Vec<T>, offset: usize, consumed: usize, more: bool) -> RemotePage<T> {
     RemotePage { hits, total: offset + consumed + usize::from(more && consumed > 0), consumed }
-}
-
-/// Endpoints that answer for the token's account; a success elsewhere says nothing about the login.
-fn user_scoped(path: &str) -> bool {
-    path == "/me" || ["/me/", "/users/", "/mixed-selections", "/system-playlists/"].iter().any(|p| path.starts_with(p))
 }
 
 /// `target` is an api-v2 path or an absolute `next_href`; its own `client_id` is replaced with the current one.
@@ -887,10 +884,13 @@ impl MediaProvider for SoundcloudSource {
             return Err(src_err("only a 30 s preview is available"));
         }
 
-        if self.hls
-            && let Some(media) = self.open_hls(&track, wanted)?
-        {
-            return Ok(media);
+        if self.hls {
+            match self.open_hls(&track, wanted) {
+                Ok(Some(media)) => return Ok(media),
+                Ok(None) => {}
+                Err(e) if !wanted() => return Err(e),
+                Err(e) => log::debug!("soundcloud: HLS path unavailable, falling back to progressive: {e}"),
+            }
         }
 
         // Pick the progressive (plain-file) transcoding; the player downloads it.
@@ -900,7 +900,7 @@ impl MediaProvider for SoundcloudSource {
             .find(|t| t.format.protocol == "progressive")
             .ok_or_else(|| src_err("MVP: track has only HLS streams, no progressive"))?;
 
-        let v = self.get_while(&prog.url, &[], wanted)?;
+        let v = self.api_get_with(&prog.url, &[], Denied::StaleClientId, wanted)?;
         let cdn = v
             .get("url")
             .and_then(|u| u.as_str())
