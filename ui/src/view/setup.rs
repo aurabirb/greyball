@@ -1,3 +1,4 @@
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::thread;
 
@@ -24,7 +25,6 @@ const TRANSCRIPT_LINES: usize = 2000;
 enum Phase {
     Asking(SetupPrompt),
     Running(SetupLog),
-    Waiting,
     Stopped,
 }
 
@@ -110,17 +110,26 @@ impl SetupModal {
         let log = SetupLog::new(self.id.clone(), bus.clone());
         self.phase = Phase::Running(log.clone());
         let (plugin, answers, session, bus) = (self.plugin.clone(), self.answers.clone(), session.clone(), bus.clone());
+        session.lock().unwrap().mark_setup(log.id(), true);
         thread::spawn(move || {
-            let health = plugin.setup(answers, &log);
-            if log.cancelled() {
-                return;
-            }
+            let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+                let health = plugin.setup(answers, &log);
+                if health.is_ok() { plugin.probe() } else { health }
+            }));
+            let health = outcome.unwrap_or_else(|_| PluginHealth::Fail("setup crashed".to_string()));
+            let abandoned = log.cancelled();
             let wiring = plugin.wiring();
             let mut guard = session.lock().unwrap();
             guard.apply_wiring(log.id(), wiring);
-            guard.record_setup_result(log.id().clone(), health.clone());
+            if !abandoned {
+                guard.record_setup_result(log.id().clone(), health.clone());
+            }
+            guard.mark_setup(log.id(), false);
             drop(guard);
             bus.send(CoreEvent::PluginStatusChanged);
+            if abandoned {
+                return;
+            }
             if health.is_ok() {
                 bus.send(CoreEvent::PluginLoginSucceeded);
             }
@@ -132,21 +141,28 @@ impl SetupModal {
     fn advance(&mut self, session: &SessionHandle, bus: &Bus) {
         match &self.phase {
             Phase::Asking(prompt) => {
-                let typed = self.typed.trim();
+                let typed = if prompt.secret { self.typed.as_str() } else { self.typed.trim() };
                 let answer = if typed.is_empty() { prompt.default.clone().unwrap_or_default() } else { typed.to_string() };
                 let shown = match (answer.is_empty(), prompt.secret) {
-                    (true, _) => "(nothing entered)".to_string(),
+                    (true, _) => "(Enter)".to_string(),
                     (false, true) => "*".repeat(8),
                     (false, false) => answer.clone(),
                 };
                 self.push(&format!("> {shown}"));
-                self.answers.push(answer);
+                match self.plugin.setup_answer(&self.answers, answer) {
+                    Ok(answer) => self.answers.push(answer),
+                    Err(message) => {
+                        self.push(&format!("! {message}"));
+                        self.typed.clear();
+                        return;
+                    }
+                }
             }
             Phase::Stopped => {
                 self.answers.clear();
                 self.push("Starting over.");
             }
-            Phase::Running(_) | Phase::Waiting => return,
+            Phase::Running(_) => return,
         }
         self.begin(session, bus);
     }
@@ -162,26 +178,19 @@ impl SetupModal {
         }
     }
 
-    /// Setup run `run` ended with `health`; `live` is the plugin's health in the session now. Returns whether the source is ready.
-    fn done(&mut self, run: u64, health: &PluginHealth, live: Option<&PluginHealth>) -> bool {
+    /// Setup run `run` ended with `health`, the plugin's own probe after it; returns whether the source is ready.
+    fn done(&mut self, run: u64, health: &PluginHealth) -> bool {
         if !matches!(&self.phase, Phase::Running(log) if log.run() == run) {
             return false;
         }
-        if let Some(reason) = health.message() {
-            self.stop(reason);
-            return false;
-        }
-        self.push("Setup finished. Waiting for the source to be ready…");
-        self.phase = Phase::Waiting;
-        match live {
-            Some(PluginHealth::Ok) => true,
-            Some(other) => {
-                self.stop(other.message().unwrap_or_default());
+        match health.message() {
+            Some(reason) => {
+                self.stop(reason);
                 false
             }
             None => {
-                self.stop("the source is no longer registered");
-                false
+                self.push("Setup finished.");
+                true
             }
         }
     }
@@ -212,6 +221,10 @@ impl SetupModal {
                 self.typed.push(*c);
                 ModalOutcome::Stay
             }
+            (Event::CtrlChar('u'), Phase::Asking(_)) => {
+                self.typed.clear();
+                ModalOutcome::Stay
+            }
             (Event::Key(Key::Backspace), Phase::Asking(_)) => {
                 self.typed.pop();
                 ModalOutcome::Stay
@@ -227,7 +240,7 @@ impl SetupModal {
         let footer = match &self.phase {
             Phase::Asking(_) => "  [Enter] send   [PgUp/PgDn] scroll   [Esc] close",
             Phase::Stopped => "  [Enter] start over   [PgUp/PgDn] scroll   [Esc] close",
-            Phase::Running(_) | Phase::Waiting => "  [PgUp/PgDn] scroll   [Esc] abandon",
+            Phase::Running(_) => "  [PgUp/PgDn] scroll   [Esc] abandon",
         };
         draw_modal_frame(printer, rect, Some(&format!("Set up {}", self.id)), footer);
         let close = Self::close_rect(rect);
@@ -242,8 +255,7 @@ impl SetupModal {
                 format!("{}█", tail_fit(&format!("> {shown}"), input.size.x.saturating_sub(1)))
             }
             Phase::Running(_) => "Working on it…".to_string(),
-            Phase::Waiting => "Waiting for the source to be ready…".to_string(),
-            Phase::Stopped => String::new(),
+                    Phase::Stopped => String::new(),
         };
         input.print((0, 0), &pad(&line, input.size.x));
     }
@@ -253,6 +265,10 @@ impl MedleyView {
     /// Opens `id`'s setup dialog over the main view, asking its first question (or already running, for a plugin needing no input).
     pub(super) fn open_setup(&mut self, id: &SourceId) {
         self.with_session_mut(|s| s.refresh_plugin_health());
+        if self.with_session(|s| s.setup_running(id)) {
+            self.set_flash(format!("An earlier setup of {id} is still running; try again in a moment"));
+            return;
+        }
         let Some(plugin) = self.with_session(|s| s.plugin(id)) else { return };
         let bus = self.with_session(|s| s.bus.clone());
         let mut modal = SetupModal::new(plugin);
@@ -272,10 +288,9 @@ impl MedleyView {
     pub(crate) fn on_setup_events(&mut self, events: &[CoreEvent]) {
         for event in events {
             let ready = match event {
-                CoreEvent::SetupDone { id, run, health } => {
-                    let live = self.with_session(|s| s.plugin_statuses().iter().find(|(p, _)| p == id).map(|(_, h)| h.clone()));
+                CoreEvent::SetupDone { run, health, .. } => {
                     let Some(Modal::Setup(m)) = &mut self.modal else { return };
-                    m.done(*run, health, live.as_ref())
+                    m.done(*run, health)
                 }
                 CoreEvent::SetupLine { run, line, .. } => {
                     if let Some(Modal::Setup(m)) = &self.modal {

@@ -563,11 +563,11 @@ pub struct Session {
     /// Memoized hotkeys-column lookup — see `hotkey_memberships`.
     hotkey_memberships: Mutex<HotkeyMemo>,
 
-    /// Most recent `Plugin::setup` outcome per plugin, until superseded — see
-    /// `refresh_plugin_health`. Written by the UI's setup dialog once
-    /// `setup()` returns, so a real failure (an OAuth error, a listener-bind
-    /// failure, ...) shows instead of `probe()`'s generic pre-login text.
+    /// Last finished `Plugin::setup` outcome per plugin; a fresh probe that is `Ok` supersedes it.
     last_setup: HashMap<SourceId, PluginHealth>,
+
+    /// Plugins with a setup thread still running (an abandoned one included).
+    setups_running: HashSet<SourceId>,
 
     /// Bumped by `set_context_tracks`, the one way the Now Playing list's membership changes.
     context_gen: u64,
@@ -670,6 +670,7 @@ impl Session {
             view: ViewCache::default(),
             hotkey_memberships: Mutex::new(HotkeyMemo::default()),
             last_setup: HashMap::new(),
+            setups_running: HashSet::new(),
             context_gen: 0,
             pending_enqueues: Vec::new(),
             enqueue_timer: None,
@@ -1118,18 +1119,25 @@ impl Session {
         true
     }
 
-    /// Record `id`'s last `Plugin::setup` result — called once `setup()`
-    /// returns, by the UI's setup dialog, which always sends
-    /// `CoreEvent::PluginStatusChanged` right after; that event's handler
-    /// does the actual re-probe, so this only needs to update `last_setup`.
+    /// Keeps `id`'s last setup result for `overlay_setup`; the caller sends `PluginStatusChanged`.
     pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
         self.touch();
         self.last_setup.insert(id, health);
     }
 
-    /// A cloned handle to one plugin, to call its (blocking) `setup()` off
-    /// the session lock — see the UI's setup dialog
-    /// instead of a `Session` method that calls `setup()` itself.
+    pub fn setup_running(&self, id: &SourceId) -> bool {
+        self.setups_running.contains(id)
+    }
+
+    pub fn mark_setup(&mut self, id: &SourceId, running: bool) {
+        if running {
+            self.setups_running.insert(id.clone());
+        } else {
+            self.setups_running.remove(id);
+        }
+    }
+
+    /// A cloned handle to one plugin, for calling its blocking methods off the session lock.
     pub fn plugin(&self, id: &SourceId) -> Option<Arc<dyn Plugin>> {
         self.plugins.iter().find(|p| &p.id() == id).cloned()
     }

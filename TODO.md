@@ -14,6 +14,7 @@
 
 ### Owner's list — do these first, in this order
 ### Bugs
+- [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio

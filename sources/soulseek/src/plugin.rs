@@ -1,12 +1,4 @@
-//! `core::Plugin` impl for Soulseek. `probe()` must not do network I/O inline, so it follows
-//! `sources_spotify::SpotifyPlugin`'s pattern: it kicks off a cooldown-guarded background check
-//! (slskd reachability, Docker state) and reports the last result; `setup()` does it inline.
-//!
-//! Setup questions: the first is the path of an existing slskd folder, or Enter to have Docker set
-//! slskd up (folder, plus a Soulseek login when the folder has no `slskd.yml`, then a summary to
-//! confirm). A path asks only for what its `slskd.yml` and the running slskd don't already tell.
-//! The container's downloads directory is the media cache directory, which is also where playback
-//! looks for finished files.
+//! `core::Plugin` impl for Soulseek; `probe()` starts a cooldown-guarded background check (slskd, Docker) and reports its last result.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +29,13 @@ enum Step {
     Host,
 }
 
+/// What decides the question list, frozen once the first answer is in so later answers can't shift it.
+#[derive(Clone, Copy, Default)]
+struct Facts {
+    docker_offer: bool,
+    unreachable: bool,
+}
+
 #[derive(Clone)]
 struct DockerSnapshot {
     status: docker::Status,
@@ -52,6 +51,7 @@ pub struct SoulseekPlugin {
     yaml_auth: Mutex<Option<YamlAuth>>,
     reachable: Arc<Mutex<Option<bool>>>,
     docker: Arc<Mutex<Option<DockerSnapshot>>>,
+    facts: Mutex<Facts>,
     checking: Arc<AtomicBool>,
     next_check: Arc<Mutex<Instant>>,
 }
@@ -83,6 +83,7 @@ impl SoulseekPlugin {
             yaml_auth: Mutex::new(yaml_auth),
             reachable: Arc::new(Mutex::new(None)),
             docker: Arc::new(Mutex::new(None)),
+            facts: Mutex::default(),
             checking: Arc::new(AtomicBool::new(false)),
             next_check: Arc::new(Mutex::new(Instant::now())),
         }
@@ -161,18 +162,24 @@ impl SoulseekPlugin {
         self.docker_ready() && (self.state.lock().unwrap().docker.is_some() || !reachable)
     }
 
+    fn refresh_facts(&self) {
+        *self.facts.lock().unwrap() =
+            Facts { docker_offer: self.docker_offer(), unreachable: *self.reachable.lock().unwrap() != Some(true) };
+    }
+
     /// The questions for the answers given so far; the full list once they determine the path.
     fn plan(&self, answers: &[String]) -> Vec<Step> {
         let mut steps = vec![Step::Location];
         let Some(location) = answers.first().map(|a| a.trim()) else { return steps };
+        let facts = *self.facts.lock().unwrap();
         if !location.is_empty() {
             if expand_home(location).is_dir() && yaml_config::read(&expand_home(location)).is_none() {
                 steps.extend([Step::User, Step::Pass]);
             }
-            if *self.reachable.lock().unwrap() != Some(true) {
+            if facts.unreachable {
                 steps.push(Step::Host);
             }
-        } else if self.docker_offer() {
+        } else if facts.docker_offer {
             if self.state.lock().unwrap().docker.is_none() {
                 steps.push(Step::Folder);
                 if let Some(folder) = answers.get(1)
@@ -270,6 +277,12 @@ impl SoulseekPlugin {
             self.state.lock().unwrap().connection =
                 Some(persist::Connection { base_url: conn.base_url.clone(), username: conn.username.clone(), password: conn.password.clone() });
         }
+        if self.state.lock().unwrap().docker.is_some() && docker::container_state().is_some() {
+            log.say("Removing the slskd container medley made earlier; it would keep holding slskd's ports…");
+            if let Err(e) = docker::remove() {
+                return PluginHealth::Warn(format!("removing the old container failed: {e}"));
+            }
+        }
         self.state.lock().unwrap().docker = None;
         self.save_state();
         log.say(format!("Checking whether slskd answers at {}…", self.base_url()));
@@ -293,6 +306,9 @@ impl SoulseekPlugin {
         let (Ok(folder), Ok(cache)) = (std::fs::canonicalize(&folder), std::fs::canonicalize(cache)) else {
             return warn(format!("cannot resolve {}", folder.display()));
         };
+        if log.cancelled() {
+            return warn("abandoned".to_string());
+        }
         if !folder.join("slskd.yml").exists() {
             let Some((user, pass)) = soulseek_login else {
                 return warn("no Soulseek login entered".to_string());
@@ -312,9 +328,6 @@ impl SoulseekPlugin {
             if let Err(e) = docker::remove() {
                 return warn(format!("removing the old container failed: {e}"));
             }
-        }
-        if log.cancelled() {
-            return warn("abandoned".to_string());
         }
         log.say("Starting slskd (the first start downloads it, which can take a few minutes)…");
         if let Err(e) = docker::create(&folder, &cache) {
@@ -383,6 +396,9 @@ impl Plugin for SoulseekPlugin {
     }
 
     fn setup_prompt(&self, answers: &[String]) -> Option<SetupPrompt> {
+        if answers.len() == 1 {
+            self.refresh_facts();
+        }
         let base = self.base_url();
         let prompt = match self.plan(answers).get(answers.len())? {
             Step::Location if self.docker_offer() && self.state.lock().unwrap().docker.is_some() => SetupPrompt::new(
@@ -397,6 +413,10 @@ impl Plugin for SoulseekPlugin {
                 "slskd is answering at {base}. To play finished downloads, medley needs its folder (the one with slskd.yml and \
                  downloads/): type its path, or press Enter to leave it out (search works without it)."
             )),
+            Step::Location if self.docker.lock().unwrap().is_none() => SetupPrompt::new(
+                "Type the path to the folder of the slskd you run (the one with slskd.yml and downloads/). Docker is still being \
+                 checked, so I cannot offer to set slskd up yet: reopen this in a few seconds for that, or press Enter to leave it for now.",
+            ),
             Step::Location => SetupPrompt::new(
                 "Type the path to the folder of the slskd you run (the one with slskd.yml and downloads/). Docker is not available \
                  here, so I cannot set slskd up for you; press Enter to leave it for now.",
@@ -419,6 +439,21 @@ impl Plugin for SoulseekPlugin {
             .default(base),
         };
         Some(prompt)
+    }
+
+    fn setup_answer(&self, answers: &[String], answer: String) -> Result<String, String> {
+        match self.plan(answers).get(answers.len()) {
+            Some(Step::Location) if !answer.is_empty() => {
+                let path = expand_home(&answer);
+                match std::fs::canonicalize(&path) {
+                    Ok(dir) if dir.is_dir() => Ok(dir.display().to_string()),
+                    Ok(_) => Err(format!("{} is not a folder; type the path of slskd's folder.", path.display())),
+                    Err(e) => Err(format!("{}: {e}", path.display())),
+                }
+            }
+            Some(Step::SoulseekUser | Step::SoulseekPass) if answer.is_empty() => Err("slskd needs your Soulseek login; type it, or Esc to stop.".to_string()),
+            _ => Ok(answer),
+        }
     }
 
     fn detail(&self) -> Option<String> {
@@ -456,11 +491,11 @@ impl Plugin for SoulseekPlugin {
 
     fn setup(&self, answers: Vec<String>, log: &SetupLog) -> PluginHealth {
         let steps = self.plan(&answers);
-        let get = |step: Step| steps.iter().position(|s| *s == step).and_then(|i| answers.get(i)).map_or("", |a| a.trim());
+        let get = |step: Step| steps.iter().position(|s| *s == step).and_then(|i| answers.get(i)).map_or("", String::as_str);
         if !get(Step::Location).is_empty() {
             return self.setup_existing(get(Step::Location), get(Step::User), get(Step::Pass), get(Step::Host), log);
         }
-        if self.docker_offer() {
+        if self.facts.lock().unwrap().docker_offer {
             log.say("Checking Docker…");
             let record = self.state.lock().unwrap().docker.clone();
             return match record {

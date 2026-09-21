@@ -20,7 +20,7 @@ use crate::traits::{MediaProvider, Player, Source};
 use crate::types::SourceId;
 
 /// One question of a plugin's setup: `text` may span lines, and the answer is an input line under it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SetupPrompt {
     pub text: String,
     /// Masked wherever the answer is shown.
@@ -148,6 +148,12 @@ pub trait Plugin: Send + Sync {
     /// default), or `None` once [`Plugin::setup`] can run (immediately, for a plugin needing no input). Non-blocking.
     fn setup_prompt(&self, _answers: &[String]) -> Option<SetupPrompt> {
         None
+    }
+
+    /// Checks the answer just given to the question `setup_prompt(answers)` asked (an empty answer already replaced by its
+    /// default); `Err` is shown and the question repeats, `Ok` is the answer kept.
+    fn setup_answer(&self, _answers: &[String], answer: String) -> Result<String, String> {
+        Ok(answer)
     }
 
     /// One line on the plugin's detected state for Settings. Non-blocking; default: none.

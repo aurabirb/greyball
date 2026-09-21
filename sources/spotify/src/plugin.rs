@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Bus, CoreEvent, Plugin, PluginCommand, PluginHealth, SetupLog, SourceId, Wiring};
+use core::{Bus, CoreEvent, Plugin, PluginCommand, PluginHealth, SetupLog, SetupPrompt, SourceId, Wiring};
 
 use crate::auth::Auth;
 use crate::provider::SpotifyMediaProvider;
@@ -123,6 +123,10 @@ impl Plugin for SpotifyPlugin {
             }
         };
         Wiring { source: Some(source), player: None, media: Some(media) }
+    }
+
+    fn setup_prompt(&self, answers: &[String]) -> Option<SetupPrompt> {
+        answers.is_empty().then(|| SetupPrompt::new("This opens your browser to log in to Spotify. Press Enter to continue, or Esc to cancel."))
     }
 
     fn setup(&self, _answers: Vec<String>, log: &SetupLog) -> PluginHealth {
