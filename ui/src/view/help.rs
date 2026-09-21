@@ -19,6 +19,9 @@ use super::window::{StatusCtx, WindowOutcome};
 const GAP: usize = 2;
 /// Blank columns kept clear of the right edge, so text never meets the border or scrollbar.
 const RIGHT_PAD: usize = 3;
+/// Blank columns left of the whole menu, and of section content beyond that.
+const MENU_PAD: usize = 1;
+const CONTENT_PAD: usize = MENU_PAD + 2;
 /// Left padding of a description's continuation lines.
 const CONT_PAD: usize = 2;
 
@@ -125,13 +128,13 @@ fn build(width: usize, s: &Session) -> Built {
     // One key lane for every section, so all keys share a column.
     let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count().max(usize::from(matches!(c.target, Target::Bindable(_))))).max().unwrap_or(0).min(avail / 4);
     let text_w = avail.saturating_sub(if shortcut_w == 0 { 0 } else { shortcut_w + GAP }).max(1);
-    let wrap_w = text_w.saturating_sub(CONT_PAD).max(1);
+    let wrap_w = text_w.saturating_sub(CONT_PAD + CONTENT_PAD).max(1);
     for (title, cells) in sections {
         if !built.lines.is_empty() {
             built.lines.push(Line::Blank);
         }
         built.sections.push((built.lines.len(), built.rows.len()));
-        built.lines.push(Line::Title(format!("[ {title} ]")));
+        built.lines.push(Line::Title(format!("{}[ {title} ]", " ".repeat(MENU_PAD))));
         for cell in cells {
             built.lines.push(Line::Blank);
             let mut text = if cell.command.is_empty() { Vec::new() } else { wrap(&cell.command, wrap_w) };
@@ -142,7 +145,7 @@ fn build(width: usize, s: &Session) -> Built {
             let first = built.lines.len();
             let bindable = matches!(cell.target, Target::Bindable(_));
             for (i, part) in text.iter().enumerate() {
-                let indent = if i == 0 { "" } else { "  " };
+                let indent = " ".repeat(CONTENT_PAD + if i == 0 { 0 } else { CONT_PAD });
                 let line = pad(&format!("{indent}{part}"), text_w + if shortcut_w > 0 { GAP } else { 0 });
                 let key = if shortcut_w > 0 { pad(&cell.shortcut, shortcut_w) } else { String::new() };
                 built.lines.push(if i == 0 { Line::First(built.rows.len(), line, key, bindable) } else { Line::Rest(line) });
@@ -291,7 +294,7 @@ impl HelpPane {
 
     pub(super) fn draw(&self, printer: &Printer, focused: bool, built: &Built) {
         let title = if focused { format!("[{}]", Kind::Help.label()) } else { Kind::Help.label().to_string() };
-        printer.with_color(ColorStyle::title_secondary(), |p| p.print((0, 0), &pad(&title, p.size.x)));
+        printer.with_color(ColorStyle::title_secondary(), |p| p.print((0, 0), &pad(&format!("{}{title}", " ".repeat(MENU_PAD)), p.size.x)));
         let body = Self::body(Rect::from_size((0, 0), printer.size));
         let view = printer.windowed(body);
         let offset = bound_offset(self.offset, built.lines.len(), body.height());
