@@ -222,7 +222,6 @@ impl<T: Clone + Send + Sync + 'static> PagedList<T> {
     }
 }
 
-
 /// One lazily created `PagedList` per id — for a source's many browsable playlists/albums.
 #[derive(Clone)]
 pub struct PagedMap<T> {

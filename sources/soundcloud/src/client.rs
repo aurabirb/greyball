@@ -21,7 +21,7 @@ const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, lik
 /// a real SoundCloud id (those are numeric), so it can't collide with one.
 const LIKED_TRACKS: &str = "__liked__";
 
-/// `BrowseNode::Path` prefix for a personalized recommendation playlist; the rest is its urn.
+/// `BrowseNode::Path` prefix of a personalized playlist; the rest is its urn.
 const SYSTEM_PREFIX: &str = "system:";
 
 /// Page size for walking `/me/track_likes` — comfortably under any
@@ -61,9 +61,23 @@ fn classify_status(status: reqwest::StatusCode, denied: Denied) -> Outcome {
     }
 }
 
-/// `next_href` of the list's next page, kept across `PagedList` walk restarts.
-#[derive(Clone, Default)]
-struct Cursor(Arc<Mutex<Option<String>>>);
+/// A `PagedList` plus the `next_href` of its next page, kept across walk restarts.
+#[derive(Clone)]
+struct CursorList<T> {
+    list: PagedList<T>,
+    next: Arc<Mutex<Option<String>>>,
+}
+
+impl<T: Clone + Send + Sync + 'static> CursorList<T> {
+    fn new(label: &'static str) -> Self {
+        Self { list: PagedList::new(label), next: Arc::default() }
+    }
+
+    fn snapshot(&self, src: &SoundcloudSource, want: usize, page: fn(&SoundcloudSource, usize) -> std::result::Result<RemotePage<T>, String>) -> (Vec<T>, bool) {
+        let src2 = src.clone();
+        self.list.snapshot(&src.bus, want, move |offset| page(&src2, offset))
+    }
+}
 
 /// A playlist object fetched once; its pages are hydrated from `items`.
 struct PlaylistDoc {
@@ -96,13 +110,10 @@ pub struct SoundcloudSource {
     /// Tracks, playlists); search/resolve/play work without it.
     oauth_token: Option<String>,
     bus: Bus,
-    liked: PagedList<Track>,
-    liked_cursor: Cursor,
-    playlists: PagedList<(String, BrowseNode)>,
-    playlists_cursor: Cursor,
+    liked: CursorList<Track>,
+    playlists: CursorList<(String, BrowseNode)>,
     /// Playlists on the home feed's shelves.
-    shelves: PagedList<(String, BrowseNode)>,
-    shelves_cursor: Cursor,
+    shelves: CursorList<(String, BrowseNode)>,
     shelf_seen: Arc<Mutex<HashSet<String>>>,
     /// Playlist contents by node id (numeric or `system:<urn>`).
     playlist_tracks: PagedMap<Track>,
@@ -128,12 +139,9 @@ impl SoundcloudSource {
             cached_id: Arc::new(Mutex::new(None)),
             oauth_token: oauth_token.filter(|s| !s.trim().is_empty()),
             bus,
-            liked: PagedList::new("soundcloud: liked tracks"),
-            liked_cursor: Cursor::default(),
-            playlists: PagedList::new("soundcloud: playlists"),
-            playlists_cursor: Cursor::default(),
-            shelves: PagedList::new("soundcloud: shelf playlists"),
-            shelves_cursor: Cursor::default(),
+            liked: CursorList::new("soundcloud: liked tracks"),
+            playlists: CursorList::new("soundcloud: playlists"),
+            shelves: CursorList::new("soundcloud: shelf playlists"),
             shelf_seen: Arc::default(),
             playlist_tracks: PagedMap::new("soundcloud: playlist"),
             playlist_docs: Arc::default(),
@@ -223,9 +231,12 @@ impl SoundcloudSource {
         self.api_get_with(path, query, Denied::StaleClientId)
     }
 
-    /// `Error::NotFound` when the endpoint denies this account (or, for `Denied::StaleClientId`, keeps rejecting the id).
+    /// `Error::NotFound` when an `Unavailable` endpoint denies this account.
     fn api_get_with(&self, target: &str, query: &[(&str, &str)], denied: Denied) -> Result<serde_json::Value> {
-        self.send(target, query, denied)?.ok_or(Error::NotFound)
+        self.send(target, query, denied)?.ok_or_else(|| match denied {
+            Denied::Unavailable => Error::NotFound,
+            Denied::StaleClientId => src_err(format!("{}: denied (client_id or token rejected)", target.split('?').next().unwrap_or(target))),
+        })
     }
 
     /// GET `target` (an api-v2 path or an absolute `next_href`); `None` when denied.
@@ -240,7 +251,7 @@ impl SoundcloudSource {
             if let Some(token) = &self.oauth_token {
                 req = req.header("Authorization", format!("OAuth {token}"));
             }
-            let resp = req.send().map_err(|e| src_err(format!("{path}: {e}")))?;
+            let resp = req.send().map_err(|e| src_err(format!("{path}: {}", e.without_url())))?;
             let status = resp.status();
             if status.is_success() {
                 log::debug!("soundcloud: GET {path} -> {status}");
@@ -249,7 +260,7 @@ impl SoundcloudSource {
             }
             match classify_status(status, denied) {
                 Outcome::Success => {
-                    return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {e}")));
+                    return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {}", e.without_url())));
                 }
                 Outcome::Denied => {
                     if matches!(denied, Denied::StaleClientId) {
@@ -312,77 +323,68 @@ impl SoundcloudSource {
         }
     }
 
-    /// One `PagedList` page of a cursor-paged endpoint: `offset` 0 starts at `path`, later offsets follow the remembered `next_href`.
-    fn cursor_page(
+    /// One page of a cursor-paged list: `offset` 0 starts at `path`, later offsets follow the remembered `next_href`.
+    fn list_page<T>(
         &self,
-        cursor: &Cursor,
+        list: &CursorList<T>,
         offset: usize,
-        path: &str,
-        query: &[(&str, &str)],
-        denied: Denied,
-    ) -> Result<(Vec<serde_json::Value>, bool)> {
+        (path, size, denied): (&str, usize, Denied),
+        cap: usize,
+        map: impl FnOnce(Vec<serde_json::Value>) -> Vec<T>,
+    ) -> Result<RemotePage<T>> {
+        let size = size.to_string();
         let (target, query) = if offset == 0 {
-            (Some(path.to_string()), query)
+            (Some(path.to_string()), &[("limit", size.as_str())][..])
         } else {
-            (cursor.0.lock().unwrap().clone(), &[][..])
+            (list.next.lock().unwrap().clone(), &[][..])
         };
         let Some(target) = target else {
-            return Ok((vec![], false));
+            return Ok(remote_page(vec![], offset, 0, false));
         };
         let (items, next) = self.collection_page(&target, query, denied)?;
-        let more = next.is_some();
-        *cursor.0.lock().unwrap() = next;
-        Ok((items, more))
+        let (consumed, more) = (items.len(), next.is_some());
+        *list.next.lock().unwrap() = next;
+        Ok(remote_page(map(items), offset, consumed, more && offset + consumed < cap))
     }
 
     /// One page of the user's own `/me/playlists`.
     fn playlists_page(&self, offset: usize) -> std::result::Result<RemotePage<(String, BrowseNode)>, String> {
-        let limit = PLAYLISTS_PAGE_SIZE.to_string();
-        let (items, more) = self
-            .cursor_page(&self.playlists_cursor, offset, "/me/playlists", &[("limit", &limit)], Denied::StaleClientId)
-            .map_err(|e| e.to_string())?;
-        let consumed = items.len();
-        let hits = items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<ApiPlaylist>(item).ok())
-            .map(|p| (p.title, BrowseNode::Path(p.id.to_string())))
-            .collect();
-        Ok(remote_page(hits, offset, consumed, more))
+        self.list_page(&self.playlists, offset, ("/me/playlists", PLAYLISTS_PAGE_SIZE, Denied::StaleClientId), usize::MAX, |items| {
+            items
+                .into_iter()
+                .filter_map(|item| serde_json::from_value::<ApiPlaylist>(item).ok())
+                .map(|p| (p.title, BrowseNode::Path(p.id.to_string())))
+                .collect()
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// One page of `/mixed-selections` shelves, as the playlists on them; not available to every account.
     fn shelves_page(&self, offset: usize) -> std::result::Result<RemotePage<(String, BrowseNode)>, String> {
-        let limit = SHELVES_PAGE_SIZE.to_string();
-        let (shelves, more) = match self.cursor_page(&self.shelves_cursor, offset, "/mixed-selections", &[("limit", &limit)], Denied::Unavailable) {
-            Ok(page) => page,
+        let page = self.list_page(&self.shelves, offset, ("/mixed-selections", SHELVES_PAGE_SIZE, Denied::Unavailable), SHELF_CAP, |shelves| {
+            let mut seen = self.shelf_seen.lock().unwrap();
+            if offset == 0 {
+                seen.clear();
+            }
+            shelves
+                .iter()
+                .filter_map(|s| s.get("items")?.get("collection")?.as_array())
+                .flatten()
+                .filter_map(shelf_playlist_id)
+                .filter(|(id, _)| seen.insert(id.clone()))
+                .map(|(id, title)| (title, BrowseNode::Path(id)))
+                .collect()
+        });
+        match page {
             Err(Error::NotFound) => {
                 log::warn!("soundcloud: recommendations not available for this account");
-                (vec![], false)
+                Ok(remote_page(vec![], offset, 0, false))
             }
-            Err(e) => return Err(e.to_string()),
-        };
-        let consumed = shelves.len();
-        let mut seen = self.shelf_seen.lock().unwrap();
-        if offset == 0 {
-            seen.clear();
+            page => page.map_err(|e| e.to_string()),
         }
-        let hits: Vec<_> = shelves
-            .iter()
-            .filter_map(|s| s.get("items")?.get("collection")?.as_array())
-            .flatten()
-            .filter_map(shelf_playlist_id)
-            .filter(|(id, _)| seen.insert(id.clone()))
-            .map(|(id, title)| (title, BrowseNode::Path(id)))
-            .collect();
-        if hits.is_empty() {
-            log::debug!("soundcloud: /mixed-selections: {consumed} shelf(s), no new playlists");
-        }
-        Ok(remote_page(hits, offset, consumed, more && offset + consumed < SHELF_CAP))
     }
 
-    /// The playlist object for `id` (a numeric playlist id or `system:<urn>`), fetched at the
-    /// list's start and reused for its later pages. `representation=full` inlines full track
-    /// objects for the first ones; the rest are id-only stubs, hydrated per page.
+    /// The playlist object for `id`, fetched at the list's start and reused for later pages.
     fn playlist_doc(&self, id: &str, offset: usize) -> Result<Arc<PlaylistDoc>> {
         if offset > 0
             && let Some(doc) = self.playlist_docs.lock().unwrap().get(id)
@@ -405,12 +407,12 @@ impl SoundcloudSource {
     fn playlist_page(&self, id: &str, offset: usize) -> std::result::Result<RemotePage<Track>, String> {
         let doc = self.playlist_doc(id, offset).map_err(|e| e.to_string())?;
         let slice: Vec<_> = doc.items.iter().skip(offset).take(PLAYLIST_PAGE_SIZE).cloned().collect();
-        let hits = self.hydrate_tracks(&slice).into_iter().filter_map(ApiTrack::into_track).collect();
+        let hits = self.hydrate_tracks(&slice).map_err(|e| e.to_string())?.into_iter().filter_map(ApiTrack::into_track).collect();
         Ok(RemotePage { hits, total: doc.items.len(), consumed: slice.len() })
     }
 
     /// Full tracks in order; id-only stubs are fetched via `/tracks?ids=`, and unavailable ones dropped.
-    fn hydrate_tracks(&self, items: &[serde_json::Value]) -> Vec<ApiTrack> {
+    fn hydrate_tracks(&self, items: &[serde_json::Value]) -> Result<Vec<ApiTrack>> {
         let total = items.len();
         let mut slots: Vec<std::result::Result<ApiTrack, u64>> = vec![];
         for item in items {
@@ -425,15 +427,11 @@ impl SoundcloudSource {
         let mut hydrated = HashMap::new();
         for chunk in stubs.chunks(50) {
             let ids = chunk.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
-            match self.api_get("/tracks", &[("ids", &ids)]) {
-                Ok(v) => {
-                    for t in v.as_array().into_iter().flatten() {
-                        if let Ok(t) = ApiTrack::deserialize(t) {
-                            hydrated.insert(t.id, t);
-                        }
-                    }
+            let v = self.api_get("/tracks", &[("ids", &ids)])?;
+            for t in v.as_array().into_iter().flatten() {
+                if let Ok(t) = ApiTrack::deserialize(t) {
+                    hydrated.insert(t.id, t);
                 }
-                Err(e) => log::warn!("soundcloud: hydrating {} track stubs failed: {e}", chunk.len()),
             }
         }
         let out: Vec<ApiTrack> = slots
@@ -443,23 +441,20 @@ impl SoundcloudSource {
         if out.len() < total {
             log::debug!("soundcloud: {} of {total} playlist tracks unavailable", total - out.len());
         }
-        out
+        Ok(out)
     }
 
-    /// One page of `/me/track_likes`, for `core::PagedList`.
+    /// One page of `/me/track_likes`.
     fn likes_page(&self, offset: usize) -> std::result::Result<RemotePage<Track>, String> {
-        let limit = LIKED_PAGE_SIZE.to_string();
-        let (items, more) = self
-            .cursor_page(&self.liked_cursor, offset, "/me/track_likes", &[("limit", &limit)], Denied::StaleClientId)
-            .map_err(|e| e.to_string())?;
-        let consumed = items.len();
-        let hits = items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<ApiLike>(item).ok())
-            .filter_map(|l| l.track)
-            .filter_map(ApiTrack::into_track)
-            .collect();
-        Ok(remote_page(hits, offset, consumed, more))
+        self.list_page(&self.liked, offset, ("/me/track_likes", LIKED_PAGE_SIZE, Denied::StaleClientId), usize::MAX, |items| {
+            items
+                .into_iter()
+                .filter_map(|item| serde_json::from_value::<ApiLike>(item).ok())
+                .filter_map(|l| l.track)
+                .filter_map(ApiTrack::into_track)
+                .collect()
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// Best-quality HLS path: resolves the AAC-160k transcoding's signed playlist here, then returns a
@@ -480,9 +475,9 @@ impl SoundcloudSource {
             .query(&[("client_id", id.as_str())])
             .send()
             .and_then(|r| r.error_for_status())
-            .map_err(|e| src_err(format!("hls stream url: {e}")))?
+            .map_err(|e| src_err(format!("hls stream url: {}", e.without_url())))?
             .json()
-            .map_err(|e| src_err(format!("hls stream url: {e}")))?;
+            .map_err(|e| src_err(format!("hls stream url: {}", e.without_url())))?;
         let playlist_url = v
             .get("url")
             .and_then(|u| u.as_str())
@@ -494,9 +489,9 @@ impl SoundcloudSource {
             .get(playlist_url)
             .send()
             .and_then(|r| r.error_for_status())
-            .map_err(|e| src_err(format!("hls playlist: {e}")))?
+            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?
             .text()
-            .map_err(|e| src_err(format!("hls playlist: {e}")))?;
+            .map_err(|e| src_err(format!("hls playlist: {}", e.without_url())))?;
 
         let base = url::Url::parse(playlist_url).map_err(|e| src_err(format!("hls playlist url: {e}")))?;
         let playlist = parse_hls_playlist(&playlist_text, &base)?;
@@ -528,14 +523,15 @@ impl SoundcloudSource {
 
 /// api-v2 reports no totals on cursor-paged lists: report one that is never reached while more pages remain.
 fn remote_page<T>(hits: Vec<T>, offset: usize, consumed: usize, more: bool) -> RemotePage<T> {
-    RemotePage { hits, total: offset + consumed + usize::from(more), consumed }
+    RemotePage { hits, total: offset + consumed + usize::from(more && consumed > 0), consumed }
 }
 
 /// `target` is an api-v2 path or an absolute `next_href`; its own `client_id` is replaced with the current one.
 fn request_url(target: &str, query: &[(&str, &str)], client_id: &str) -> Result<url::Url> {
     let full = if target.starts_with('/') { format!("{API}{target}") } else { target.to_string() };
     let mut url = url::Url::parse(&full).map_err(|e| src_err(format!("bad url {target:?}: {e}")))?;
-    if !full.starts_with(&format!("{API}/")) {
+    let api = url::Url::parse(API).unwrap();
+    if url.scheme() != api.scheme() || url.host_str() != api.host_str() || url.port().is_some() || !url.username().is_empty() || url.password().is_some() {
         return Err(src_err(format!("refusing non-api-v2 url {target:?}")));
     }
     let mut pairs: Vec<(String, String)> = url
@@ -679,10 +675,10 @@ impl Source for SoundcloudSource {
     fn retry_browse(&self, node: &BrowseNode) {
         match node {
             BrowseNode::Root => {
-                self.playlists.retry();
-                self.shelves.retry();
+                self.playlists.list.retry();
+                self.shelves.list.retry();
             }
-            BrowseNode::Path(id) if id == LIKED_TRACKS => self.liked.retry(),
+            BrowseNode::Path(id) if id == LIKED_TRACKS => self.liked.list.retry(),
             BrowseNode::Path(id) => {
                 if let Some(list) = self.playlist_tracks.get(id) {
                     list.retry();
@@ -707,27 +703,25 @@ impl Source for SoundcloudSource {
                 let (mut partial, mut errored) = (false, false);
                 if self.oauth_token.is_some() {
                     folders.push(("Liked Tracks".to_string(), BrowseNode::Path(LIKED_TRACKS.to_string())));
-                    let src = self.clone();
-                    let (own, own_partial) = self.playlists.snapshot(&self.bus, want, move |o| src.playlists_page(o));
-                    let src = self.clone();
-                    let (shelf, shelf_partial) = self.shelves.snapshot(&self.bus, want, move |o| src.shelves_page(o));
-                    let extra: Vec<_> = shelf.into_iter().filter(|(_, n)| !own.iter().any(|(_, o)| o == n)).collect();
-                    folders.extend(own);
+                    let (own, own_partial) = self.playlists.snapshot(self, want, Self::playlists_page);
+                    let (shelf, shelf_partial) = self.shelves.snapshot(self, want, Self::shelves_page);
+                    let own_nodes: HashSet<&BrowseNode> = own.iter().map(|(_, n)| n).collect();
+                    let extra: Vec<_> = shelf.iter().filter(|(_, n)| !own_nodes.contains(n)).cloned().collect();
+                    folders.extend(own.iter().cloned());
                     folders.extend(extra);
                     partial = own_partial || shelf_partial;
-                    errored = self.playlists.errored() || self.shelves.errored();
+                    errored = self.playlists.list.errored() || self.shelves.list.errored();
                 }
                 Ok(BrowsePage { title: "SoundCloud".to_string(), tracks: vec![], folders, partial, errored })
             }
             BrowseNode::Path(id) if id == LIKED_TRACKS => {
-                let src = self.clone();
-                let (tracks, partial) = self.liked.snapshot(&self.bus, want, move |offset| src.likes_page(offset));
+                let (tracks, partial) = self.liked.snapshot(self, want, Self::likes_page);
                 Ok(BrowsePage {
                     title: "Liked Tracks".to_string(),
                     tracks,
                     folders: vec![],
                     partial,
-                    errored: self.liked.errored(),
+                    errored: self.liked.list.errored(),
                 })
             }
             // A playlist id: its tracks.
@@ -777,7 +771,7 @@ impl MediaProvider for SoundcloudSource {
             .get(&prog.url)
             .query(&[("client_id", id.as_str())])
             .send()
-            .map_err(|e| src_err(format!("stream url: {e}")))?;
+            .map_err(|e| src_err(format!("stream url: {}", e.without_url())))?;
         let status = resp.status();
         if status.is_success() {
             log::debug!("soundcloud: GET {} -> {status}", prog.url);
@@ -787,7 +781,7 @@ impl MediaProvider for SoundcloudSource {
         let v: serde_json::Value = resp
             .error_for_status()
             .and_then(|r| r.json())
-            .map_err(|e| src_err(format!("stream url: {e}")))?;
+            .map_err(|e| src_err(format!("stream url: {}", e.without_url())))?;
         let cdn = v
             .get("url")
             .and_then(|u| u.as_str())
@@ -824,10 +818,7 @@ struct ApiUser {
     username: String,
 }
 
-/// A `/me/playlists` collection entry — id/title only, matching what
-/// `browse`'s Root folder listing needs. MVP: some api-v2 responses nest
-/// this under a `playlist` key instead of at the top level; untested
-/// against a live token.
+/// A `/me/playlists` collection entry — id/title only.
 #[derive(Deserialize)]
 struct ApiPlaylist {
     id: u64,
