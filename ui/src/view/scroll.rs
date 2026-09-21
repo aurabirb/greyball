@@ -1,6 +1,7 @@
 use cursive::{Printer, Rect, Vec2};
 use cursive::event::{Event, Key, MouseButton, MouseEvent};
 use cursive::theme::ColorStyle;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::text::pad;
 
@@ -129,7 +130,7 @@ impl Nav {
         match self {
             Nav::Line(up) => (up, 1),
             Nav::Page(up) => (up, page),
-            Nav::Wheel(up) => (up, WHEEL_STEP),
+            Nav::Wheel(up) => (up, WHEEL_STEP * WHEEL_COUNT.load(Ordering::Relaxed)),
         }
     }
 }
@@ -140,8 +141,19 @@ pub(super) const PAGE_SCROLL_STEP: usize = 10;
 /// Rows per `PageUp`/`PageDown`/Shift-J/Shift-K jump on any index-into-a-list cursor screen/modal.
 pub(super) const LIST_JUMP_STEP: usize = 10;
 
+/// Notches the wheel event being routed stands for.
+static WHEEL_COUNT: AtomicUsize = AtomicUsize::new(1);
+
+/// Runs `f` with every wheel gesture in it counting as `count` notches.
+pub(super) fn with_wheel_count<T>(count: usize, f: impl FnOnce() -> T) -> T {
+    WHEEL_COUNT.store(count, Ordering::Relaxed);
+    let out = f();
+    WHEEL_COUNT.store(1, Ordering::Relaxed);
+    out
+}
+
 /// Rows per mouse-wheel tick on a list/pane's single-row nav.
-pub(super) const WHEEL_STEP: usize = 3;
+const WHEEL_STEP: usize = 3;
 
 /// The window offset that keeps `cursor` visible in a `list_h`-row viewport.
 fn follow_cursor_offset(cursor: usize, offset: usize, list_h: usize) -> usize {

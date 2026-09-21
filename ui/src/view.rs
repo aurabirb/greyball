@@ -85,6 +85,8 @@ pub struct MedleyView {
     active: WindowId,
     /// Whole-terminal size as of the last layout pass.
     last_screen_size: Vec2,
+    /// Wheel notches received but not yet scrolled; flushed before any other event and before layout.
+    wheel: Option<PendingWheel>,
     /// Mirrors `cfg.status_line`: whether the scrubber row is reserved.
     status_line: bool,
     /// Mirrors `cfg.show_hints`: whether windows draw key hints on their status row.
@@ -135,6 +137,7 @@ impl MedleyView {
             active,
             focus: Focus::Window(active),
             last_screen_size: Vec2::new(0, 0),
+            wheel: None,
             status_line: session_status_line,
             show_hints: session_show_hints,
             editing: Editing::None,
@@ -500,6 +503,7 @@ impl View for MedleyView {
         // The one layout hook that gets `&mut self` with the resolved screen size.
         let resized = constraint != self.last_screen_size;
         self.last_screen_size = constraint;
+        self.flush_wheel();
         self.layout();
         self.relayout_modal(resized);
         constraint
@@ -518,17 +522,27 @@ impl View for MedleyView {
         if nav.is_some() {
             crate::SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let result = self.route(&event);
-        // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away, except a wheel tick, which only moves a self-bounded offset.
-        if !matches!(nav, Some(scroll::Nav::Wheel(_))) {
-            self.layout();
+        if let (Some(scroll::Nav::Wheel(up)), Event::Mouse { offset, position, .. }) = (&nav, &event) {
+            self.push_wheel(*offset, *position, *up);
+            return EventResult::consumed();
         }
+        self.flush_wheel();
+        let result = self.route(&event);
+        // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away.
+        self.layout();
         // A wheel scroll must stay where it is; any key brings the cursor back into view.
         if !matches!(event, Event::Mouse { .. }) {
             self.clamp_scroll();
         }
         result.and(self.sync_vis_fps())
     }
+}
+
+struct PendingWheel {
+    offset: Vec2,
+    position: Vec2,
+    target: Option<Option<WindowId>>,
+    net: isize,
 }
 
 const FLASH_LIFETIME: Duration = Duration::from_secs(3);
@@ -540,6 +554,33 @@ impl MedleyView {
 
     fn flash(&self) -> Option<&str> {
         self.feedback.as_ref().filter(|(_, at)| at.elapsed() < FLASH_LIFETIME).map(|(text, _)| text.as_str())
+    }
+
+    /// What a wheel at `position` lands on: the modal, else the topmost window.
+    fn wheel_target(&self, offset: Vec2, position: Vec2) -> Option<Option<WindowId>> {
+        if self.modal.is_some() {
+            return Some(None);
+        }
+        let pos = position.checked_sub(offset)?;
+        self.placed().into_iter().rev().find(|placed| placed.frame.contains(pos)).map(|placed| Some(placed.id))
+    }
+
+    fn push_wheel(&mut self, offset: Vec2, position: Vec2, up: bool) {
+        let target = self.wheel_target(offset, position);
+        if self.wheel.as_ref().is_some_and(|pending| pending.target != target) {
+            self.flush_wheel();
+        }
+        let pending = self.wheel.get_or_insert(PendingWheel { offset, position, target, net: 0 });
+        pending.net += if up { 1 } else { -1 };
+    }
+
+    fn flush_wheel(&mut self) {
+        let Some(PendingWheel { offset, position, net, .. }) = self.wheel.take() else { return };
+        if net == 0 {
+            return;
+        }
+        let event = Event::Mouse { offset, position, event: if net > 0 { MouseEvent::WheelUp } else { MouseEvent::WheelDown } };
+        scroll::with_wheel_count(net.unsigned_abs(), || self.route(&event));
     }
 
     fn route(&mut self, event: &Event) -> EventResult {

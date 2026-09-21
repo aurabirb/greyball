@@ -20,7 +20,7 @@ use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
 use super::text::tail_fit;
 use super::rows::{BACK_LABEL, action_spans, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, ListBody, column_layout, draw_row_list, ROW_MARK_W, plain_row, tracks_to_rows};
-use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
+use super::scroll::{ListEvent, ListState, Nav};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
 /// Two clicks on the same row within this long count as a double-click.
@@ -872,8 +872,9 @@ impl TrackList {
             }
         }
         // The wheel scrolls the window only; the next key press re-follows the cursor.
-        if let Some(Nav::Wheel(up)) = Nav::of(event) {
-            self.state.scroll(up, WHEEL_STEP, self.len(s), body.height());
+        if let Some(nav @ Nav::Wheel(_)) = Nav::of(event) {
+            let (up, rows) = nav.step(0);
+            self.state.scroll(up, rows, self.len(s), body.height());
             return WindowOutcome::Consumed;
         }
         match self.state.on_event(event, self.len(s), body) {
