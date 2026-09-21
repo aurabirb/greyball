@@ -6,6 +6,7 @@
 //! (Spotify, SoundCloud, ...) can hold a [`PagedList<T>`] per browsable node
 //! and delegate to it from `browse`.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -221,3 +222,34 @@ impl<T: Clone + Send + Sync + 'static> PagedList<T> {
     }
 }
 
+
+/// One lazily created `PagedList` per id — for a source's many browsable playlists/albums.
+#[derive(Clone)]
+pub struct PagedMap<T> {
+    label: &'static str,
+    lists: Arc<Mutex<HashMap<String, PagedList<T>>>>,
+}
+
+impl<T: Clone + Send + Sync + 'static> PagedMap<T> {
+    /// `label` prefixes each list's log label: `"{label} {id}"`.
+    pub fn new(label: &'static str) -> Self {
+        Self { label, lists: Arc::new(Mutex::new(HashMap::new())) }
+    }
+
+    pub fn get_or_create(&self, id: &str) -> PagedList<T> {
+        self.lists
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_insert_with(|| PagedList::new(format!("{} {id}", self.label)))
+            .clone()
+    }
+
+    pub fn get(&self, id: &str) -> Option<PagedList<T>> {
+        self.lists.lock().unwrap().get(id).cloned()
+    }
+
+    pub fn remove(&self, id: &str) {
+        self.lists.lock().unwrap().remove(id);
+    }
+}

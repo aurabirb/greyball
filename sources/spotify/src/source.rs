@@ -1,11 +1,9 @@
 //! `SpotifySource` — a `core::Source` over the Spotify Web API.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use core::{
-    BrowseNode, BrowsePage, Bus, Error, PagedList, RemotePage, Result, Track, SearchQuery, Source,
+    BrowseNode, BrowsePage, Bus, Error, PagedList, PagedMap, RemotePage, Result, Track, SearchQuery, Source,
     SourceId,
 };
 
@@ -47,10 +45,10 @@ pub struct SpotifySource {
     /// tracks just like Liked Songs can exceed `LIKED_PAGE_SIZE`. Keyed by
     /// id rather than a single field because, unlike Liked Songs, there are
     /// many playlists and any of them may be browsed.
-    playlists: Mutex<HashMap<String, PagedList<Track>>>,
+    playlists: PagedMap<Track>,
     /// One `PagedList` per album id browsed so far, keyed by the bare album
     /// id (without `ALBUM_PREFIX`) — same rationale as `playlists`.
-    albums: Mutex<HashMap<String, PagedList<Track>>>,
+    albums: PagedMap<Track>,
     /// The current user's own `/me/playlists` folder list, paged in the
     /// background the same way `liked`/`albums` are — a large library can
     /// have hundreds of playlists, and this walk runs under the same
@@ -67,8 +65,8 @@ impl SpotifySource {
             api: WebApi::new(access_token, cache_dir),
             bus,
             liked: PagedList::new("spotify: liked songs"),
-            playlists: Mutex::new(HashMap::new()),
-            albums: Mutex::new(HashMap::new()),
+            playlists: PagedMap::new("spotify: playlist"),
+            albums: PagedMap::new("spotify: album"),
             folders: PagedList::new("spotify: playlists"),
             saved_albums: PagedList::new("spotify: saved albums"),
         }
@@ -170,12 +168,12 @@ impl Source for SpotifySource {
             BrowseNode::Path(id) if id == LIKED_SONGS => self.liked.retry(),
             BrowseNode::Path(id) => match id.strip_prefix(ALBUM_PREFIX) {
                 Some(album_id) => {
-                    if let Some(list) = self.albums.lock().unwrap().get(album_id) {
+                    if let Some(list) = self.albums.get(album_id) {
                         list.retry();
                     }
                 }
                 None => {
-                    if let Some(list) = self.playlists.lock().unwrap().get(id) {
+                    if let Some(list) = self.playlists.get(id) {
                         list.retry();
                     }
                 }
@@ -204,7 +202,7 @@ impl Source for SpotifySource {
 
     fn forget_playlist(&self, node: &BrowseNode) {
         if let BrowseNode::Path(id) = node {
-            self.playlists.lock().unwrap().remove(id);
+            self.playlists.remove(id);
         }
     }
 
@@ -300,13 +298,7 @@ impl Source for SpotifySource {
             // An album id: its tracks.
             BrowseNode::Path(id) if id.starts_with(ALBUM_PREFIX) => {
                 let album_id = id.strip_prefix(ALBUM_PREFIX).unwrap().to_string();
-                let list = self
-                    .albums
-                    .lock()
-                    .unwrap()
-                    .entry(album_id.clone())
-                    .or_insert_with(|| PagedList::new(format!("spotify: album {album_id}")))
-                    .clone();
+                let list = self.albums.get_or_create(&album_id);
                 let api = self.api.clone();
                 let (tracks, partial) = list.snapshot(&self.bus, want, move |offset| {
                     api.album_tracks_page(&album_id, offset, ALBUM_PAGE_SIZE)
@@ -321,13 +313,7 @@ impl Source for SpotifySource {
             }
             // A playlist id: its tracks.
             BrowseNode::Path(id) => {
-                let list = self
-                    .playlists
-                    .lock()
-                    .unwrap()
-                    .entry(id.clone())
-                    .or_insert_with(|| PagedList::new(format!("spotify: playlist {id}")))
-                    .clone();
+                let list = self.playlists.get_or_create(id);
                 let api = self.api.clone();
                 let playlist_id = id.clone();
                 let (tracks, partial) = list.snapshot(&self.bus, want, move |offset| {
