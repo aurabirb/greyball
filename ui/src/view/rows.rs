@@ -8,6 +8,7 @@ use core::{HotkeyMembership, PendingRows, Session};
 
 use crate::row::RowItem;
 
+use super::transport::like_glyph;
 use super::scroll::{ListState, draw_scrollbar};
 use super::text::{pad, pad_right_aligned, truncate};
 
@@ -94,7 +95,7 @@ fn render_cell(
     col: Column,
     t: &core::Track,
     cached: bool,
-    liked: Option<bool>,
+    liked: Option<core::LikeMark>,
     visible: &[String],
     hotkeys: &[HotkeyMembership],
 ) -> Cell {
@@ -104,8 +105,8 @@ fn render_cell(
             Cell::colored(pad_right_aligned(&t.tags(visible), TAGS_COL_W), color)
         }
         Column::Main => {
-            let dot = if liked.is_some() { LIKED_MARK } else { " " };
-            main_cell(dot, liked == Some(true), &t.main())
+            let (dot, italic) = liked.map_or((" ", false), |mark| like_glyph(mark, LIKED_MARK, LIKED_LOCAL_MARK));
+            main_cell(dot, italic, &t.main())
         }
         Column::Source => Cell::plain(t.source(cached)),
         Column::Duration => Cell::plain(t.duration()),
@@ -360,7 +361,9 @@ const TAGS_COL_W: usize = 3;
 
 const LIKED_MARK_W: usize = 1;
 
-const LIKED_MARK: &str = "·";
+const LIKED_MARK: &str = "•";
+
+const LIKED_LOCAL_MARK: &str = "◦";
 
 const SOURCE_COL_W: usize = 5;
 

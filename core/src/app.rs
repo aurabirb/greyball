@@ -14,7 +14,7 @@ use crate::update::{INSTALLED, Outcome};
 use crate::config::Config;
 use crate::hotkeys::Hotkeys;
 use crate::enqueue::{ENQUEUE_CAP, ENQUEUE_TIMEOUT, PendingEnqueue, queued_note};
-use crate::event::{Bus, CoreEvent, PlayerEvent};
+use crate::event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
 use crate::media_cache::MediaCache;
 use crate::playlist_m3u::{
     M3uDoc, M3uEntry, ParsedRendition, PlaylistMeta, SoftMeta, parse_m3u, write_entry, write_header,
@@ -416,6 +416,34 @@ pub struct HotkeyMembership {
     pub members: HashSet<TrackId>,
     pub pending: HashSet<TrackId>,
 }
+
+/// Where a track is liked: on a source with a liked-songs list (which wins), or only in the local fallback playlist.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LikeKind {
+    Local,
+    Platform,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LikeMark {
+    pub kind: LikeKind,
+    /// A like/unlike of it is in flight.
+    pub pending: bool,
+}
+
+type LikeTarget = (Arc<dyn Source>, BrowseNode, String);
+
+/// What the like key does to a track right now.
+enum LikeAction {
+    Busy,
+    UnlikePlatform(Vec<LikeTarget>),
+    LikePlatform(Vec<LikeTarget>),
+    UnlikeLocal,
+    /// `unavailable`: a source that could hold the like, but isn't logged in.
+    LikeLocal { unavailable: Option<SourceId> },
+}
+
+const LIKE_BUSY: &str = "Like in progress…";
 
 struct LikedLocal {
     name: String,
@@ -1001,6 +1029,11 @@ impl Session {
                     Err(msg) => msg.clone(),
                 };
                 self.bus.send(CoreEvent::Flash(msg));
+                Ok(true)
+            }
+            CoreEvent::LikeResult { track, like, outcome } => {
+                let outcome = self.settle_like(*track, *like, outcome);
+                self.bus.send(CoreEvent::MembershipResult(outcome));
                 Ok(true)
             }
             CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
@@ -1628,25 +1661,32 @@ impl Session {
         self.ensure_liked_lists();
     }
 
+    /// A registered source whose plugin is fully usable — what "logged in" means for likes.
+    fn source_healthy(&self, id: &SourceId) -> bool {
+        self.sources.contains_key(id) && self.warned.plugin_health.iter().any(|(pid, health)| pid == id && health.is_ok())
+    }
+
     /// Kicks (or resumes, page by page as each lands) the liked-list load of every source whose plugin is healthy.
     fn ensure_liked_lists(&self) {
         let ctx = self.remote_ctx();
         for (id, source) in &self.sources {
-            let healthy = self.warned.plugin_health.iter().any(|(pid, health)| pid == id && health.is_ok());
-            if let Some(node) = source.liked_songs_node().filter(|_| healthy) {
+            if let Some(node) = source.liked_songs_node().filter(|_| self.source_healthy(id)) {
                 self.view.ensure_remote_playlist_loading(id, &node, ctx);
             }
         }
     }
 
-    /// `None` when `track` isn't in any source's liked list; `Some(pending)` when it is, or a
-    /// like/unlike of it is in flight (`pending`).
-    pub fn liked_mark(&self, track: TrackId) -> Option<bool> {
-        self.sources
+    /// `None` when `track` isn't liked; else where, and whether a like/unlike of it is in flight.
+    pub fn liked_mark(&self, track: TrackId) -> Option<LikeMark> {
+        let platform = self
+            .sources
             .iter()
             .filter_map(|(id, src)| self.view.liked_mark(id, &src.liked_songs_node()?, track))
-            .chain(self.liked_local().members.contains(&track).then_some(false))
-            .reduce(|a, b| a || b)
+            .reduce(|a, b| a || b);
+        match platform {
+            Some(pending) => Some(LikeMark { kind: LikeKind::Platform, pending }),
+            None => self.liked_local().members.contains(&track).then_some(LikeMark { kind: LikeKind::Local, pending: false }),
+        }
     }
 
     /// All of a remote playlist's ingested track ids, cheap (reads straight
@@ -2674,16 +2714,34 @@ impl Session {
             }
             Command::Like(track) => {
                 let t = self.store.get_track(*track).ok().flatten()?;
-                let from = if self.liked_targets(&t).is_empty() { self.cfg.liked_playlist.clone() } else { "Liked Songs".to_string() };
-                self.is_liked(&t).then(|| format!("Remove {:?} from {from}?", t.display_name()))
+                let name = t.display_name();
+                match self.like_action(&t) {
+                    LikeAction::UnlikePlatform(targets) => Some(format!("Unlike {name:?} on {}?", targets[0].0.id().label())),
+                    LikeAction::UnlikeLocal => Some(format!("Remove {name:?} from {:?}?", self.cfg.liked_playlist)),
+                    _ => None,
+                }
             }
             _ => None,
         }
     }
 
-    fn is_liked(&self, track: &Track) -> bool {
-        self.liked_local().members.contains(&track.id)
-            || self.liked_targets(track).iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
+    fn like_action(&self, track: &Track) -> LikeAction {
+        let all = self.liked_targets(track);
+        let ready: Vec<LikeTarget> = all.iter().filter(|(src, ..)| self.source_healthy(&src.id())).cloned().collect();
+        if ready.iter().any(|(src, node, _)| self.view.liked_mark(&src.id(), node, track.id) == Some(true)) {
+            return LikeAction::Busy;
+        }
+        let liked_on: Vec<LikeTarget> =
+            ready.iter().filter(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0).cloned().collect();
+        if !liked_on.is_empty() {
+            LikeAction::UnlikePlatform(liked_on)
+        } else if !ready.is_empty() {
+            LikeAction::LikePlatform(ready)
+        } else if self.liked_local().members.contains(&track.id) {
+            LikeAction::UnlikeLocal
+        } else {
+            LikeAction::LikeLocal { unavailable: all.first().map(|(src, ..)| src.id()) }
+        }
     }
 
     fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode, position: Option<usize>) -> Dispatch {
@@ -2792,32 +2850,57 @@ impl Session {
             .collect()
     }
 
-    /// Likes `track` on each of its sources' liked list, or unlikes it when it is already liked, off the UI thread.
+    /// Likes `track` on its source's liked list, or unlikes it when it is already liked, off the UI thread; the local fallback is settled when the result lands (`settle_like`).
     fn set_liked(&mut self, track: TrackId) -> Result<Dispatch> {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
-        let mut targets = self.liked_targets(&t);
-        let name = t.display_name();
-        let like = !self.is_liked(&t);
-        if !like {
-            targets.retain(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, t.id) > 0);
+        match self.like_action(&t) {
+            LikeAction::Busy => Ok(Dispatch::Refused(LIKE_BUSY.to_string())),
+            LikeAction::UnlikePlatform(targets) => Ok(self.start_liked_change(&t, targets, Change::Remove(None))),
+            LikeAction::LikePlatform(targets) => Ok(self.start_liked_change(&t, targets, Change::Add)),
+            LikeAction::UnlikeLocal => self.set_liked_locally(&t, false),
+            LikeAction::LikeLocal { unavailable } => Ok(match (self.set_liked_locally(&t, true)?, unavailable) {
+                (Dispatch::MembershipSet { track, playlist, .. }, Some(src)) => {
+                    Dispatch::Done(format!("Saved {track:?} to {playlist:?} (not liked on {})", src.label()))
+                }
+                (done, _) => done,
+            }),
         }
-        if targets.is_empty() && (like || self.liked_local().members.contains(&t.id)) {
-            return self.set_liked_locally(&t, like);
-        }
+    }
+
+    fn start_liked_change(&self, track: &Track, targets: Vec<LikeTarget>, change: Change) -> Dispatch {
         let mut started = false;
         for (src, node, uri) in targets {
-            let change = if like { Change::Add } else { Change::Remove(None) };
-            started |= self.view.set_remote_membership(t.clone(), uri, src, node, change, self.remote_ctx());
+            started |= self.view.set_remote_membership(track.clone(), uri, src, node, change, self.remote_ctx());
         }
-        if !started {
-            return Ok(Dispatch::Refused(format!("Still updating {name:?} in Liked Songs")));
+        if started { Dispatch::Ok } else { Dispatch::Refused(LIKE_BUSY.to_string()) }
+    }
+
+    /// Applies a finished platform like/unlike to the local fallback playlist: a failed like is saved there, a successful unlike leaves it.
+    fn settle_like(&mut self, track: TrackId, like: bool, outcome: &MembershipOutcome) -> MembershipOutcome {
+        let Some(t) = self.store.get_track(track).ok().flatten() else {
+            return outcome.clone();
+        };
+        let in_local = self.liked_local().members.contains(&track);
+        let playlist = self.cfg.liked_playlist.clone();
+        match (like, outcome) {
+            (false, MembershipOutcome::Changed(_)) if in_local => {
+                if let Err(e) = self.set_liked_locally(&t, false) {
+                    return MembershipOutcome::Failed(format!("Unliked on the platform, but removing it from {playlist:?} failed: {e}"));
+                }
+                outcome.clone()
+            }
+            (true, MembershipOutcome::Blocked(msg) | MembershipOutcome::Failed(msg)) => {
+                let saved = if in_local {
+                    Ok(format!("It is still saved in {playlist:?}."))
+                } else {
+                    self.set_liked_locally(&t, true).map(|_| format!("Saved to {playlist:?} instead."))
+                };
+                MembershipOutcome::Failed(format!("{msg}\n{}", saved.unwrap_or_else(|e| format!("Saving to {playlist:?} failed too: {e}"))))
+            }
+            _ => outcome.clone(),
         }
-        if !like && self.liked_local().members.contains(&t.id) {
-            return self.set_liked_locally(&t, false);
-        }
-        Ok(Dispatch::Ok)
     }
 
     /// Likes into the default local playlist, created on first use, when no source of the track can hold a like.

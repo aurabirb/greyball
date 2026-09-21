@@ -752,21 +752,27 @@ impl ViewCache {
                 log::warn!("remote playlist cache: failed to persist {cache_key}: {e}");
             }
             deps.bus.send(CoreEvent::PlaylistsChanged);
-            deps.bus.send(CoreEvent::MembershipResult(match outcome {
-                Ok(true) if liked => MembershipOutcome::Changed(format!("Liked {name:?}")),
+            let platform = key.0.label();
+            let outcome = match outcome {
+                Ok(true) if liked => MembershipOutcome::Changed(format!("Liked {name:?} on {platform}")),
                 Ok(false) if liked => MembershipOutcome::Changed(format!("Removed {name:?} from Liked Songs")),
                 Ok(true) => MembershipOutcome::Changed(format!("Added {name:?} to playlist")),
                 Ok(false) => MembershipOutcome::Changed(format!("Removed {name:?} from playlist")),
                 Err(e) => {
                     log::error!("set_remote_membership[{cache_key}]: {e}");
                     let what = match (liked, want_add) {
-                        (false, _) => "toggle",
-                        (true, true) => "like",
-                        (true, _) => "unlike",
+                        (false, _) => format!("Can't toggle {name:?}"),
+                        (true, true) => format!("Couldn't like {name:?} on {platform}"),
+                        (true, _) => format!("Couldn't unlike {name:?} on {platform}"),
                     };
-                    MembershipOutcome::of_error(format!("Can't {what} {name:?}"), &e)
+                    MembershipOutcome::of_error(what, &e)
                 }
-            }));
+            };
+            deps.bus.send(if liked {
+                CoreEvent::LikeResult { track: track.id, like: want_add, outcome }
+            } else {
+                CoreEvent::MembershipResult(outcome)
+            });
         });
         true
     }

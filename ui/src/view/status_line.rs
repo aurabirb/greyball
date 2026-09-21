@@ -62,7 +62,7 @@ pub(super) struct StatusLine {
     pub(super) bpm_tag: ScanTag,
     pub(super) shuffle: bool,
     /// The playing track's `Session::liked_mark`.
-    pub(super) liked: Option<bool>,
+    pub(super) liked: Option<core::LikeMark>,
 }
 
 /// Where the line's segments sit — `(start column, width)` each — for both drawing and hit-testing.
@@ -86,7 +86,7 @@ impl StatusLine {
     }
 
     /// Combines a cached `StatusCore` with this frame's freshly-read per-tick data.
-    pub(super) fn assemble(core: &StatusCore, ps: &PlayerStatus, bpm_tag: ScanTag, liked: Option<bool>) -> Self {
+    pub(super) fn assemble(core: &StatusCore, ps: &PlayerStatus, bpm_tag: ScanTag, liked: Option<core::LikeMark>) -> Self {
         Self {
             now_playing: core.now_playing.clone(),
             now_playing_id: core.now_playing_id,

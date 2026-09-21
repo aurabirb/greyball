@@ -46,6 +46,8 @@ pub enum CoreEvent {
     PluginLoginSucceeded,
     /// What a background like/unlike or remote-playlist toggle came to.
     MembershipResult(MembershipOutcome),
+    /// What a background like/unlike of `track` on its source's liked list came to; the session settles the local fallback, then reports it as a `MembershipResult`.
+    LikeResult { track: TrackId, like: bool, outcome: MembershipOutcome },
     /// What a plugin's `:`-command returned, or why the setup the user ran failed.
     PluginReport(String),
     /// What `:update` came to: a status line, or why it failed.

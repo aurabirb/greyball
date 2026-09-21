@@ -48,6 +48,12 @@ impl SourceId {
         &self.0
     }
 
+    /// The name shown to the user: `spotify` -> `Spotify`.
+    pub fn label(&self) -> String {
+        let mut chars = self.as_str().chars();
+        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    }
+
     /// A short (2-char) label for compact display, e.g. a track list's
     /// source column: `spotify` -> `sp`, `soundcloud` -> `sc`, `local` ->
     /// `lo`, `http` -> `ht`, the `"external"` pseudo-source -> `ex`.
