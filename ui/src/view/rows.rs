@@ -190,7 +190,7 @@ pub(super) fn draw_row_list(printer: &Printer, (left, room, title): (usize, usiz
 pub(super) const TITLE_MARGIN: usize = 1;
 
 /// The title row's clickable back button, left of the title.
-pub(super) const BACK_LABEL: &str = "< (Esc)";
+pub(super) const BACK_LABEL: &str = "<[Esc]";
 
 /// Where the title row's title starts: the tags column, pushed right when the back button needs more room.
 pub(super) fn title_col(content_w: usize) -> usize {
