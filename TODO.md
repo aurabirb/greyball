@@ -185,6 +185,9 @@ Design: `docs/collections.md`.
   `ui/src/view/README.md`. Then write a small (~4-8 KB) set of guides for further agents covering the
   app's architecture invariants and ways of working such as checking for excessive comments or
   inefficient/verbose implementations before pushing work.
+- [ ] Clickable row actions: on the selected track row only, draw `[y] share  [l] like` after the title
+  (with some padding) in track lists; clicking one runs that action on the row. Resolve the keys
+  through the bindings, not literals; only the selected row, to avoid visual clutter.
 - [ ] Run an agent to reduce code duplication and DRY violations, along with any
   violations of the user policies.
 
