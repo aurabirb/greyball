@@ -48,7 +48,7 @@ pub use view::{
 /// the Vis pane must never drop below this floor.
 pub const BASELINE_FPS: u32 = 4;
 
-/// Longest a frame may follow the previous one while scrolling.
+/// Shortest interval between frames while scrolling.
 pub const SCROLL_FRAME: std::time::Duration = std::time::Duration::from_micros(1_000_000 / 45);
 
 static SCROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
