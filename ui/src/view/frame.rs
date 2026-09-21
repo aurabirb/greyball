@@ -20,7 +20,7 @@ pub(super) struct Chrome {
     pub(super) wedge_key: Option<char>,
     pub(super) clear_queue_key: Option<char>,
     pub(super) reveal_key: Option<char>,
-    pub(super) layout_key: Option<char>,
+    pub(super) like_playing_key: Option<char>,
     pub(super) kind_key: Option<char>,
     /// Every key bound to a playlist, sorted.
     pub(super) assigned: Vec<char>,
@@ -57,7 +57,7 @@ impl MedleyView {
                     wedge_key: key(BuiltinAction::Wedge),
                     clear_queue_key: key(BuiltinAction::ClearQueue),
                     reveal_key: key(BuiltinAction::RevealPlaying),
-                    layout_key: key(BuiltinAction::CyclePaneLayout),
+                    like_playing_key: key(BuiltinAction::LikePlaying),
                     kind_key: key(BuiltinAction::CycleKindFilter),
                     assigned,
                 })

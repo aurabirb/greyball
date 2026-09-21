@@ -92,8 +92,6 @@ pub(super) struct StatusCtx<'a> {
     /// The placement key's hint.
     pub(super) place: Option<String>,
     pub(super) chrome: &'a Chrome,
-    /// Some window is docked.
-    pub(super) docked: bool,
     /// Whether the idle text of key hints is drawn.
     pub(super) hints: bool,
     /// Cells at the row's right end the shell draws over.

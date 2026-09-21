@@ -55,12 +55,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Now Playing window hint row: replace the docked-only `[M] cycle layout` hint (`hint(&[c.layout_key],
-  "cycle layout").filter(|_| status.docked)`, `ui/src/view/track_list.rs` ~731) with the hint for liking the
-  playing track, `[=] like` — `=` is the default key of `BuiltinAction::LikePlaying` (`core/src/app.rs`
-  ~126; `ui/src/items.rs` ~147: "like the playing track, or unlike it"). Resolve the key through the
-  binding like the other hints (`Chrome`'s `*_key` fields; add a `like_playing_key` there if missing) so a
-  rebound key shows correctly, and show it whether or not the window is docked.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
