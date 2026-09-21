@@ -14,7 +14,7 @@ use super::status_line::StatusLine;
 use super::text::{active_style, in_span, scroll_title};
 use super::transport::{LIKED_ICON, TRANSPORT_GAP, Transport, heart_glyph, transport_labels, transport_layout};
 
-/// The resampled (or, without an envelope, constant placeholder) waveform of the last (track, width, envelope length).
+/// Last resampled (or placeholder) waveform, keyed by (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
 
 /// Narrower than this the waveform is not drawn.
@@ -206,9 +206,11 @@ impl TabBar<'_> {
         let (start, text) = self.title(&layout);
         if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
-            let levels = levels_memo
-                .get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || if envelope.is_empty() { vec![8; wave_w].into() } else { resample(envelope, wave_w) });
-            self.draw_waveform(printer, wave_start, &levels, envelope.is_empty());
+            let placeholder = envelope.is_empty();
+            let levels = levels_memo.get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || {
+                if placeholder { vec![8; wave_w].into() } else { resample(envelope, wave_w) }
+            });
+            self.draw_waveform(printer, wave_start, &levels, placeholder);
         }
         if !text.is_empty() {
             let played = match self.status.duration_ms {
