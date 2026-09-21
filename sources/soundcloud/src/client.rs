@@ -22,6 +22,8 @@ const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, lik
 /// a real SoundCloud id (those are numeric), so it can't collide with one.
 const LIKED_TRACKS: &str = "__liked__";
 
+const READ_ONLY: NodeMeta = NodeMeta { writable: Some(false) };
+
 /// `BrowseNode::Path` prefix of a personalized playlist; the rest is its urn.
 const SYSTEM_PREFIX: &str = "system:";
 
@@ -130,7 +132,7 @@ pub struct SoundcloudSource {
     user_id: Arc<Mutex<Option<u64>>>,
     bus: Bus,
     liked: CursorList<Track>,
-    playlists: CursorList<(String, BrowseNode)>,
+    playlists: CursorList<(String, BrowseNode, NodeMeta)>,
     /// Playlists on the home feed's shelves.
     shelves: CursorList<(String, BrowseNode)>,
     shelf_seen: Arc<Mutex<HashSet<String>>>,
@@ -334,20 +336,42 @@ impl SoundcloudSource {
         }
     }
 
-    /// GET `target` (an api-v2 path or an absolute `next_href`); `None` when denied. Idempotent, so
-    /// 429s, 5xx and network errors are retried with backoff, up to `MAX_ATTEMPTS`; stops with an
-    /// error once `wanted` turns false.
     fn send_while(&self, target: &str, query: &[(&str, &str)], denied: Denied, wanted: &dyn Fn() -> bool) -> Result<Option<serde_json::Value>> {
+        self.send_request(reqwest::Method::GET, target, query, None, denied, wanted)
+    }
+
+    /// PUT/DELETE `target` with an optional JSON body, ignoring any response body.
+    fn api_write(&self, method: reqwest::Method, target: &str, body: Option<&serde_json::Value>) -> Result<()> {
+        self.require_auth()?;
+        self.send_request(method, target, &[], body, Denied::StaleClientId, &|| true)?.ok_or_else(|| self.denied_error(target, Denied::StaleClientId))?;
+        Ok(())
+    }
+
+    /// `method` on `target` (an api-v2 path or an absolute `next_href`); `None` when denied. Every
+    /// caller is idempotent, so 429s, 5xx and network errors are retried with backoff, up to
+    /// `MAX_ATTEMPTS`; stops with an error once `wanted` turns false. A non-GET empty body is `Null`.
+    fn send_request(
+        &self,
+        method: reqwest::Method,
+        target: &str,
+        query: &[(&str, &str)],
+        body: Option<&serde_json::Value>,
+        denied: Denied,
+        wanted: &dyn Fn() -> bool,
+    ) -> Result<Option<serde_json::Value>> {
         let mut rescraped = false;
         for attempt in 0..MAX_ATTEMPTS {
             let client_id = self.client_id()?;
             let url = request_url(target, query, &client_id)?;
             let path = url.path().to_string();
-            log::debug!("soundcloud: GET {path} {query:?}");
+            log::debug!("soundcloud: {method} {path} {query:?}");
             if !self.gate.wait_turn_while(wanted) {
                 return Err(src_err("no longer wanted"));
             }
-            let mut req = self.client.get(url);
+            let mut req = self.client.request(method.clone(), url);
+            if let Some(body) = body {
+                req = req.json(body);
+            }
             if let Some(token) = &self.oauth_token {
                 req = req.header("Authorization", format!("OAuth {token}"));
             }
@@ -356,7 +380,7 @@ impl SoundcloudSource {
             let resp = match req.send() {
                 Ok(resp) => resp,
                 Err(e) if (e.is_connect() || e.is_timeout()) && !last => {
-                    log::warn!("soundcloud: GET {path}: {}, retrying in {backoff:?}", e.without_url());
+                    log::warn!("soundcloud: {method} {path}: {}, retrying in {backoff:?}", e.without_url());
                     self.gate.set_cooldown(backoff);
                     continue;
                 }
@@ -364,9 +388,9 @@ impl SoundcloudSource {
             };
             let status = resp.status();
             if status.is_success() {
-                log::debug!("soundcloud: GET {path} -> {status}");
+                log::debug!("soundcloud: {method} {path} -> {status}");
             } else {
-                log::warn!("soundcloud: GET {path} -> {status}");
+                log::warn!("soundcloud: {method} {path} -> {status}");
             }
             if status.as_u16() == 429 || status.is_server_error() {
                 if last {
@@ -382,6 +406,10 @@ impl SoundcloudSource {
                 Outcome::Success => {
                     if self.oauth_token.is_some() {
                         self.set_login_expired(false);
+                    }
+                    if method != reqwest::Method::GET {
+                        let text = resp.text().map_err(|e| src_err(format!("{path}: {}", e.without_url())))?;
+                        return Ok(Some(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)));
                     }
                     return resp.json().map(Some).map_err(|e| src_err(format!("{path}: bad json: {}", e.without_url())));
                 }
@@ -478,13 +506,17 @@ impl SoundcloudSource {
     }
 
     /// One page of the library's playlists: the user's own and the ones they liked, without albums.
-    fn playlists_page(&self, offset: usize) -> std::result::Result<RemotePage<(String, BrowseNode)>, String> {
+    fn playlists_page(&self, offset: usize) -> std::result::Result<RemotePage<(String, BrowseNode, NodeMeta)>, String> {
+        let me = self.user_id().map_err(|e| e.to_string())?;
         self.list_page(&self.playlists, offset, ("/me/library/all", PLAYLISTS_PAGE_SIZE, Denied::StaleClientId), usize::MAX, |items| {
             items
                 .into_iter()
                 .filter_map(|item| serde_json::from_value::<ApiLibraryItem>(item).ok()?.playlist)
                 .filter(|p| p.is_album != Some(true))
-                .map(|p| (p.title, BrowseNode::Path(p.id.to_string())))
+                .map(|p| {
+                    let writable = p.user.is_some_and(|u| u.id == me);
+                    (p.title, BrowseNode::Path(p.id.to_string()), NodeMeta { writable: Some(writable) })
+                })
                 .collect()
         })
         .map_err(|e| e.to_string())
@@ -575,6 +607,33 @@ impl SoundcloudSource {
         Ok(out)
     }
 
+    fn track_id(uri: &str) -> Result<u64> {
+        match TrackRef::parse(uri) {
+            Some(TrackRef::Id(id)) => Ok(id),
+            _ => Err(src_err(format!("not a SoundCloud track id: {uri}"))),
+        }
+    }
+
+    fn set_like(&self, uri: &str, like: bool) -> Result<()> {
+        let target = format!("/users/{}/track_likes/{}", self.user_id()?, Self::track_id(uri)?);
+        self.api_write(if like { reqwest::Method::PUT } else { reqwest::Method::DELETE }, &target, None)
+    }
+
+    /// Rewrites playlist `id`'s full track list through `edit`; the cached copy is dropped afterwards.
+    fn edit_playlist(&self, id: &str, edit: impl FnOnce(&mut Vec<u64>) -> Result<()>) -> Result<()> {
+        if id.starts_with(SYSTEM_PREFIX) {
+            return Err(Error::Unsupported("playlist writes: personalized playlists are read-only"));
+        }
+        let path = format!("/playlists/{id}");
+        let doc = self.api_get(&path, &[])?;
+        let mut ids: Vec<u64> = doc.get("tracks").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.get("id")?.as_u64()).collect();
+        edit(&mut ids)?;
+        let tracks: Vec<_> = ids.iter().map(|id| serde_json::json!({ "id": id })).collect();
+        let result = self.api_write(reqwest::Method::PUT, &path, Some(&serde_json::json!({ "playlist": { "tracks": tracks } })));
+        self.playlist_docs.lock().unwrap().remove(id);
+        result
+    }
+
     /// One page of the user's `track_likes`.
     fn likes_page(&self, offset: usize) -> std::result::Result<RemotePage<Track>, String> {
         let path = format!("/users/{}/track_likes", self.user_id().map_err(|e| e.to_string())?);
@@ -653,11 +712,6 @@ impl SoundcloudSource {
         }
         Ok(playlist)
     }
-}
-
-/// What is known of a folder node; no playlist writes exist yet, so every node is read-only.
-fn node_meta(_node: &BrowseNode) -> NodeMeta {
-    NodeMeta { writable: Some(false) }
 }
 
 /// api-v2 reports no totals on cursor-paged lists: report one that is never reached while more pages remain.
@@ -808,7 +862,49 @@ impl Source for SoundcloudSource {
     }
 
     fn is_synthetic(&self, node: &BrowseNode) -> bool {
-        matches!(node, BrowseNode::Path(id) if id.starts_with(SYSTEM_PREFIX))
+        matches!(node, BrowseNode::Path(id) if id == LIKED_TRACKS || id.starts_with(SYSTEM_PREFIX))
+    }
+
+    fn liked_songs_node(&self) -> Option<BrowseNode> {
+        Some(BrowseNode::Path(LIKED_TRACKS.to_string()))
+    }
+
+    fn adds_first(&self, node: &BrowseNode) -> bool {
+        matches!(node, BrowseNode::Path(id) if id == LIKED_TRACKS)
+    }
+
+    fn add_to_playlist(&self, node: &BrowseNode, track_uri: &str) -> Result<()> {
+        match node {
+            BrowseNode::Path(id) if id == LIKED_TRACKS => self.set_like(track_uri, true),
+            BrowseNode::Path(id) => {
+                let track = Self::track_id(track_uri)?;
+                self.edit_playlist(id, |ids| {
+                    ids.push(track);
+                    Ok(())
+                })
+            }
+            BrowseNode::Root => Err(Error::Unsupported("add_to_playlist: not a playlist")),
+        }
+    }
+
+    fn remove_from_playlist(&self, node: &BrowseNode, track_uri: &str, position: Option<usize>) -> Result<()> {
+        match node {
+            BrowseNode::Path(id) if id == LIKED_TRACKS => self.set_like(track_uri, false),
+            BrowseNode::Path(id) => {
+                let track = Self::track_id(track_uri)?;
+                self.edit_playlist(id, |ids| {
+                    match position {
+                        Some(at) if ids.get(at) == Some(&track) => {
+                            ids.remove(at);
+                        }
+                        Some(_) => return Err(src_err("the playlist changed: that row is no longer this track")),
+                        None => ids.retain(|id| *id != track),
+                    }
+                    Ok(())
+                })
+            }
+            BrowseNode::Root => Err(Error::Unsupported("remove_from_playlist: not a playlist")),
+        }
     }
 
     fn retry_browse(&self, node: &BrowseNode) {
@@ -839,19 +935,23 @@ impl Source for SoundcloudSource {
             // login, so no folders without one.
             BrowseNode::Root => {
                 let mut folders = vec![];
+                let mut node_meta = vec![];
                 let (mut partial, mut errored) = (false, false);
                 if self.oauth_token.is_some() {
-                    folders.push(("Liked Tracks".to_string(), BrowseNode::Path(LIKED_TRACKS.to_string())));
+                    let liked = BrowseNode::Path(LIKED_TRACKS.to_string());
+                    node_meta.push((liked.clone(), READ_ONLY));
+                    folders.push(("Liked Tracks".to_string(), liked));
                     let (own, own_partial) = self.playlists.snapshot(self, want, Self::playlists_page);
                     let (shelf, shelf_partial) = self.shelves.snapshot(self, want, Self::shelves_page);
-                    let own_nodes: HashSet<&BrowseNode> = own.iter().map(|(_, n)| n).collect();
+                    let own_nodes: HashSet<&BrowseNode> = own.iter().map(|(_, n, _)| n).collect();
                     let extra: Vec<_> = shelf.iter().filter(|(_, n)| !own_nodes.contains(n)).cloned().collect();
-                    folders.extend(own.iter().cloned());
+                    node_meta.extend(own.iter().map(|(_, n, meta)| (n.clone(), meta.clone())));
+                    node_meta.extend(extra.iter().map(|(_, n)| (n.clone(), READ_ONLY)));
+                    folders.extend(own.iter().map(|(name, n, _)| (name.clone(), n.clone())));
                     folders.extend(extra);
                     partial = own_partial || shelf_partial;
                     errored = self.playlists.list.errored() || self.shelves.list.errored();
                 }
-                let node_meta = folders.iter().map(|(_, node)| (node.clone(), node_meta(node))).collect();
                 Ok(BrowsePage { title: "SoundCloud".to_string(), tracks: vec![], folders, node_meta, partial, errored })
             }
             BrowseNode::Path(id) if id == LIKED_TRACKS => {
@@ -957,6 +1057,13 @@ struct ApiPlaylist {
     title: String,
     #[serde(default)]
     is_album: Option<bool>,
+    #[serde(default)]
+    user: Option<ApiOwner>,
+}
+
+#[derive(Deserialize)]
+struct ApiOwner {
+    id: u64,
 }
 
 /// A `track_likes` collection entry.
