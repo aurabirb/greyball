@@ -514,14 +514,13 @@ impl View for MedleyView {
         if event == Event::Refresh {
             return self.sync_vis_fps();
         }
-        if scroll::Nav::of(&event).is_some() {
+        let nav = scroll::Nav::of(&event);
+        if nav.is_some() {
             crate::SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let wheel = matches!(event, Event::Mouse { event: MouseEvent::WheelUp | MouseEvent::WheelDown, .. });
         let result = self.route(&event);
-        // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away;
-        // a wheel tick only moves a self-bounded scroll offset, which the pass before the draw sees anyway.
-        if !wheel {
+        // cursive drains type-ahead before its next layout pass, so what this event changed is laid out right away, except a wheel tick, which only moves a self-bounded offset.
+        if !matches!(nav, Some(scroll::Nav::Wheel(_))) {
             self.layout();
         }
         // A wheel scroll must stay where it is; any key brings the cursor back into view.
