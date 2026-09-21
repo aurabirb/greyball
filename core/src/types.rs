@@ -92,8 +92,6 @@ impl<'de> Deserialize<'de> for SourceId {
 pub enum Quality {
     Lossless { bits: Option<u8>, hz: Option<u32> },
     Lossy { kbps: Option<u32> },
-    /// Only a truncated (30 s) stream exists; playable only as a last resort.
-    Preview,
     Unknown,
 }
 

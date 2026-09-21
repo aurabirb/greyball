@@ -187,7 +187,6 @@ fn write_rendition(r: &ParsedRendition) -> String {
 fn write_quality(q: &Quality) -> String {
     match q {
         Quality::Unknown => "unknown".to_string(),
-        Quality::Preview => "preview".to_string(),
         Quality::Lossy { kbps: None } => "lossy".to_string(),
         Quality::Lossy { kbps: Some(k) } => format!("lossy:{k}"),
         Quality::Lossless {
@@ -336,9 +335,6 @@ fn parse_rendition(s: &str) -> Option<ParsedRendition> {
 fn parse_quality(s: &str) -> Quality {
     if s == "unknown" || s.is_empty() {
         return Quality::Unknown;
-    }
-    if s == "preview" {
-        return Quality::Preview;
     }
     if let Some(rest) = s.strip_prefix("lossless") {
         let rest = rest.strip_prefix(':').unwrap_or(rest);

@@ -429,7 +429,7 @@ impl Source for SoundcloudSource {
         let r = TrackRef::parse(uri).ok_or_else(|| src_err(format!("not a SoundCloud track: {uri:?}")))?;
         self.track_ref(&r)?
             .into_track()
-            .ok_or_else(|| src_err("track has no playable stream"))
+            .ok_or_else(|| src_err("track has no full-length stream (preview-only or unavailable)"))
     }
 
     fn retry_browse(&self, node: &BrowseNode) {
@@ -638,6 +638,10 @@ impl ApiTrack {
         if self.media.transcodings.is_empty() {
             return None;
         }
+        if self.media.full_transcodings().next().is_none() {
+            log::info!("soundcloud: skipping preview-only track {:?} (soundcloud:track:{})", self.title, self.id);
+            return None;
+        }
         let (mut artists, title) = core::parse_artist_title(&self.title);
         if artists.is_empty()
             && let Some(u) = &self.user
@@ -650,14 +654,11 @@ impl ApiTrack {
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
         let full = self.full_duration.filter(|&d| d > 0).unwrap_or(self.duration);
-        let preview_only = self.media.full_transcodings().next().is_none();
-        let (duration, quality) = if preview_only { (self.duration, Quality::Preview) } else { (full, Quality::Lossy { kbps: None }) };
-        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), duration, quality);
+        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), full, Quality::Lossy { kbps: None });
         let mut attrs = std::collections::BTreeMap::new();
         if let Some(u) = self.waveform_url.filter(|u| !u.trim().is_empty()) {
             attrs.insert(WAVEFORM_URL_ATTR.to_string(), u);
         }
-        // The song's own length, so a merged track never inherits the preview's 30 s.
-        Some(Track { isrc, attrs, duration_ms: full, ..Track::fresh(title, artists, rendition) })
+        Some(Track { isrc, attrs, ..Track::fresh(title, artists, rendition) })
     }
 }

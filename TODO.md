@@ -55,7 +55,6 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
-- [ ] Attach a Spotify rendition to a preview-only SoundCloud track (`Quality::Preview`): renditions only merge at `Catalog::ingest` time (ISRC, then fuzzy title/artist), so a track imported from SoundCloud alone never gains one. Search Spotify for the track when its only playable rendition is a preview and link the hit.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
