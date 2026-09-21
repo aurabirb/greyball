@@ -1190,10 +1190,10 @@ impl Session {
                 Ok(true)
             }
             PlayerEvent::Finished { source, uri } => {
-                if self.is_now_playing(source, uri) {
+                if let Some((_, _, id)) = self.now_playing_rendition.clone().filter(|(s, u, _)| s == source && u == uri) {
                     // A decoder that never reported a length: the drained position is it.
                     let (drained_at, known) = self.progress;
-                    if known == 0 && drained_at > 0 && let Some(id) = self.event_track(source, uri)? {
+                    if known == 0 && drained_at > 0 {
                         self.learn_duration(id, drained_at);
                     }
                     self.advance(false);
@@ -1954,7 +1954,7 @@ impl Session {
     /// back via `previous_from_history` must not re-add what it just read).
     fn play_track(&mut self, id: TrackId, record: bool) {
         self.failed_playback_sources.clear();
-        // `current` is what `Finished` and the shown duration are checked against, so every play path sets it.
+        // `current` is what the shown duration and preload hints are checked against, so every play path sets it.
         if self.queue.get_current() != Some(id) {
             self.queue.set_current(Some(id));
         }
@@ -2092,6 +2092,7 @@ impl Session {
             p.stop();
         }
         self.queue.stop();
+        self.now_playing_rendition = None;
         self.progress = (0, 0);
     }
 
