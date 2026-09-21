@@ -46,7 +46,11 @@ pub struct NodeMeta {
 }
 
 /// A persisted folder list: `(name, path id)` pairs and the sparse `(path id, NodeMeta)` pairs beside them.
-pub type StoredFolders = (Vec<(String, String)>, Vec<(String, NodeMeta)>);
+#[derive(Clone, Debug, Default)]
+pub struct StoredFolders {
+    pub folders: Vec<(String, String)>,
+    pub meta: Vec<(String, NodeMeta)>,
+}
 
 #[derive(Clone, Debug)]
 pub struct BrowsePage {

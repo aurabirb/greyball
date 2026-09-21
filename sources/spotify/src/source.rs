@@ -13,8 +13,8 @@ use crate::webapi::WebApi;
 /// `BrowseNode::Path` sentinel for the synthetic "Liked Songs" folder — not a
 /// real Spotify id (those are base-62 alphanumeric), so it can't collide with
 /// one.
-const READ_ONLY: NodeMeta = NodeMeta { writable: Some(false) };
 const LIKED_SONGS: &str = "__liked__";
+const READ_ONLY: NodeMeta = NodeMeta { writable: Some(false) };
 
 /// Page size for walking `/v1/me/tracks` — the API's max for this endpoint.
 const LIKED_PAGE_SIZE: usize = 50;

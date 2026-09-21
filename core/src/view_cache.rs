@@ -277,6 +277,14 @@ pub(crate) struct ViewCache {
     pending: PendingChanges,
 }
 
+/// The persistable id of a folder node; `Root` is never a folder.
+fn path_id(node: &BrowseNode) -> Option<String> {
+    match node {
+        BrowseNode::Path(id) => Some(id.clone()),
+        BrowseNode::Root => None,
+    }
+}
+
 impl ViewCache {
     /// An empty set for the search `id`, to be filled by its events.
     pub fn begin_search(&mut self, id: u64, query: String) {
@@ -415,10 +423,10 @@ impl ViewCache {
             let entry = cache.entry(source.clone()).or_insert_with(|| {
                 // First touch this session — hydrate from whatever a
                 // previous session persisted instead of starting empty.
-                let (folders, meta) = ctx.store.remote_playlist_folders(&key).unwrap_or_default();
+                let stored = ctx.store.remote_playlist_folders(&key).unwrap_or_default();
                 let mut entry = RemotePlaylistsEntry::default();
-                entry.set_folders(folders.into_iter().map(|(name, id)| (name, BrowseNode::Path(id))).collect());
-                entry.node_meta = meta.into_iter().map(|(id, meta)| (BrowseNode::Path(id), meta)).collect();
+                entry.set_folders(stored.folders.into_iter().map(|(name, id)| (name, BrowseNode::Path(id))).collect());
+                entry.node_meta = stored.meta.into_iter().map(|(id, meta)| (BrowseNode::Path(id), meta)).collect();
                 entry
             });
             if entry.browsing
@@ -456,9 +464,7 @@ impl ViewCache {
                     if clean {
                         entry.node_meta = page.node_meta.iter().cloned().collect();
                     } else {
-                        for (node, meta) in &page.node_meta {
-                            entry.node_meta.entry(node.clone()).or_insert_with(|| meta.clone());
-                        }
+                        entry.node_meta.extend(page.node_meta.iter().cloned());
                     }
                     if clean {
                         entry.settled = !walks_root || page.folders.iter().any(|(_, node)| !source_handle.is_synthetic(node));
@@ -466,22 +472,10 @@ impl ViewCache {
                 }
                 bus.send(CoreEvent::PlaylistsChanged);
                 if clean {
-                    let folders: Vec<(String, String)> = page
-                        .folders
-                        .iter()
-                        .filter_map(|(name, node)| match node {
-                            BrowseNode::Path(id) => Some((name.clone(), id.clone())),
-                            BrowseNode::Root => None,
-                        })
-                        .collect();
-                    let meta: Vec<(String, NodeMeta)> = page
-                        .node_meta
-                        .iter()
-                        .filter_map(|(node, meta)| match node {
-                            BrowseNode::Path(id) => Some((id.clone(), meta.clone())),
-                            BrowseNode::Root => None,
-                        })
-                        .collect();
+                    let folders: Vec<(String, String)> =
+                        page.folders.iter().filter_map(|(name, node)| Some((name.clone(), path_id(node)?))).collect();
+                    let meta: Vec<(String, NodeMeta)> =
+                        page.node_meta.iter().filter_map(|(node, meta)| Some((path_id(node)?, meta.clone()))).collect();
                     if let Err(e) = store.set_remote_playlist_folders(&key, &folders, &meta) {
                         log::warn!("{source}: failed to persist {what} folders: {e}");
                     }

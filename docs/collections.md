@@ -159,8 +159,8 @@ to break one, report it back instead of working around it.
   the query (`SearchQuery.kinds`) or from the window's filter, never from the node.
 - **Kind is a property of the query/window, not of the item.** This is why `search_collections`
   takes a `kind` and returns plain pairs, and why the Playlists window filters in `top_rows`
-  instead of the items carrying a tag. Per-node metadata (`BrowsePage.node_meta`, persisted and read
-  through `Session::node_meta`) now sits beside the folder list, currently carrying `writable`; it may later carry kind or a subtitle.
+  instead of the items carrying a tag. Per-node metadata (`BrowsePage.node_meta`, persisted with the folder
+  list and read through `Session::node_meta`) currently carries `writable`.
 - **Single, EP and album are one kind.** `ItemKind::Album` only; the wording is the display
   function `release_label`. Don't store a release type or add a filter on it.
 - **`Playlist` is local only.** Don't give it `kind` or `origin` fields to make remote collections

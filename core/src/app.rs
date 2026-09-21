@@ -488,6 +488,20 @@ pub enum BindError {
     ReadOnly,
 }
 
+pub enum WriteTargetError {
+    Synthetic,
+    ReadOnly,
+}
+
+impl From<WriteTargetError> for BindError {
+    fn from(e: WriteTargetError) -> Self {
+        match e {
+            WriteTargetError::Synthetic => Self::SyntheticPlaylist,
+            WriteTargetError::ReadOnly => Self::ReadOnly,
+        }
+    }
+}
+
 pub struct Session {
     pub bus: Bus,
     pub store: Arc<dyn Store>,
@@ -969,6 +983,7 @@ impl Session {
                 Ok(true)
             }
             CoreEvent::PlaylistsChanged => {
+                self.prune_invalid_hotkeys();
                 self.invalidate_hotkey_memberships();
                 self.ensure_liked_lists();
                 self.notify_enqueues();
@@ -1181,7 +1196,7 @@ impl Session {
         if let Some(s) = wiring.source {
             self.sources.insert(id.clone(), s);
             self.view.invalidate_remote_playlists(id);
-            self.prune_synthetic_hotkeys();
+            self.prune_invalid_hotkeys();
         }
         if let Some(m) = wiring.media {
             self.media.insert(id.clone(), m);
@@ -1735,9 +1750,15 @@ impl Session {
         self.view.node_meta(source, node)
     }
 
-    /// Whether `node` may be offered as a write target: only a node reported read-only is not.
-    pub fn is_writable(&self, source: &SourceId, node: &BrowseNode) -> bool {
-        self.node_meta(source, node).writable != Some(false)
+    /// Whether `node` may be a write target: not synthetic, and not reported read-only (unknown is allowed).
+    pub fn write_target(&self, source: &SourceId, node: &BrowseNode) -> std::result::Result<(), WriteTargetError> {
+        if self.is_synthetic_playlist(source, node) {
+            Err(WriteTargetError::Synthetic)
+        } else if self.node_meta(source, node).writable == Some(false) {
+            Err(WriteTargetError::ReadOnly)
+        } else {
+            Ok(())
+        }
     }
 
     /// Cheap count of a remote playlist's ingested tracks so far.
@@ -1850,15 +1871,8 @@ impl Session {
         target: HotkeyTarget,
     ) -> std::result::Result<Option<HotkeyTarget>, BindError> {
         self.touch();
-        if let HotkeyTarget::Remote(source, node) = &target
-            && self.is_synthetic_playlist(source, node)
-        {
-            return Err(BindError::SyntheticPlaylist);
-        }
-        if let HotkeyTarget::Remote(source, node) = &target
-            && !self.is_writable(source, node)
-        {
-            return Err(BindError::ReadOnly);
+        if let HotkeyTarget::Remote(source, node) = &target {
+            self.write_target(source, node)?;
         }
         let stolen = self.hotkeys.bind(key, target).map_err(BindError::BuiltinKey)?;
         self.invalidate_hotkey_memberships();
@@ -1884,20 +1898,22 @@ impl Session {
             let name = name.unwrap_or_else(|| format!("{target:?}"));
             self.warn("hotkeys", &format!("dropped '{key}' from playlist {name}: it is the key of built-in {}", action.id()));
         }
-        self.prune_synthetic_hotkeys();
+        self.prune_invalid_hotkeys();
     }
 
-    /// Drops bindings to synthetic nodes; re-run as sources register, since only a wired source can tell.
-    fn prune_synthetic_hotkeys(&mut self) {
-        let sources = &self.sources;
-        let pruned = self.hotkeys.retain(|key, target| {
-            let synthetic = matches!(target, HotkeyTarget::Remote(sid, node)
-                if sources.get(sid).is_some_and(|s| s.is_synthetic(node)));
-            if synthetic {
-                log::warn!("hotkey '{key}': dropped, bound to a synthetic playlist");
-            }
-            !synthetic
-        });
+    /// Drops bindings to synthetic or read-only nodes; re-run as sources register and node meta lands, since only then can they tell.
+    fn prune_invalid_hotkeys(&mut self) {
+        let invalid: Vec<char> = self
+            .hotkeys
+            .map()
+            .iter()
+            .filter(|(_, target)| matches!(target, HotkeyTarget::Remote(sid, node) if self.write_target(sid, node).is_err()))
+            .map(|(&key, _)| key)
+            .collect();
+        for key in &invalid {
+            log::warn!("hotkey '{key}': dropped, bound to a synthetic or read-only playlist");
+        }
+        let pruned = self.hotkeys.retain(|key, _| !invalid.contains(key));
         if pruned {
             self.invalidate_hotkey_memberships();
         }
@@ -2797,7 +2813,7 @@ impl Session {
         let Some(src) = self.sources.get(&source).cloned() else {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: {source} isn't available"));
         };
-        if src.is_synthetic(&node) || !self.is_writable(&source, &node) {
+        if self.write_target(&source, &node).is_err() {
             let msg = format!("Can't toggle {name:?}: that playlist is read-only");
             return refused("toggle_playlist_membership", msg);
         }
@@ -2845,7 +2861,7 @@ impl Session {
                         members: self.playlist_track_ids(*id).into_iter().collect(),
                         pending: HashSet::new(),
                     }),
-                    HotkeyTarget::Remote(sid, node) if !self.is_synthetic_playlist(sid, node) && self.is_writable(sid, node) => {
+                    HotkeyTarget::Remote(sid, node) if self.write_target(sid, node).is_ok() => {
                         let members = self.remote_playlist_track_ids(sid, node).into_iter().collect();
                         loading |= self.remote_playlist_loading(sid, node);
                         let pending = self.remote_pending_ids(sid, node).into_iter().collect();

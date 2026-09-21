@@ -7,12 +7,14 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core::{RateGate, RemotePage, Track};
 use serde::Deserialize;
 
 const API: &str = "https://api.spotify.com/v1";
+
+const ME_RETRY_FLOOR: Duration = Duration::from_secs(60);
 
 /// Smallest gap enforced between two Web API requests, plus a random jitter
 /// on top (below) — without the jitter, a burst of calls (e.g. paginating
@@ -50,8 +52,8 @@ struct Inner {
     /// established on first use, reused across pages of the same (or a
     /// different) playlist/album walk.
     web_player: Mutex<Option<crate::web_player::Session>>,
-    /// The current user's id from `/me`, fetched once.
-    user_id: Mutex<Option<String>>,
+    /// The current user's id from `/me`: `Ok` once fetched, `Err` the time of the last failure.
+    user_id: Mutex<Option<Result<String, Instant>>>,
 }
 
 #[derive(Deserialize)]
@@ -415,15 +417,19 @@ impl WebApi {
         body.into_track().ok_or_else(|| "track has no id".to_string())
     }
 
-    /// The current user's id (`/me`), cached after the first success.
+    /// The current user's id (`/me`), cached after the first success; a failure is not retried for `ME_RETRY_FLOOR`.
     fn user_id(&self) -> Result<String, String> {
-        let mut cached = self.inner.user_id.lock().unwrap();
-        if let Some(id) = cached.as_ref() {
-            return Ok(id.clone());
+        match &*self.inner.user_id.lock().unwrap() {
+            Some(Ok(id)) => return Ok(id.clone()),
+            Some(Err(at)) if at.elapsed() < ME_RETRY_FLOOR => return Err("recent /me failure".to_string()),
+            _ => {}
         }
-        let me: Me = self.get(&format!("{API}/me"))?.json().map_err(|e| e.to_string())?;
-        *cached = Some(me.id.clone());
-        Ok(me.id)
+        let fetched = self.get(&format!("{API}/me")).and_then(|r| r.json::<Me>().map_err(|e| e.to_string())).map(|me| me.id);
+        if let Err(e) = &fetched {
+            log::warn!("spotify: /me failed, playlist ownership unknown: {e}");
+        }
+        *self.inner.user_id.lock().unwrap() = Some(fetched.clone().map_err(|_| Instant::now()));
+        fetched
     }
 
     /// One page of the current user's playlists (owned + followed), as
@@ -434,7 +440,7 @@ impl WebApi {
         let url = format!("{API}/me/playlists?limit={limit}&offset={offset}");
         let body: Playlists = self.get(&url)?.json().map_err(|e| e.to_string())?;
         let consumed = body.items.len();
-        let user = self.user_id().map_err(|e| log::warn!("spotify: /me failed, playlist ownership unknown: {e}")).ok();
+        let user = self.user_id().ok();
         let writable = |p: &ApiPlaylist| match (&user, &p.owner) {
             _ if p.collaborative => Some(true),
             (Some(user), Some(owner)) => Some(&owner.id == user),

@@ -174,7 +174,7 @@ impl Store for MemStore {
             .lock()
             .unwrap()
             .remote_playlist_folders
-            .insert(source.to_string(), (folders.to_vec(), meta.to_vec()));
+            .insert(source.to_string(), StoredFolders { folders: folders.to_vec(), meta: meta.to_vec() });
         Ok(())
     }
 }
@@ -493,15 +493,10 @@ impl Store for RedbStore {
         let r = self.db.begin_read().map_err(store_err)?;
         let folders = r.open_table(REMOTE_PLAYLIST_FOLDERS).map_err(store_err)?;
         let meta = r.open_table(NODE_META).map_err(store_err)?;
-        let folders = match folders.get(source).map_err(store_err)? {
-            Some(g) => serde_json::from_slice(g.value()).map_err(store_err)?,
-            None => Vec::new(),
-        };
-        let meta = match meta.get(source).map_err(store_err)? {
-            Some(g) => serde_json::from_slice(g.value()).map_err(store_err)?,
-            None => Vec::new(),
-        };
-        Ok((folders, meta))
+        Ok(StoredFolders {
+            folders: parse_blob(source, "folders", folders.get(source).map_err(store_err)?.as_ref().map(|g| g.value())),
+            meta: parse_blob(source, "node meta", meta.get(source).map_err(store_err)?.as_ref().map(|g| g.value())),
+        })
     }
 
     fn set_remote_playlist_folders(&self, source: &str, folders: &[(String, String)], meta: &[(String, NodeMeta)]) -> Result<()> {
@@ -517,6 +512,15 @@ impl Store for RedbStore {
         w.commit().map_err(store_err)?;
         Ok(())
     }
+}
+
+/// A missing or corrupt blob reads as empty, so one bad table doesn't lose its sibling.
+fn parse_blob<T: serde::de::DeserializeOwned + Default>(source: &str, what: &str, bytes: Option<&[u8]>) -> T {
+    let Some(bytes) = bytes else { return T::default() };
+    serde_json::from_slice(bytes).unwrap_or_else(|e| {
+        log::warn!("{source}: corrupt stored {what}, ignoring: {e}");
+        T::default()
+    })
 }
 
 fn uuid_from_slice(b: &[u8]) -> Result<uuid::Uuid> {
