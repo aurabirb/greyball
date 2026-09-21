@@ -83,8 +83,7 @@ impl Plugin for SoundcloudPlugin {
         answers.is_empty().then(|| {
             SetupPrompt::new(
                 "Log in on soundcloud.com in your browser, then either:\n\
-                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value \
-                 (it cannot list HttpOnly cookies, but SoundCloud's session cookie carries the login).\n\
+                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value.\n\
                  B. Press F12, open Network, click any request to api-v2.soundcloud.com and copy the value \
                  of its Authorization request header (it starts with OAuth ).\n\
                  Paste it here as a single line; it is hidden as you type. A token SoundCloud rejects is \
