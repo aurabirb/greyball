@@ -19,6 +19,8 @@ pub struct SoundcloudPlugin {
     /// The token `wiring()` builds a `SoundcloudSource` with — `None` until
     /// a config value, a cached file, or a `setup()` call provides one.
     token: Mutex<Option<String>>,
+    /// Why the configured `oauth_token` was unusable, shown by `probe` while no token is set.
+    config_error: Option<String>,
     hls: bool,
     /// The source `wiring()` last built, shared with the waveform scan plugin.
     source: Mutex<Option<Arc<SoundcloudSource>>>,
@@ -32,10 +34,10 @@ impl SoundcloudPlugin {
         bus: Bus,
         hls: bool,
     ) -> Self {
-        let token = configured_token
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| auth::load_cached(&cache_dir));
-        Self { client_id, cache_dir, bus, token: Mutex::new(token), hls, source: Mutex::default() }
+        let configured = configured_token.filter(|s| !s.trim().is_empty()).map(|s| auth::extract_token(&s));
+        let config_error = configured.as_ref().and_then(|r| r.as_ref().err().cloned());
+        let token = configured.and_then(Result::ok).or_else(|| auth::load_cached(&cache_dir));
+        Self { client_id, cache_dir, bus, token: Mutex::new(token), config_error, hls, source: Mutex::default() }
     }
 
     /// The scan plugin that reads SoundCloud's ready-made waveforms; register it before the decoding one.
@@ -53,6 +55,9 @@ impl Plugin for SoundcloudPlugin {
         if self.token.locked().is_some() {
             PluginHealth::Ok
         } else {
+            if let Some(e) = &self.config_error {
+                return PluginHealth::Warn(format!("[soundcloud] oauth_token is unusable: {e}"));
+            }
             PluginHealth::Warn(
                 "not logged in — Liked Tracks and your playlists are unavailable until you \
                  add an OAuth token (search and playback still work)"
@@ -64,11 +69,18 @@ impl Plugin for SoundcloudPlugin {
     fn setup_prompt(&self, answers: &[String]) -> Option<SetupPrompt> {
         answers.is_empty().then(|| {
             SetupPrompt::new(
-                "SoundCloud OAuth token — devtools on soundcloud.com, Application tab, \
-                 Local Storage, the `oauth_token` key (or a request's Authorization header)",
+                "Log in on soundcloud.com in your browser, then either:\n\
+                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value.\n\
+                 B. Press F12, open Network, click any request to api-v2.soundcloud.com and copy the value \
+                 of its Authorization request header (it starts with OAuth ).\n\
+                 Paste it here (one line).",
             )
             .secret()
         })
+    }
+
+    fn setup_answer(&self, _answers: &[String], answer: String) -> Result<String, String> {
+        auth::extract_token(&answer)
     }
 
     fn wiring(&self) -> Wiring {
@@ -86,14 +98,27 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
-    fn setup(&self, answers: Vec<String>, _log: &SetupLog) -> PluginHealth {
-        let token = answers.first().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let Some(token) = token else {
+    fn setup(&self, answers: Vec<String>, log: &SetupLog) -> PluginHealth {
+        let Some(token) = answers.into_iter().next().filter(|s| !s.is_empty()) else {
             return PluginHealth::Warn("no token entered".to_string());
         };
-        auth::persist(&self.cache_dir, &token);
-        *self.token.locked() = Some(token);
-        PluginHealth::Ok
+        if log.cancelled() {
+            return PluginHealth::Warn("cancelled".to_string());
+        }
+        log.say("Checking the token with SoundCloud…");
+        let source = SoundcloudSource::new(self.client_id.clone(), Some(token.clone()), self.bus.clone(), self.hls);
+        match source.me() {
+            Ok(Some(name)) => {
+                log.say(format!("Logged in as {name}"));
+                auth::persist(&self.cache_dir, &token);
+                *self.token.locked() = Some(token);
+                PluginHealth::Ok
+            }
+            Ok(None) => PluginHealth::Warn(
+                "SoundCloud rejected that token — it may have expired; log in again and copy it fresh".to_string(),
+            ),
+            Err(e) => PluginHealth::Warn(format!("could not check the token: {e}")),
+        }
     }
 }
 

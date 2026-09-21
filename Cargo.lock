@@ -3412,8 +3412,10 @@ dependencies = [
 name = "sources-soundcloud"
 version = "0.4.5"
 dependencies = [
+ "base64",
  "core",
  "log",
+ "percent-encoding",
  "regex",
  "reqwest",
  "serde",

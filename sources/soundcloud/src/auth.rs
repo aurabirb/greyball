@@ -16,6 +16,89 @@
 //! get right, `Esc` cancels the same way it does for any other text field.)
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+use percent_encoding::percent_decode_str;
+use regex::Regex;
+
+const TOKEN: &str = r"\d-\d+-\d+-[A-Za-z0-9]+";
+const NOT_FOUND: &str = "no SoundCloud token found in that — paste document.cookie or the Authorization header value";
+
+static BARE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!("^{TOKEN}$")).unwrap());
+static HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)^(?:authorization\s*:\s*)?(?:(?:oauth|bearer)\s+)?({TOKEN})$")).unwrap()
+});
+
+/// The bare oauth token from a bare token, an Authorization header value, a cookie string, or a JSON/JS literal of one.
+pub fn extract_token(input: &str) -> Result<String, String> {
+    let text = unwrap_literal(input.trim());
+    let text = text.trim();
+    if let Some(c) = HEADER.captures(text) {
+        return Ok(c[1].to_string());
+    }
+    let pairs = if text.starts_with('{') || text.starts_with('[') {
+        json_pairs(text)
+    } else {
+        text.split(';').filter_map(|c| c.split_once('=')).map(|(n, v)| (n.trim().to_string(), v.to_string())).collect()
+    };
+    token_from_pairs(&pairs).ok_or_else(|| NOT_FOUND.to_string())
+}
+
+fn unwrap_literal(s: &str) -> String {
+    let mut chars = s.chars();
+    let (Some(q @ ('"' | '\'' | '`')), Some(last)) = (chars.next(), s.chars().next_back()) else {
+        return s.to_string();
+    };
+    if s.len() < 2 || last != q {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut it = s[1..s.len() - 1].chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('n' | 'r' | 't') | None => {}
+            Some('u') => {
+                let hex: String = it.by_ref().take(4).collect();
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+            }
+            Some(other) => out.push(other),
+        }
+    }
+    out
+}
+
+/// A JSON object of name -> value, or an array of `{name, value}` objects.
+fn json_pairs(text: &str) -> Vec<(String, String)> {
+    use serde_json::Value;
+    let str_of = |v: &Value| v.as_str().map(str::to_string);
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(m)) => m.iter().filter_map(|(k, v)| Some((k.clone(), str_of(v)?))).collect(),
+        Ok(Value::Array(a)) => a.iter().filter_map(|e| Some((str_of(e.get("name")?)?, str_of(e.get("value")?)?))).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn token_from_pairs(pairs: &[(String, String)]) -> Option<String> {
+    let value = |name: &str| {
+        let (_, v) = pairs.iter().find(|(n, _)| n == name)?;
+        Some(percent_decode_str(v.trim().trim_matches('"')).decode_utf8_lossy().into_owned())
+    };
+    let direct = value("oauth_token").filter(|t| BARE.is_match(t));
+    direct.or_else(|| {
+        let raw = value("_soundcloud_session")?;
+        let raw = raw.trim_end_matches('=');
+        let bytes = STANDARD_NO_PAD.decode(raw).or_else(|_| URL_SAFE_NO_PAD.decode(raw)).ok()?;
+        let text = String::from_utf8(bytes).ok()?;
+        let token = text.split("--").next()?;
+        BARE.is_match(token).then(|| token.to_string())
+    })
+}
 
 fn token_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("token.txt")
@@ -24,8 +107,7 @@ fn token_path(cache_dir: &Path) -> PathBuf {
 /// A previously pasted-and-cached token, if any.
 pub fn load_cached(cache_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(token_path(cache_dir)).ok()?;
-    let t = text.trim();
-    (!t.is_empty()).then(|| t.to_string())
+    extract_token(&text).ok()
 }
 
 /// Cache a freshly pasted token. Best-effort: a failure just means the next

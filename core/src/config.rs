@@ -146,13 +146,10 @@ pub struct SoundcloudConfig {
     /// API `client_id`. If unset, medley scrapes one from the public web
     /// player on first use (best-effort).
     pub client_id: Option<String>,
-    /// A user OAuth token (`Authorization: OAuth <token>`), needed for
-    /// anything scoped to a logged-in user — "Liked Tracks" and the user's
-    /// own playlists. There's no browser login flow for this (SoundCloud
-    /// isn't granting new API app registrations); paste a token obtained
-    /// out-of-band (e.g. from the web player's own requests). Unset: the
-    /// SoundCloud source works for search/resolve/play only, and its browse
-    /// root has no folders.
+    /// A user OAuth token, needed for "Liked Tracks" and the user's own playlists. Accepts the
+    /// bare token, an `Authorization` header value (`OAuth 2-…`), or the `document.cookie`
+    /// string from a logged-in soundcloud.com tab; the SoundCloud setup dialog in Settings
+    /// does this for you and validates it. Unset: search/resolve/play only.
     pub oauth_token: Option<String>,
     /// Prefer a higher-bitrate HLS (AAC 160kbps) stream over the 128kbps
     /// MP3 progressive stream when the track offers one. On by default —

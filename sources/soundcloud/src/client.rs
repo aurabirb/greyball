@@ -143,7 +143,39 @@ impl SoundcloudSource {
     fn require_auth(&self) -> Result<&str> {
         self.oauth_token
             .as_deref()
-            .ok_or_else(|| src_err("needs a SoundCloud login — set [soundcloud] oauth_token in config"))
+            .ok_or_else(|| src_err("needs a SoundCloud login — log in from the SoundCloud setup dialog in Settings"))
+    }
+
+    /// The logged-in username, or `None` if SoundCloud rejects the token.
+    pub(crate) fn me(&self) -> Result<Option<String>> {
+        let token = self.require_auth()?;
+        let url = format!("{API}/me");
+        // A 401/403 may be a stale scraped client_id, so retry once with a fresh one.
+        for _ in 0..2 {
+            let id = self.client_id()?;
+            log::debug!("soundcloud: GET {url}");
+            self.limiter.throttle();
+            let resp = self
+                .client
+                .get(&url)
+                .query(&[("client_id", id.as_str())])
+                .header("Authorization", format!("OAuth {token}"))
+                .send()
+                .map_err(|e| src_err(format!("/me: {e}")))?;
+            let status = resp.status();
+            log::debug!("soundcloud: GET {url} -> {status}");
+            if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+                *self.cached_id.lock().unwrap() = None;
+                continue;
+            }
+            let json: serde_json::Value = resp
+                .error_for_status()
+                .and_then(|r| r.json())
+                .map_err(|e| src_err(format!("/me: {e}")))?;
+            let name = ["username", "permalink"].iter().find_map(|k| json.get(k)?.as_str()).unwrap_or("your account");
+            return Ok(Some(name.to_string()));
+        }
+        Ok(None)
     }
 
     fn api_get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value> {
