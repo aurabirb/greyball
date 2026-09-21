@@ -101,7 +101,6 @@
   `last_screen_size` is re-read from the terminal, and the next draw rebuilds rows, tab bar, hint and
   status lines from scratch. The window-resize handler needs exactly this too (see the stale
   rightmost-column bug), so share one function between the two.
-- [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
 - [ ] Move the default media-cache directory to `~/Downloads/medley`, and make it adjustable from

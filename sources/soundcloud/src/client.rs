@@ -20,6 +20,9 @@ const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, lik
 /// a real SoundCloud id (those are numeric), so it can't collide with one.
 const LIKED_TRACKS: &str = "__liked__";
 
+/// `BrowseNode::Path` prefix for a personalized recommendation playlist; the rest is its urn.
+const SYSTEM_PREFIX: &str = "system:";
+
 /// Page size for walking `/me/track_likes` — comfortably under any
 /// documented api-v2 limit cap.
 const LIKED_PAGE_SIZE: usize = 50;
@@ -264,14 +267,68 @@ impl SoundcloudSource {
             .collect())
     }
 
-    /// A playlist's tracks. `representation=full` asks the API for full
-    /// track objects inline instead of the truncated stubs a plain
-    /// `/playlists/{id}` returns for large playlists.
+    /// The personalized system playlists on the home feed's shelves, as `(urn, title)`.
+    fn recommendations(&self) -> Result<Vec<(String, String)>> {
+        self.require_auth()?;
+        let v = self.api_get("/mixed-selections", &[("limit", "20")])?;
+        let Some(shelves) = v.get("collection").and_then(|c| c.as_array()) else {
+            let keys: Vec<&String> = v.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+            log::debug!("soundcloud: /mixed-selections: no 'collection' array, top-level keys {keys:?}");
+            return Ok(vec![]);
+        };
+        let mut out: Vec<(String, String)> = vec![];
+        for item in shelves
+            .iter()
+            .filter_map(|s| s.get("items")?.get("collection")?.as_array())
+            .flatten()
+        {
+            let urn = item.get("urn").and_then(|u| u.as_str());
+            let title = ["title", "short_title"].iter().find_map(|k| item.get(k)?.as_str());
+            if let (Some(urn), Some(title)) = (urn, title)
+                && urn.starts_with("soundcloud:system-playlists:")
+                && !out.iter().any(|(u, _)| u == urn)
+            {
+                out.push((urn.to_string(), title.to_string()));
+            }
+        }
+        if out.is_empty() {
+            log::debug!("soundcloud: /mixed-selections: {} shelf(s), no system playlists", shelves.len());
+        }
+        Ok(out)
+    }
+
+    /// A playlist's tracks; `id` is a numeric playlist id or `system:<urn>`.
+    /// `representation=full` asks for full track objects inline; any
+    /// remaining id-only stubs are hydrated through `/tracks?ids=`.
     fn playlist_tracks(&self, id: &str) -> Result<Vec<Track>> {
-        let v = self.api_get(&format!("/playlists/{id}"), &[("representation", "full")])?;
-        let playlist: ApiPlaylistDetail =
-            serde_json::from_value(v).map_err(|e| src_err(format!("playlist {id}: {e}")))?;
-        Ok(playlist.tracks.into_iter().filter_map(ApiTrack::into_track).collect())
+        let path = match id.strip_prefix(SYSTEM_PREFIX) {
+            Some(urn) => format!("/system-playlists/{urn}"),
+            None => format!("/playlists/{id}"),
+        };
+        let v = self.api_get(&path, &[("representation", "full")])?;
+        let items = v.get("tracks").and_then(|t| t.as_array()).cloned().unwrap_or_default();
+        let mut slots: Vec<std::result::Result<ApiTrack, u64>> = vec![];
+        for item in items {
+            match serde_json::from_value::<ApiTrack>(item.clone()) {
+                Ok(t) => slots.push(Ok(t)),
+                Err(_) => slots.extend(item.get("id").and_then(|i| i.as_u64()).map(Err)),
+            }
+        }
+        let stubs: Vec<String> = slots.iter().filter_map(|s| s.as_ref().err()).map(u64::to_string).collect();
+        let mut hydrated = std::collections::HashMap::new();
+        for chunk in stubs.chunks(50) {
+            let v = self.api_get("/tracks", &[("ids", &chunk.join(","))])?;
+            for t in v.as_array().into_iter().flatten() {
+                if let Ok(t) = serde_json::from_value::<ApiTrack>(t.clone()) {
+                    hydrated.insert(t.id, t);
+                }
+            }
+        }
+        Ok(slots
+            .into_iter()
+            .filter_map(|s| s.or_else(|id| hydrated.remove(&id).ok_or(())).ok())
+            .filter_map(ApiTrack::into_track)
+            .collect())
     }
 
     /// One page of `/me/track_likes`, for `core::PagedList`.
@@ -465,6 +522,10 @@ impl Source for SoundcloudSource {
             .ok_or_else(|| src_err("track has no full-length stream (preview-only or unavailable)"))
     }
 
+    fn is_synthetic(&self, node: &BrowseNode) -> bool {
+        matches!(node, BrowseNode::Path(id) if id.starts_with(SYSTEM_PREFIX))
+    }
+
     fn retry_browse(&self, node: &BrowseNode) {
         if matches!(node, BrowseNode::Path(id) if id == LIKED_TRACKS) {
             self.liked.retry();
@@ -484,6 +545,13 @@ impl Source for SoundcloudSource {
                     ));
                     let playlists = self.playlists()?;
                     folders.extend(playlists.into_iter().map(|(id, name)| (name, BrowseNode::Path(id))));
+                    // Best effort: a failure here must not hide the rest of the root.
+                    match self.recommendations() {
+                        Ok(recs) => folders.extend(
+                            recs.into_iter().map(|(urn, title)| (title, BrowseNode::Path(format!("{SYSTEM_PREFIX}{urn}")))),
+                        ),
+                        Err(e) => log::warn!("soundcloud: recommendations unavailable: {e}"),
+                    }
                 }
                 Ok(BrowsePage {
                     title: "SoundCloud".to_string(),
@@ -610,13 +678,6 @@ struct ApiUser {
 struct ApiPlaylist {
     id: u64,
     title: String,
-}
-
-/// `GET /playlists/{id}?representation=full` — full track objects inline.
-#[derive(Deserialize)]
-struct ApiPlaylistDetail {
-    #[serde(default)]
-    tracks: Vec<ApiTrack>,
 }
 
 /// A `/me/track_likes` collection entry.
