@@ -4,7 +4,7 @@ use core::ItemKind;
 use super::rows::main_col_start;
 use super::text::{active_style, in_span};
 
-/// Room the query keeps in a title row before the kind bar gives ground.
+/// Columns right of the kind bar reserved for the title or search entry.
 const QUERY_MIN: usize = 12;
 
 /// Which result kinds a list shows.

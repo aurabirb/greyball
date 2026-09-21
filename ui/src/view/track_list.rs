@@ -18,7 +18,7 @@ use crate::screen::{ListKind, Placement};
 
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
-use super::text::{scroll_title, tail_fit};
+use super::text::tail_fit;
 use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
@@ -118,6 +118,8 @@ pub(super) struct ListFrame {
     title: String,
     rows: Vec<Row>,
     total: usize,
+    /// Tracks only: the Queue's info rows aren't counted.
+    count: usize,
     /// A paginated remote list only knows what it has loaded so far.
     loading: bool,
     unit: &'static str,
@@ -682,13 +684,15 @@ impl TrackList {
         let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, self.input.clone());
         self.frame.get_or_build(key, || {
             let total = self.len(s);
+            let count = if self.kind == ListKind::Queue && self.filtered_ids(s).is_none() { s.queue_len() } else { total };
             let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
             Arc::new(ListFrame {
                 title: self.title(s),
                 rows: self.rows(s, self.state.offset, view_h),
                 total,
+                count,
                 loading: self.loading(s),
-                unit: self.unit(total),
+                unit: self.unit(count),
                 assignable,
                 kind_counts: self.kind_counts(s),
                 playing: self.playing_index(s),
@@ -740,25 +744,25 @@ impl TrackList {
     /// The cursor's place in the list, `cursor/total unit`; `None` when the list is empty.
     pub(super) fn count(&self, frame: &ListFrame) -> Option<String> {
         let more = if frame.loading { "+" } else { "" };
-        (frame.total > 0).then(|| format!("{}/{}{more} {}", self.state.cursor.min(frame.total - 1) + 1, frame.total, frame.unit))
+        (frame.count > 0).then(|| format!("{}/{}{more} {}", self.state.cursor.min(frame.count - 1) + 1, frame.count, frame.unit))
     }
 
     /// `marked` brackets the title, the focus marker docked windows use.
     pub(super) fn draw(&self, printer: &Printer, marked: bool, frame: &ListFrame, kind_key: Option<char>) {
-        let mut title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
+        let title = if marked { format!("[{}]", frame.title) } else { frame.title.clone() };
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
         let bar_end = kind_bar::end(&bar);
         let left = bar_end.map_or(main_col_start(content_w), |end| end + 1);
         let room = content_w.saturating_sub(left);
-        title = if self.input.is_some() { String::new() } else { scroll_title(&title, room, 0) };
-        draw_row_list(printer, &title, !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
+        let shown = if self.input.is_some() { "" } else { &title };
+        draw_row_list(printer, (left, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
             printer.with_color(ColorStyle::primary(), |p| p.print((left, 0), &typed));
             printer.with_color(ColorStyle::title_primary(), |p| p.print((left + typed.width(), 0), tip));
-        } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(title.width())) {
+        } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(shown.width().min(room))) {
             printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &label));
         }
     }
@@ -881,6 +885,13 @@ const HINT: &str = "  (esc to exit)";
 
 /// The query being typed with a block cursor, its end kept in view, and the hint only when everything fits.
 fn typed_title(input: &str, room: usize) -> (String, &'static str) {
-    let typed = format!("search: {input}█");
-    if typed.width() + HINT.width() <= room { (typed, HINT) } else { (tail_fit(&typed, room), "") }
+    const LABEL: &str = "search: ";
+    let typed = format!("{input}█");
+    if LABEL.width() + typed.width() + HINT.width() <= room {
+        (format!("{LABEL}{typed}"), HINT)
+    } else if LABEL.width() < room {
+        (format!("{LABEL}{}", tail_fit(&typed, room - LABEL.width())), "")
+    } else {
+        (tail_fit(&format!("{LABEL}{typed}"), room), "")
+    }
 }
