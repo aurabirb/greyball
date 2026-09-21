@@ -19,7 +19,7 @@ use crate::screen::{ListKind, Placement};
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
 use super::text::tail_fit;
-use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
+use super::rows::{BACK_LABEL, title_col, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -748,7 +748,7 @@ impl TrackList {
         let content_w = printer.size.x.saturating_sub(1);
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
         let bar_start = kind_bar::start(&bar);
-        let left = main_col_start(content_w);
+        let left = title_col(content_w);
         let room = bar_start.unwrap_or(content_w.saturating_sub(TITLE_MARGIN)).saturating_sub(left + 1);
         let shown = if self.input.is_some() { "" } else { &title };
         draw_row_list(printer, (left, room, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
@@ -824,7 +824,7 @@ impl TrackList {
                     return WindowOutcome::Consumed;
                 }
             }
-            let back = !matches!(self.open, Open::TopLevel) && back_button_fits(rect.width().saturating_sub(1));
+            let back = !matches!(self.open, Open::TopLevel);
             if back && matches!(mouse, MouseEvent::Press(MouseButton::Left)) && local.y == 0 && local.x < BACK_LABEL.len() {
                 self.show_top(None);
                 return WindowOutcome::Consumed;

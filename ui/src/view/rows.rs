@@ -178,10 +178,8 @@ pub(super) const LIST_TITLE_ROWS: usize = 1;
 
 /// A title row plus a window of rows and a scrollbar, shared by the main list and docked panes.
 pub(super) fn draw_row_list(printer: &Printer, (left, room, title): (usize, usize, &str), back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
-    // Reserve the rightmost column of the list body as a scrollbar gutter.
-    let content_w = printer.size.x.saturating_sub(1);
     printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &truncate(title, room)));
-    if back && back_button_fits(content_w) {
+    if back {
         printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
     }
     let body_h = printer.size.y.saturating_sub(LIST_TITLE_ROWS);
@@ -191,11 +189,12 @@ pub(super) fn draw_row_list(printer: &Printer, (left, room, title): (usize, usiz
 
 pub(super) const TITLE_MARGIN: usize = 1;
 
-/// The title row's clickable back button, over the tags column; hidden when it would run into the title.
+/// The title row's clickable back button, left of the title.
 pub(super) const BACK_LABEL: &str = "< (Esc)";
 
-pub(super) fn back_button_fits(content_w: usize) -> bool {
-    main_col_start(content_w) > BACK_LABEL.len()
+/// Where the title row's title starts: the tags column, pushed right when the back button needs more room.
+pub(super) fn title_col(content_w: usize) -> usize {
+    main_col_start(content_w).max(BACK_LABEL.len() + 1)
 }
 
 /// Fills every row of `printer` with `rows` plus a scrollbar gutter — no title row of its own.
