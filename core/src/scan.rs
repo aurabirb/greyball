@@ -583,12 +583,11 @@ impl Worker {
                 _ => Verdict::Nothing,
             }
         };
-        let has_stream = self.has_stream(track);
+        let mut has_stream: Option<bool> = None;
         for plugin in plugins {
             if !plugin.needs(track) {
                 continue;
             }
-            let gated = plugin.needs_audio() && !has_stream;
             let key = (plugin.id(), track.id);
             match self.inner.status.lock().unwrap().get(&key) {
                 // A prior `Outcome::Skip` means "not this plugin's job" for the rest of this run.
@@ -606,6 +605,7 @@ impl Worker {
                     continue;
                 }
             }
+            let gated = plugin.needs_audio() && !*has_stream.get_or_insert_with(|| self.has_stream(track));
             if gated {
                 if access == Access::Peek {
                     block(Verdict::Waiting);
@@ -616,9 +616,9 @@ impl Worker {
                     continue;
                 }
             }
-            // `min_interval` spaces real downloads; a cached or running stream costs the source nothing.
+            // `min_interval` spaces real downloads and API calls; a cached or running stream costs the source nothing.
             let mut last_run: Option<MutexGuard<HashMap<&'static str, Instant>>> = None;
-            if gated {
+            if gated || !plugin.needs_audio() {
                 let guard = self.inner.last_run.lock().unwrap();
                 if let Some(t) = guard.get(plugin.id())
                     && t.elapsed() < plugin.min_interval()

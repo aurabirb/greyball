@@ -131,7 +131,7 @@ impl ScanPlugin for WaveformPlugin {
     }
 
     fn min_interval(&self) -> Duration {
-        Duration::ZERO
+        Duration::from_secs(1)
     }
 
     fn needs_audio(&self) -> bool {
