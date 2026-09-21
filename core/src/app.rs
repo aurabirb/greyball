@@ -2781,8 +2781,7 @@ impl Session {
             return refused("toggle_playlist_membership", format!("Can't toggle {name:?}: {source} isn't available"));
         };
         if src.is_synthetic(&node) {
-            // A toggle could silently unlike; Liked Songs only changes through the like key.
-            let msg = format!("Can't toggle {name:?}: Liked Songs isn't a hotkey playlist — use the like key");
+            let msg = format!("Can't toggle {name:?}: that playlist is read-only");
             return refused("toggle_playlist_membership", msg);
         }
         let Some(uri) = t.renditions.iter().find(|r| r.source == source).map(|r| r.uri.clone()) else {

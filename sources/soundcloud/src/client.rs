@@ -183,6 +183,11 @@ impl SoundcloudSource {
     }
 
     fn api_get(&self, path: &str, query: &[(&str, &str)]) -> Result<serde_json::Value> {
+        self.api_get_with(path, query, true)
+    }
+
+    /// `auth_resets_id: false` for endpoints whose 401/403 means "not available to this account", not a stale client_id.
+    fn api_get_with(&self, path: &str, query: &[(&str, &str)], auth_resets_id: bool) -> Result<serde_json::Value> {
         let id = self.client_id()?;
         let url = format!("{API}{path}");
         log::debug!("soundcloud: GET {url} {query:?}");
@@ -206,7 +211,7 @@ impl SoundcloudSource {
             // with the path that actually hit it.
             log::warn!("soundcloud: GET {url} -> {status}");
         }
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        if auth_resets_id && (status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN) {
             // A stale scraped id — drop it so the next call re-scrapes.
             *self.cached_id.lock().unwrap() = None;
             log::warn!("soundcloud: client_id rejected ({status}), will re-scrape next call");
@@ -270,10 +275,10 @@ impl SoundcloudSource {
     /// The personalized system playlists on the home feed's shelves, as `(urn, title)`.
     fn recommendations(&self) -> Result<Vec<(String, String)>> {
         self.require_auth()?;
-        let v = self.api_get("/mixed-selections", &[("limit", "20")])?;
+        let v = self.api_get_with("/mixed-selections", &[("limit", "20")], false)?;
         let Some(shelves) = v.get("collection").and_then(|c| c.as_array()) else {
             let keys: Vec<&String> = v.as_object().map(|o| o.keys().collect()).unwrap_or_default();
-            log::debug!("soundcloud: /mixed-selections: no 'collection' array, top-level keys {keys:?}");
+            log::warn!("soundcloud: /mixed-selections: no 'collection' array, top-level keys {keys:?}");
             return Ok(vec![]);
         };
         let mut out: Vec<(String, String)> = vec![];
@@ -297,38 +302,56 @@ impl SoundcloudSource {
         Ok(out)
     }
 
-    /// A playlist's tracks; `id` is a numeric playlist id or `system:<urn>`.
+    /// A playlist's `(title, tracks)`; `id` is a numeric playlist id or `system:<urn>`.
     /// `representation=full` asks for full track objects inline; any
     /// remaining id-only stubs are hydrated through `/tracks?ids=`.
-    fn playlist_tracks(&self, id: &str) -> Result<Vec<Track>> {
-        let path = match id.strip_prefix(SYSTEM_PREFIX) {
-            Some(urn) => format!("/system-playlists/{urn}"),
-            None => format!("/playlists/{id}"),
+    fn playlist_tracks(&self, id: &str) -> Result<(String, Vec<Track>)> {
+        let (path, is_system) = match id.strip_prefix(SYSTEM_PREFIX) {
+            Some(urn) => (format!("/system-playlists/{urn}"), true),
+            None => (format!("/playlists/{id}"), false),
         };
-        let v = self.api_get(&path, &[("representation", "full")])?;
+        let v = self.api_get_with(&path, &[("representation", "full")], !is_system)?;
+        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string();
         let items = v.get("tracks").and_then(|t| t.as_array()).cloned().unwrap_or_default();
+        let tracks = self.hydrate_tracks(items).into_iter().filter_map(ApiTrack::into_track).collect();
+        Ok((title, tracks))
+    }
+
+    /// Full tracks in order; id-only stubs are fetched via `/tracks?ids=`, and unavailable ones dropped.
+    fn hydrate_tracks(&self, items: Vec<serde_json::Value>) -> Vec<ApiTrack> {
+        let total = items.len();
         let mut slots: Vec<std::result::Result<ApiTrack, u64>> = vec![];
-        for item in items {
-            match serde_json::from_value::<ApiTrack>(item.clone()) {
+        for item in &items {
+            match ApiTrack::deserialize(item) {
                 Ok(t) => slots.push(Ok(t)),
                 Err(_) => slots.extend(item.get("id").and_then(|i| i.as_u64()).map(Err)),
             }
         }
-        let stubs: Vec<String> = slots.iter().filter_map(|s| s.as_ref().err()).map(u64::to_string).collect();
+        let mut stubs: Vec<u64> = slots.iter().filter_map(|s| s.as_ref().err().copied()).collect();
+        stubs.sort_unstable();
+        stubs.dedup();
         let mut hydrated = std::collections::HashMap::new();
         for chunk in stubs.chunks(50) {
-            let v = self.api_get("/tracks", &[("ids", &chunk.join(","))])?;
-            for t in v.as_array().into_iter().flatten() {
-                if let Ok(t) = serde_json::from_value::<ApiTrack>(t.clone()) {
-                    hydrated.insert(t.id, t);
+            let ids = chunk.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+            match self.api_get("/tracks", &[("ids", &ids)]) {
+                Ok(v) => {
+                    for t in v.as_array().into_iter().flatten() {
+                        if let Ok(t) = ApiTrack::deserialize(t) {
+                            hydrated.insert(t.id, t);
+                        }
+                    }
                 }
+                Err(e) => log::warn!("soundcloud: hydrating {} track stubs failed: {e}", chunk.len()),
             }
         }
-        Ok(slots
+        let out: Vec<ApiTrack> = slots
             .into_iter()
-            .filter_map(|s| s.or_else(|id| hydrated.remove(&id).ok_or(())).ok())
-            .filter_map(ApiTrack::into_track)
-            .collect())
+            .filter_map(|s| s.or_else(|id| hydrated.get(&id).cloned().ok_or(())).ok())
+            .collect();
+        if out.len() < total {
+            log::debug!("soundcloud: {} of {total} playlist tracks unavailable", total - out.len());
+        }
+        out
     }
 
     /// One page of `/me/track_likes`, for `core::PagedList`.
@@ -576,9 +599,9 @@ impl Source for SoundcloudSource {
             }
             // A playlist id: its tracks. MVP: no user/charts browsing yet.
             BrowseNode::Path(id) => {
-                let tracks = self.playlist_tracks(id)?;
+                let (title, tracks) = self.playlist_tracks(id)?;
                 Ok(BrowsePage {
-                    title: id.clone(),
+                    title,
                     tracks,
                     folders: vec![],
                     partial: false,
@@ -644,7 +667,7 @@ impl MediaProvider for SoundcloudSource {
 
 // ---- API JSON (only the fields we use) ----
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiTrack {
     id: u64,
     title: String,
@@ -664,7 +687,7 @@ struct ApiTrack {
     waveform_url: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 struct ApiUser {
     #[serde(default)]
     username: String,
@@ -687,13 +710,13 @@ struct ApiLike {
     track: Option<ApiTrack>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiPublisher {
     #[serde(default)]
     isrc: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 struct ApiMedia {
     #[serde(default)]
     transcodings: Vec<ApiTranscoding>,
@@ -706,7 +729,7 @@ impl ApiMedia {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiTranscoding {
     url: String,
     format: ApiFormat,
@@ -716,7 +739,7 @@ struct ApiTranscoding {
     snipped: bool,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 struct ApiFormat {
     #[serde(default)]
     protocol: String,
