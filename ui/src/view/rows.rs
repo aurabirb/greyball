@@ -189,7 +189,7 @@ pub(super) fn draw_row_list(printer: &Printer, (left, title): (usize, &str), bac
     draw_list_body(&body, rows, state, total, playing);
 }
 
-const TITLE_MARGIN: usize = 2;
+const TITLE_MARGIN: usize = 1;
 
 /// The title row's clickable back button, over the tags column; hidden when it would run into the title.
 pub(super) const BACK_LABEL: &str = "< (Esc)";

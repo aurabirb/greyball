@@ -755,7 +755,9 @@ impl TrackList {
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
-            printer.with_color(ColorStyle::primary(), |p| p.print((left, 0), &typed));
+            let label = typed.strip_prefix(SEARCH_LABEL).map_or("", |_| SEARCH_LABEL);
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), label));
+            printer.with_color(ColorStyle::primary(), |p| p.print((left + label.width(), 0), &typed[label.len()..]));
             printer.with_color(ColorStyle::title_primary(), |p| p.print((left + typed.width(), 0), tip));
         } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(shown.width().min(room))) {
             printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &label));
@@ -876,17 +878,17 @@ impl TrackList {
     }
 }
 
+const SEARCH_LABEL: &str = "search: ";
 const HINT: &str = "  (esc to exit)";
 
 /// The query being typed with a block cursor, its end kept in view, and the hint only when everything fits.
 fn typed_title(input: &str, room: usize) -> (String, &'static str) {
-    const LABEL: &str = "search: ";
     let typed = format!("{input}█");
-    if LABEL.width() + typed.width() + HINT.width() <= room {
-        (format!("{LABEL}{typed}"), HINT)
-    } else if LABEL.width() < room {
-        (format!("{LABEL}{}", tail_fit(&typed, room - LABEL.width())), "")
+    if SEARCH_LABEL.width() + typed.width() + HINT.width() <= room {
+        (format!("{SEARCH_LABEL}{typed}"), HINT)
+    } else if SEARCH_LABEL.width() < room {
+        (format!("{SEARCH_LABEL}{}", tail_fit(&typed, room - SEARCH_LABEL.width())), "")
     } else {
-        (tail_fit(&format!("{LABEL}{typed}"), room), "")
+        (tail_fit(&format!("{SEARCH_LABEL}{typed}"), room), "")
     }
 }
