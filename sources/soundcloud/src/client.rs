@@ -649,7 +649,7 @@ impl ApiTrack {
             .publisher_metadata
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
-        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.full_duration.unwrap_or(self.duration), Quality::Lossy { kbps: None });
+        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.full_duration.filter(|&d| d > 0).unwrap_or(self.duration), Quality::Lossy { kbps: None });
         let mut attrs = std::collections::BTreeMap::new();
         if let Some(u) = self.waveform_url.filter(|u| !u.trim().is_empty()) {
             attrs.insert(WAVEFORM_URL_ATTR.to_string(), u);
