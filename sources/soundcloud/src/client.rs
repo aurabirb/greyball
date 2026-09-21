@@ -649,11 +649,15 @@ impl ApiTrack {
             .publisher_metadata
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
-        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.full_duration.filter(|&d| d > 0).unwrap_or(self.duration), Quality::Lossy { kbps: None });
+        let full = self.full_duration.filter(|&d| d > 0).unwrap_or(self.duration);
+        let preview_only = self.media.full_transcodings().next().is_none();
+        let (duration, quality) = if preview_only { (self.duration, Quality::Preview) } else { (full, Quality::Lossy { kbps: None }) };
+        let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), duration, quality);
         let mut attrs = std::collections::BTreeMap::new();
         if let Some(u) = self.waveform_url.filter(|u| !u.trim().is_empty()) {
             attrs.insert(WAVEFORM_URL_ATTR.to_string(), u);
         }
-        Some(Track { isrc, attrs, ..Track::fresh(title, artists, rendition) })
+        // The song's own length, so a merged track never inherits the preview's 30 s.
+        Some(Track { isrc, attrs, duration_ms: full, ..Track::fresh(title, artists, rendition) })
     }
 }

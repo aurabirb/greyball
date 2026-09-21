@@ -34,6 +34,7 @@ fn main() {
                 core::Quality::Lossless { .. } => "lossless",
                 core::Quality::Lossy { .. } => "lossy",
                 core::Quality::Unknown => "unknown",
+                core::Quality::Preview => "preview",
             },
             hit.rendition().uri,
         );

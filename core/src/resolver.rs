@@ -127,7 +127,7 @@ fn best_by_rank<'a>(renditions: impl Iterator<Item = &'a Rendition>) -> Option<&
     renditions.max_by(|a, b| playback_rank(a).cmp(&playback_rank(b)).then(a.added_at.cmp(&b.added_at)))
 }
 
-/// Higher is better: local > remote Lossless > remote Lossy > remote Unknown.
+/// Higher is better: local > remote Lossless > Lossy > Unknown > Preview.
 fn playback_rank(r: &Rendition) -> u8 {
     if is_local_source(&r.source) {
         4
@@ -136,6 +136,7 @@ fn playback_rank(r: &Rendition) -> u8 {
             Quality::Lossless { .. } => 3,
             Quality::Lossy { .. } => 2,
             Quality::Unknown => 1,
+            Quality::Preview => 0,
         }
     }
 }
