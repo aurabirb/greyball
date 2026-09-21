@@ -1,19 +1,4 @@
-//! SoundCloud user OAuth token cache.
-//!
-//! Unlike Spotify (`sources_spotify::auth`), there's no browser OAuth flow
-//! here — SoundCloud has largely stopped granting new API app
-//! registrations, so no client_id/secret pair to drive one exists. The
-//! token has to come from a user pasting it in (see
-//! `Plugin::setup_prompt` in `sources_soundcloud::plugin`), so this module
-//! is just local read/write — collecting the string itself is entirely the
-//! caller's problem now, not this crate's.
-//!
-//! (This replaces an earlier stdin-prompt-based flow that ran before the TUI
-//! took the terminal — blocking `app` startup on it, and whose Ctrl+C
-//! handling never actually worked right. Moving token entry into the UI's
-//! own event loop sidesteps that whole class of bug rather than fixing the
-//! signal wiring: there's no separate raw-stdin-plus-SIGINT-handler path to
-//! get right, `Esc` cancels the same way it does for any other text field.)
+//! The SoundCloud user OAuth token: extraction from what the user pastes, and the local cache file.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -23,8 +8,8 @@ use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use percent_encoding::percent_decode_str;
 use regex::Regex;
 
-const TOKEN: &str = r"\d-\d+-\d+-[A-Za-z0-9]+";
-const NOT_FOUND: &str = "no SoundCloud token found in that — paste document.cookie or the Authorization header value";
+const TOKEN: &str = r"\d+-\d+-\d+-[A-Za-z0-9_.~-]+";
+const NOT_FOUND: &str = "no SoundCloud token found in that; paste document.cookie or the Authorization header value as a single line";
 
 static BARE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!("^{TOKEN}$")).unwrap());
 static HEADER: LazyLock<Regex> = LazyLock::new(|| {
@@ -54,6 +39,7 @@ fn unwrap_literal(s: &str) -> String {
     if s.len() < 2 || last != q {
         return s.to_string();
     }
+    let hex4 = |it: &mut std::str::Chars| u32::from_str_radix(&it.by_ref().take(4).collect::<String>(), 16).ok();
     let mut out = String::new();
     let mut it = s[1..s.len() - 1].chars();
     while let Some(c) = it.next() {
@@ -62,10 +48,24 @@ fn unwrap_literal(s: &str) -> String {
             continue;
         }
         match it.next() {
-            Some('n' | 'r' | 't') | None => {}
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            None => {}
             Some('u') => {
-                let hex: String = it.by_ref().take(4).collect();
-                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                let mut code = hex4(&mut it);
+                if let Some(hi @ 0xD800..0xDC00) = code {
+                    let mut ahead = it.clone();
+                    let low = (ahead.next() == Some('\\') && ahead.next() == Some('u')).then(|| hex4(&mut ahead)).flatten();
+                    code = match low {
+                        Some(lo @ 0xDC00..0xE000) => {
+                            it = ahead;
+                            Some(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+                        }
+                        _ => None,
+                    };
+                }
+                out.push(code.and_then(char::from_u32).unwrap_or('\u{FFFD}'));
             }
             Some(other) => out.push(other),
         }
@@ -85,18 +85,18 @@ fn json_pairs(text: &str) -> Vec<(String, String)> {
 }
 
 fn token_from_pairs(pairs: &[(String, String)]) -> Option<String> {
-    let value = |name: &str| {
-        let (_, v) = pairs.iter().find(|(n, _)| n == name)?;
-        Some(percent_decode_str(v.trim().trim_matches('"')).decode_utf8_lossy().into_owned())
+    // Percent-decoding comes before the shape check, so an encoded token is accepted.
+    let values = |name: &'static str| {
+        pairs.iter().filter(move |(n, _)| n == name).map(|(_, v)| percent_decode_str(v.trim().trim_matches('"')).decode_utf8_lossy().into_owned())
     };
-    let direct = value("oauth_token").filter(|t| BARE.is_match(t));
-    direct.or_else(|| {
-        let raw = value("_soundcloud_session")?;
-        let raw = raw.trim_end_matches('=');
-        let bytes = STANDARD_NO_PAD.decode(raw).or_else(|_| URL_SAFE_NO_PAD.decode(raw)).ok()?;
-        let text = String::from_utf8(bytes).ok()?;
-        let token = text.split("--").next()?;
-        BARE.is_match(token).then(|| token.to_string())
+    values("oauth_token").find(|t| BARE.is_match(t)).or_else(|| {
+        values("_soundcloud_session").find_map(|raw| {
+            let raw = raw.trim_end_matches('=');
+            let bytes = STANDARD_NO_PAD.decode(raw).or_else(|_| URL_SAFE_NO_PAD.decode(raw)).ok()?;
+            let text = String::from_utf8(bytes).ok()?;
+            let token = text.split("--").next()?;
+            BARE.is_match(token).then(|| token.to_string())
+        })
     })
 }
 
@@ -104,26 +104,31 @@ fn token_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("token.txt")
 }
 
-/// A previously pasted-and-cached token, if any.
-pub fn load_cached(cache_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(token_path(cache_dir)).ok()?;
-    extract_token(&text).ok()
+/// A previously pasted-and-cached token: `Ok(None)` when there is no file, `Err` when it no longer parses.
+pub fn load_cached(cache_dir: &Path) -> Result<Option<String>, String> {
+    let path = token_path(cache_dir);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    extract_token(&text).map(Some).map_err(|e| format!("{} is unusable: {e}", path.display()))
 }
 
-/// Cache a freshly pasted token. Best-effort: a failure just means the next
-/// launch prompts again, so it's logged, not propagated.
-pub fn persist(cache_dir: &Path, token: &str) {
-    if std::fs::create_dir_all(cache_dir).is_err() {
-        return;
+/// Cache a freshly pasted token, readable by the owner only from the moment the file exists.
+pub fn persist(cache_dir: &Path, token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(cache_dir)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-    let path = token_path(cache_dir);
-    if let Err(e) = std::fs::write(&path, token) {
-        log::warn!("soundcloud: cannot write {}: {e}", path.display());
-        return;
-    }
+    let mut file = opts.open(token_path(cache_dir))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
+    file.write_all(token.as_bytes())
 }

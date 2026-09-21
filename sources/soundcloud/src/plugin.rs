@@ -19,7 +19,7 @@ pub struct SoundcloudPlugin {
     /// The token `wiring()` builds a `SoundcloudSource` with — `None` until
     /// a config value, a cached file, or a `setup()` call provides one.
     token: Mutex<Option<String>>,
-    /// Why the configured `oauth_token` was unusable, shown by `probe` while no token is set.
+    /// Why the configured `oauth_token` or the cached token file was unusable.
     config_error: Option<String>,
     hls: bool,
     /// The source `wiring()` last built, shared with the waveform scan plugin.
@@ -35,8 +35,17 @@ impl SoundcloudPlugin {
         hls: bool,
     ) -> Self {
         let configured = configured_token.filter(|s| !s.trim().is_empty()).map(|s| auth::extract_token(&s));
-        let config_error = configured.as_ref().and_then(|r| r.as_ref().err().cloned());
-        let token = configured.and_then(Result::ok).or_else(|| auth::load_cached(&cache_dir));
+        let mut config_error = configured.as_ref().and_then(|r| r.as_ref().err()).map(|e| format!("[soundcloud] oauth_token is unusable: {e}"));
+        let token = match configured.and_then(Result::ok) {
+            Some(t) => Some(t),
+            None => auth::load_cached(&cache_dir).unwrap_or_else(|e| {
+                config_error.get_or_insert(e);
+                None
+            }),
+        };
+        if let Some(e) = &config_error {
+            log::warn!("soundcloud: {e}");
+        }
         Self { client_id, cache_dir, bus, token: Mutex::new(token), config_error, hls, source: Mutex::default() }
     }
 
@@ -56,7 +65,7 @@ impl Plugin for SoundcloudPlugin {
             PluginHealth::Ok
         } else {
             if let Some(e) = &self.config_error {
-                return PluginHealth::Warn(format!("[soundcloud] oauth_token is unusable: {e}"));
+                return PluginHealth::Warn(e.clone());
             }
             PluginHealth::Warn(
                 "not logged in — Liked Tracks and your playlists are unavailable until you \
@@ -66,14 +75,20 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
+    fn detail(&self) -> Option<String> {
+        self.config_error.clone()
+    }
+
     fn setup_prompt(&self, answers: &[String]) -> Option<SetupPrompt> {
         answers.is_empty().then(|| {
             SetupPrompt::new(
                 "Log in on soundcloud.com in your browser, then either:\n\
-                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value.\n\
+                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value \
+                 (it cannot list HttpOnly cookies, but SoundCloud's session cookie carries the login).\n\
                  B. Press F12, open Network, click any request to api-v2.soundcloud.com and copy the value \
                  of its Authorization request header (it starts with OAuth ).\n\
-                 Paste it here (one line).",
+                 Paste it here as a single line; it is hidden as you type. A token SoundCloud rejects is \
+                 not saved and your previous login is kept.",
             )
             .secret()
         })
@@ -107,10 +122,16 @@ impl Plugin for SoundcloudPlugin {
         }
         log.say("Checking the token with SoundCloud…");
         let source = SoundcloudSource::new(self.client_id.clone(), Some(token.clone()), self.bus.clone(), self.hls);
-        match source.me() {
+        let checked = source.me();
+        if log.cancelled() {
+            return PluginHealth::Warn("cancelled".to_string());
+        }
+        match checked {
             Ok(Some(name)) => {
                 log.say(format!("Logged in as {name}"));
-                auth::persist(&self.cache_dir, &token);
+                if let Err(e) = auth::persist(&self.cache_dir, &token) {
+                    log.say(format!("Could not save the token, you will need to log in again next launch: {e}"));
+                }
                 *self.token.locked() = Some(token);
                 PluginHealth::Ok
             }

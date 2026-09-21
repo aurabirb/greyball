@@ -151,7 +151,8 @@ impl SoundcloudSource {
         let token = self.require_auth()?;
         let url = format!("{API}/me");
         // A 401/403 may be a stale scraped client_id, so retry once with a fresh one.
-        for _ in 0..2 {
+        let attempts = if self.configured_id.is_some() { 1 } else { 2 };
+        for _ in 0..attempts {
             let id = self.client_id()?;
             log::debug!("soundcloud: GET {url}");
             self.limiter.throttle();
