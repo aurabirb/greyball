@@ -10,7 +10,7 @@ use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, Sourc
 
 use crate::command;
 use crate::keybindings::{self, Action};
-use crate::screen::{Kind, ListKind};
+use crate::screen::{Kind, ListKind, Placement};
 
 use super::MedleyView;
 use super::modal::Modal;
@@ -212,27 +212,40 @@ impl MedleyView {
         result
     }
 
-    /// Cursor onto the playing track in the active list; only the hotkey (`announce`) says when it can't.
-    pub(crate) fn reveal_playing(&mut self, announce: bool) -> EventResult {
+    /// Cursor onto the playing track in the active list; seeking uses this so it never switches windows.
+    fn reveal_active(&mut self) -> bool {
         let id = self.active_list_id();
         let session = self.session.clone();
-        let found = {
-            let s = session.lock().unwrap();
-            match s.now_playing_id() {
-                None => Err(Notice::nothing_playing()),
-                Some(_) => match self.windows[id].list_mut().is_some_and(|list| list.reveal(&s)) {
-                    true => Ok(()),
-                    false => Err(Notice::not_in_list()),
-                },
-            }
+        let s = session.lock().unwrap();
+        self.windows[id].list_mut().is_some_and(|list| list.reveal(&s))
+    }
+
+    /// The `RevealPlaying` key: the open window listing the playlist the track came from, else Now Playing, shown with the cursor on the track.
+    fn reveal_and_show(&mut self) -> Option<WindowId> {
+        let session = self.session.clone();
+        let s = session.lock().unwrap();
+        let origin = s.playing_playlist();
+        let shown = |id: &WindowId| self.windows.placement(*id) == Placement::Tabbed || self.open.iter().any(|&(open, _)| open == *id);
+        let from_origin = |id: &WindowId| origin.is_some() && self.windows[*id].list().and_then(TrackList::open_target) == origin;
+        let mut ids: Vec<WindowId> = self.windows.ids().filter(shown).filter(from_origin).collect();
+        ids.extend(self.windows.named("now-playing"));
+        ids.into_iter().find(|&id| self.windows[id].list_mut().is_some_and(|list| list.reveal(&s)))
+    }
+
+    pub(crate) fn reveal_playing(&mut self, navigate: bool) -> EventResult {
+        if self.with_session(|s| s.now_playing_id()).is_none() {
+            return if navigate { self.notify(Notice::nothing_playing()) } else { EventResult::consumed() };
+        }
+        let found = match navigate {
+            true => self.reveal_and_show().inspect(|&id| self.show(id)).is_some(),
+            false => self.reveal_active(),
         };
-        match found {
-            Ok(()) => {
-                self.clamp_scroll();
-                EventResult::consumed()
-            }
-            Err(notice) if announce => self.notify(notice),
-            Err(_) => EventResult::consumed(),
+        if found {
+            self.clamp_scroll();
+        }
+        match (found, navigate) {
+            (false, true) => self.notify(Notice::not_in_list()),
+            _ => EventResult::consumed(),
         }
     }
 
