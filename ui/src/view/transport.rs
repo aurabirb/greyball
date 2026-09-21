@@ -35,13 +35,21 @@ pub(super) const LIKED_ICON: &str = "♥";
 
 const LIKED_LOCAL_ICON: &str = "♡";
 
-/// The glyph a like mark draws as, and whether it is italic (in flight): `full` when liked on the platform, `hollow` when only in the local playlist.
-pub(super) fn like_glyph(mark: core::LikeMark, full: &'static str, hollow: &'static str) -> (&'static str, bool) {
+const LIKED_DOT: &str = "•";
+
+const LIKED_LOCAL_DOT: &str = "◦";
+
+/// The glyph a like mark draws as, and whether it is italic (in flight).
+fn like_glyph(mark: core::LikeMark, full: &'static str, hollow: &'static str) -> (&'static str, bool) {
     (if mark.kind == core::LikeKind::Platform { full } else { hollow }, mark.pending)
 }
 
 pub(super) fn heart_glyph(mark: core::LikeMark) -> (&'static str, bool) {
     like_glyph(mark, LIKED_ICON, LIKED_LOCAL_ICON)
+}
+
+pub(super) fn dot_glyph(mark: core::LikeMark) -> (&'static str, bool) {
+    like_glyph(mark, LIKED_DOT, LIKED_LOCAL_DOT)
 }
 
 /// Gap on either side of the top-bar transport cluster.

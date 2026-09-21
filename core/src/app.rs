@@ -436,6 +436,7 @@ type LikeTarget = (Arc<dyn Source>, BrowseNode, String);
 /// What the like key does to a track right now.
 enum LikeAction {
     Busy,
+    Loading,
     UnlikePlatform(Vec<LikeTarget>),
     LikePlatform(Vec<LikeTarget>),
     UnlikeLocal,
@@ -444,6 +445,8 @@ enum LikeAction {
 }
 
 const LIKE_BUSY: &str = "Like in progress…";
+
+const LIKE_LOADING: &str = "Liked list still loading";
 
 struct LikedLocal {
     name: String,
@@ -1033,6 +1036,11 @@ impl Session {
             }
             CoreEvent::LikeResult { track, like, outcome } => {
                 let outcome = self.settle_like(*track, *like, outcome);
+                for (id, src) in &self.sources {
+                    if let Some(node) = src.liked_songs_node() {
+                        self.view.clear_pending(id, &node, *track);
+                    }
+                }
                 self.bus.send(CoreEvent::MembershipResult(outcome));
                 Ok(true)
             }
@@ -2731,6 +2739,10 @@ impl Session {
         if ready.iter().any(|(src, node, _)| self.view.liked_mark(&src.id(), node, track.id) == Some(true)) {
             return LikeAction::Busy;
         }
+        // Occurrences read 0 until the list has loaded, which would turn an unlike into a like.
+        if ready.iter().any(|(src, node, _)| self.view.remote_playlist_loading(&src.id(), node)) {
+            return LikeAction::Loading;
+        }
         let liked_on: Vec<LikeTarget> =
             ready.iter().filter(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0).cloned().collect();
         if !liked_on.is_empty() {
@@ -2850,13 +2862,14 @@ impl Session {
             .collect()
     }
 
-    /// Likes `track` on its source's liked list, or unlikes it when it is already liked, off the UI thread; the local fallback is settled when the result lands (`settle_like`).
+    /// Likes or unlikes `track` on the platform in the background, else in the local playlist.
     fn set_liked(&mut self, track: TrackId) -> Result<Dispatch> {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return Ok(Dispatch::Ok);
         };
         match self.like_action(&t) {
             LikeAction::Busy => Ok(Dispatch::Refused(LIKE_BUSY.to_string())),
+            LikeAction::Loading => Ok(Dispatch::Refused(LIKE_LOADING.to_string())),
             LikeAction::UnlikePlatform(targets) => Ok(self.start_liked_change(&t, targets, Change::Remove(None))),
             LikeAction::LikePlatform(targets) => Ok(self.start_liked_change(&t, targets, Change::Add)),
             LikeAction::UnlikeLocal => self.set_liked_locally(&t, false),
@@ -2870,14 +2883,13 @@ impl Session {
     }
 
     fn start_liked_change(&self, track: &Track, targets: Vec<LikeTarget>, change: Change) -> Dispatch {
-        let mut started = false;
         for (src, node, uri) in targets {
-            started |= self.view.set_remote_membership(track.clone(), uri, src, node, change, self.remote_ctx());
+            self.view.set_remote_membership(track.clone(), uri, src, node, change, self.remote_ctx());
         }
-        if started { Dispatch::Ok } else { Dispatch::Refused(LIKE_BUSY.to_string()) }
+        Dispatch::Ok
     }
 
-    /// Applies a finished platform like/unlike to the local fallback playlist: a failed like is saved there, a successful unlike leaves it.
+    /// Mirrors a finished platform like/unlike into the local fallback playlist.
     fn settle_like(&mut self, track: TrackId, like: bool, outcome: &MembershipOutcome) -> MembershipOutcome {
         let Some(t) = self.store.get_track(track).ok().flatten() else {
             return outcome.clone();
@@ -2911,7 +2923,9 @@ impl Session {
             None => Self::blank_playlist(liked.name.clone()),
         };
         if like {
-            p.items.push(track.id);
+            if !p.items.contains(&track.id) {
+                p.items.push(track.id);
+            }
         } else {
             p.items.retain(|&t| t != track.id);
         }

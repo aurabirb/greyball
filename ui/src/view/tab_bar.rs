@@ -12,7 +12,7 @@ use std::time::Instant;
 use super::memo::Memo;
 use super::status_line::StatusLine;
 use super::text::{active_style, in_span, scroll_title};
-use super::transport::{LIKED_ICON, heart_glyph, TRANSPORT_GAP, Transport, transport_labels, transport_layout};
+use super::transport::{LIKED_ICON, TRANSPORT_GAP, Transport, heart_glyph, transport_labels, transport_layout};
 
 /// The resampled waveform of the last (track, width, envelope length).
 pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;

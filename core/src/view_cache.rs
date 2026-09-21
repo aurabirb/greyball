@@ -612,6 +612,13 @@ impl ViewCache {
         self.remote_playlist_cached(source, node, |e| e.ids.contains(&track)).unwrap_or(false).then_some(false)
     }
 
+    /// Drops the in-flight marker of a finished liked-list change of `track`.
+    pub fn clear_pending(&self, source: &SourceId, node: &BrowseNode, track: TrackId) {
+        if let Some(changes) = self.pending.lock().unwrap().get_mut(&(source.clone(), node.clone())) {
+            changes.retain(|c| c.track.id != track);
+        }
+    }
+
     /// Starts (or resumes) loading `(source, node)` without demanding any of it; a walk frozen on
     /// a failure is reopened once `PLAYLISTS_RETRY_FLOOR` has passed.
     pub fn ensure_remote_playlist_loading(&self, source: &SourceId, node: &BrowseNode, ctx: RemoteCtx) {
@@ -707,10 +714,11 @@ impl ViewCache {
             });
             let mut reload = position.is_some() && matches!(&outcome, Err(e) if !matches!(e, Error::Unsupported(_)));
             let ids: Option<Vec<TrackId>> = {
-                // Both locks held so no redraw sees the track neither pending nor settled.
+                // Both locks held so no redraw sees the track neither pending nor settled; a like stays
+                // pending until the session has written its local fallback (`clear_pending`).
                 let mut pending = pending.lock().unwrap();
                 let mut cache = deps.cache.lock().unwrap();
-                if let Some(changes) = pending.get_mut(&key) {
+                if let Some(changes) = pending.get_mut(&key).filter(|_| !liked) {
                     changes.retain(|c| !(c.track.id == track.id && c.position == position));
                 }
                 match (&outcome, cache.get_mut(&key)) {

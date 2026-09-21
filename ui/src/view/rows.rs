@@ -8,9 +8,9 @@ use core::{HotkeyMembership, PendingRows, Session};
 
 use crate::row::RowItem;
 
-use super::transport::like_glyph;
 use super::scroll::{ListState, draw_scrollbar};
 use super::text::{pad, pad_right_aligned, truncate};
+use super::transport::dot_glyph;
 
 /// A run of one cell's text sharing a style; `color: None` draws in the row's own color.
 #[derive(Clone)]
@@ -105,7 +105,7 @@ fn render_cell(
             Cell::colored(pad_right_aligned(&t.tags(visible), TAGS_COL_W), color)
         }
         Column::Main => {
-            let (dot, italic) = liked.map_or((" ", false), |mark| like_glyph(mark, LIKED_MARK, LIKED_LOCAL_MARK));
+            let (dot, italic) = liked.map_or((" ", false), dot_glyph);
             main_cell(dot, italic, &t.main())
         }
         Column::Source => Cell::plain(t.source(cached)),
@@ -360,10 +360,6 @@ pub(super) fn main_col_start(content_w: usize, reserve_hotkeys: bool) -> usize {
 const TAGS_COL_W: usize = 3;
 
 const LIKED_MARK_W: usize = 1;
-
-const LIKED_MARK: &str = "•";
-
-const LIKED_LOCAL_MARK: &str = "◦";
 
 const SOURCE_COL_W: usize = 5;
 
