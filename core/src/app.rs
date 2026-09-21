@@ -1190,21 +1190,15 @@ impl Session {
                 Ok(true)
             }
             PlayerEvent::Finished { source, uri } => {
-                // Only advance if the finished rendition maps to the track the
-                // queue currently considers playing (guards stale Finished).
-                let finished = self.event_track(source, uri)?;
-                let current = self.queue.get_current();
-                if let Some(id) = finished
-                    && Some(id) == current
-                {
+                if self.is_now_playing(source, uri) {
                     // A decoder that never reported a length: the drained position is it.
                     let (drained_at, known) = self.progress;
-                    if known == 0 && drained_at > 0 {
+                    if known == 0 && drained_at > 0 && let Some(id) = self.event_track(source, uri)? {
                         self.learn_duration(id, drained_at);
                     }
                     self.advance(false);
                 } else {
-                    log::warn!("player: ignoring Finished for {source} {uri}: not the current track");
+                    log::warn!("player: ignoring Finished for {source} {uri}: not the now-playing rendition");
                 }
                 Ok(true)
             }
