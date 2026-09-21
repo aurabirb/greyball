@@ -19,7 +19,7 @@ use crate::screen::{ListKind, Placement};
 use super::memo::Memo;
 use super::kind_bar::{self, KindFilter};
 use super::text::tail_fit;
-use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
+use super::rows::{BACK_LABEL, main_col_start, Cell, LIST_TITLE_ROWS, Row, TITLE_MARGIN, back_button_fits, draw_row_list, plain_row, tracks_to_rows};
 use super::scroll::{ListEvent, ListState, Nav, WHEEL_STEP};
 use super::window::{Ctx, StatusCtx, WindowOutcome, hint};
 
@@ -749,16 +749,17 @@ impl TrackList {
         let bar = self.bar(frame.kind_counts.as_deref(), content_w);
         let bar_end = kind_bar::end(&bar);
         let left = bar_end.map_or(main_col_start(content_w), |end| end + 1);
-        let room = content_w.saturating_sub(left);
+        let room = content_w.saturating_sub(left + TITLE_MARGIN);
         let shown = if self.input.is_some() { "" } else { &title };
         draw_row_list(printer, (left, shown), !matches!(self.open, Open::TopLevel), &frame.rows, self.state, frame.total, frame.playing);
         kind_bar::draw(printer, &bar, self.kinds);
         if let Some(input) = &self.input {
             let (typed, tip) = typed_title(input, room);
+            let at = left + room.saturating_sub(typed.width() + tip.width());
             let label = typed.strip_prefix(SEARCH_LABEL).map_or("", |_| SEARCH_LABEL);
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), label));
-            printer.with_color(ColorStyle::primary(), |p| p.print((left + label.width(), 0), &typed[label.len()..]));
-            printer.with_color(ColorStyle::title_primary(), |p| p.print((left + typed.width(), 0), tip));
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((at, 0), label));
+            printer.with_color(ColorStyle::primary(), |p| p.print((at + label.width(), 0), &typed[label.len()..]));
+            printer.with_color(ColorStyle::title_primary(), |p| p.print((at + typed.width(), 0), tip));
         } else if let Some(label) = hint(&[kind_key], "filter").filter(|label| bar_end.is_some() && left + label.width() < content_w.saturating_sub(shown.width().min(room))) {
             printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &label));
         }
