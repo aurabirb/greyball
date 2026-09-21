@@ -10,7 +10,7 @@ use std::time::Duration;
 use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, Source, SourceId, StreamHandle, Track, Wiring, waveform};
 
 use crate::auth;
-use crate::client::{SoundcloudSource, source_id};
+use crate::client::{SoundcloudSource, WAVEFORM_URL_ATTR, source_id};
 
 pub struct SoundcloudPlugin {
     client_id: Option<String>,
@@ -117,10 +117,10 @@ impl ScanPlugin for WaveformPlugin {
 
     fn analyze(&self, track: &Track, _audio: &dyn Fn() -> Result<StreamHandle, Outcome>, _wanted: &dyn Fn() -> bool) -> Outcome {
         let source = self.0.source.lock().unwrap().clone();
-        let (Some(source), Some(uri)) = (source, soundcloud_uri(track)) else {
+        let (Some(source), Some(url)) = (source, track.attrs.get(WAVEFORM_URL_ATTR)) else {
             return Outcome::Skip;
         };
-        match source.waveform_samples(uri) {
+        match source.waveform_samples(url) {
             Ok(Some(samples)) => waveform::envelope(&samples).map_or(Outcome::Skip, |b| Outcome::Done(waveform::meta(&b))),
             Ok(None) => Outcome::Skip,
             Err(e) => {

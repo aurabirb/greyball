@@ -187,18 +187,12 @@ impl SoundcloudSource {
         serde_json::from_value(v).map_err(|e| src_err(format!("track {id}: {e}")))
     }
 
-    /// The track's SoundCloud-drawn waveform samples, if it has any.
-    pub(crate) fn waveform_samples(&self, uri: &str) -> Result<Option<Vec<f32>>> {
-        let Some(TrackRef::Id(id)) = TrackRef::parse(uri) else {
-            return Ok(None);
-        };
-        let Some(url) = self.track_by_id(id)?.waveform_url else {
-            return Ok(None);
-        };
+    /// The samples of a SoundCloud-drawn waveform, if the JSON at `url` has any.
+    pub(crate) fn waveform_samples(&self, url: &str) -> Result<Option<Vec<f32>>> {
         self.limiter.throttle();
         let json: serde_json::Value = self
             .client
-            .get(&url)
+            .get(url)
             .send()
             .and_then(|r| r.error_for_status())
             .and_then(|r| r.json())
@@ -624,6 +618,9 @@ struct ApiFormat {
     mime_type: String,
 }
 
+/// `Track::attrs` key holding the track's waveform JSON URL, set at import.
+pub(crate) const WAVEFORM_URL_ATTR: &str = "soundcloud_waveform_url";
+
 impl ApiTrack {
     fn into_track(self) -> Option<Track> {
         if self.media.transcodings.is_empty() {
@@ -641,6 +638,12 @@ impl ApiTrack {
             .and_then(|p| p.isrc)
             .filter(|s| !s.trim().is_empty());
         let rendition = Rendition::fresh(source_id(), format!("soundcloud:track:{}", self.id), self.duration, Quality::Lossy { kbps: None });
-        Some(Track { isrc, ..Track::fresh(title, artists, rendition) })
+        let attrs = self
+            .waveform_url
+            .filter(|u| !u.is_empty())
+            .map(|u| (WAVEFORM_URL_ATTR.to_string(), u))
+            .into_iter()
+            .collect();
+        Some(Track { isrc, attrs, ..Track::fresh(title, artists, rendition) })
     }
 }

@@ -15,9 +15,13 @@ fn merge_rendition(renditions: &mut Vec<Rendition>, r: Rendition) {
     }
 }
 
-/// Fill in `t`'s isrc/duration/album from another track's, but only where
+/// Fill in `t`'s isrc/duration/album/attrs from another track's, but only where
 /// `t` doesn't already have one — never overwrite existing metadata.
-fn merge_metadata(t: &mut Track, isrc: Option<String>, duration_ms: u32, album: Option<String>) {
+fn merge_metadata(t: &mut Track, hit: &Track) {
+    let (isrc, duration_ms, album) = (hit.isrc.clone(), hit.duration_ms, hit.album.clone());
+    for (k, v) in &hit.attrs {
+        t.attrs.entry(k.clone()).or_insert_with(|| v.clone());
+    }
     if t.isrc.is_none() {
         t.isrc = isrc;
     }
@@ -79,7 +83,13 @@ impl Catalog {
         let _guard = self.lock.lock().unwrap();
         let r = hit.rendition();
         // 1. exact rendition dedupe
-        if let Some(t) = self.store.track_by_rendition(&r.source, &r.uri)? {
+        if let Some(mut t) = self.store.track_by_rendition(&r.source, &r.uri)? {
+            let before = t.attrs.len();
+            merge_metadata(&mut t, &hit);
+            if t.attrs.len() != before {
+                self.store.upsert_track(&t)?;
+                self.bus.send(CoreEvent::TrackUpdated(t.id));
+            }
             return Ok(t.id);
         }
 
@@ -120,7 +130,7 @@ impl Catalog {
         let mut r = hit.rendition().clone();
         r.link = reason;
         merge_rendition(&mut t.renditions, r);
-        merge_metadata(t, hit.isrc.clone(), hit.duration_ms, hit.album.clone());
+        merge_metadata(t, hit);
     }
 
     /// Merge b into a: move all b.renditions into a (skip dup uris), delete b,
@@ -139,10 +149,10 @@ impl Catalog {
             .get_track(b)?
             .ok_or(crate::traits::Error::NotFound)?;
 
+        merge_metadata(&mut ta, &tb);
         for r in tb.renditions {
             merge_rendition(&mut ta.renditions, r);
         }
-        merge_metadata(&mut ta, tb.isrc, tb.duration_ms, tb.album);
 
         self.delete_track(b)?;
         self.store.upsert_track(&ta)?;

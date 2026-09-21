@@ -648,7 +648,7 @@ impl Worker {
             let source = stream.as_ref().map(|h| h.key().0.clone());
             match outcome {
                 Outcome::Done(meta) => {
-                    log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs);
+                    log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs.keys().collect::<Vec<_>>());
                     // `patch` re-reads the track under `Catalog`'s lock and merges into whatever's current.
                     let _ = self.catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
                     self.inner.status.lock().unwrap().remove(&key);
