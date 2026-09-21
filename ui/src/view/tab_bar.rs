@@ -51,7 +51,7 @@ fn bar(eighths: usize) -> &'static str {
     GLYPHS[eighths.clamp(1, 8) - 1]
 }
 
-/// `envelope` reduced to `width` columns by their max, each as 0..=8 eighths.
+/// `envelope` (blank-padded to `BUCKETS`) reduced to `width` columns by their max, as 0..=8 eighths.
 fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
     let total = envelope.len().max(waveform::BUCKETS);
     (0..width)

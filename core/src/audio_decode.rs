@@ -53,9 +53,7 @@ pub enum DecodeError {
     Interrupted,
 }
 
-/// Streams `stream` as stereo f32 frames in decoder-sized blocks (with the sample rate); `on_block` returns `false` to stop early.
-/// Decodes progressively while the stream is still filling (a read waits for the next bytes), and seekably once
-/// it is complete. The sample rate on success.
+/// Decodes `stream` to stereo blocks (progressively while it fills); `on_block` returns `false` to stop; yields the sample rate.
 pub fn decode_blocks(stream: &StreamHandle, mut on_block: impl FnMut(&[[f32; 2]], u32) -> bool) -> Result<u32, DecodeError> {
     let mut delivered = false;
     let complete = stream.info().state == StreamState::Done;
