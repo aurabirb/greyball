@@ -489,7 +489,27 @@ fn open_and_decode(
     inner: &Arc<Mutex<Snapshot>>,
     current: &dyn Fn() -> bool,
 ) -> core::Result<LoadedTrack> {
+    let from_cache = engine.is_cached(r);
     let (handle, claim) = engine.open(r, Intent::Play)?;
+    let (loaded, decoded_ms) = decode_stream(r, handle, claim, tap, inner, current)?;
+    // A cached file much shorter than the catalog says is a truncated preview: fetch the real one once.
+    if from_cache && decoded_ms > 0 && r.duration_ms > 0 && decoded_ms.saturating_mul(2) < r.duration_ms {
+        log::warn!("player: cached {} is {decoded_ms} ms but the catalog says {} ms; re-fetching", r.uri, r.duration_ms);
+        drop(loaded);
+        let (handle, claim) = engine.open_with(r, Intent::Play, false)?;
+        return decode_stream(r, handle, claim, tap, inner, current).map(|(loaded, _)| loaded);
+    }
+    Ok(loaded)
+}
+
+fn decode_stream(
+    r: &Rendition,
+    handle: StreamHandle,
+    claim: Claim,
+    tap: &Arc<AudioTap>,
+    inner: &Arc<Mutex<Snapshot>>,
+    current: &dyn Fn() -> bool,
+) -> core::Result<(LoadedTrack, u32)> {
     {
         // The newest load's stream is the one shown while it loads.
         let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -514,7 +534,7 @@ fn open_and_decode(
     }
     let (tapped, seekable, decoded_ms) = build_source(&handle, tap)?;
     let duration_ms = if decoded_ms > 0 { decoded_ms } else { r.duration_ms };
-    Ok(LoadedTrack { tapped, duration_ms, live: Live { handle, _claim: claim, seekable } })
+    Ok((LoadedTrack { tapped, duration_ms, live: Live { handle, _claim: claim, seekable } }, decoded_ms))
 }
 
 /// Applies a successfully resolved `LoadedTrack` on the worker thread: the
