@@ -180,7 +180,7 @@ pub(super) const LIST_TITLE_ROWS: usize = 1;
 pub(super) fn draw_row_list(printer: &Printer, (left, title): (usize, &str), back: bool, rows: &[Row], state: ListState, total: usize, playing: Option<usize>) {
     // Reserve the rightmost column of the list body as a scrollbar gutter.
     let content_w = printer.size.x.saturating_sub(1);
-    printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &pad_right_aligned(title, content_w.saturating_sub(left))));
+    printer.with_color(ColorStyle::title_primary(), |p| p.print((left, 0), &pad_right_aligned(title, content_w.saturating_sub(left + TITLE_MARGIN))));
     if back && back_button_fits(content_w) {
         printer.with_color(ColorStyle::title_primary(), |p| p.print((0, 0), BACK_LABEL));
     }
@@ -189,8 +189,10 @@ pub(super) fn draw_row_list(printer: &Printer, (left, title): (usize, &str), bac
     draw_list_body(&body, rows, state, total, playing);
 }
 
+const TITLE_MARGIN: usize = 2;
+
 /// The title row's clickable back button, over the tags column; hidden when it would run into the title.
-pub(super) const BACK_LABEL: &str = "<back";
+pub(super) const BACK_LABEL: &str = "< (Esc)";
 
 pub(super) fn back_button_fits(content_w: usize) -> bool {
     main_col_start(content_w) > BACK_LABEL.len()

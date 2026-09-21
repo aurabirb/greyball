@@ -1,7 +1,6 @@
 use cursive::Printer;
 use core::ItemKind;
 
-use super::rows::main_col_start;
 use super::text::{active_style, in_span};
 
 /// Columns right of the kind bar reserved for the title or search entry.
@@ -94,7 +93,7 @@ pub(super) struct Segment {
 
 /// `kinds`' segments left-aligned from the tags column of a `content_w` title row, dropping counts, then short labels, then the inactive kinds as room shrinks; `counts` runs parallel to `kinds`.
 pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], active: KindFilter) -> Vec<Segment> {
-    let room = content_w.saturating_sub(main_col_start(content_w) + QUERY_MIN);
+    let room = content_w.saturating_sub(QUERY_MIN);
     let seg = |kind: KindFilter, n: usize, short: bool, count: bool| {
         let name = if short { kind.short() } else { kind.title() };
         if count { format!(" {name} {n} ") } else { format!(" {name} ") }
@@ -115,7 +114,7 @@ pub(super) fn layout(content_w: usize, kinds: &[KindFilter], counts: &[usize], a
     if width(&segs) > room {
         return Vec::new();
     }
-    let mut x = main_col_start(content_w);
+    let mut x = 0;
     segs.into_iter()
         .map(|(kind, text)| {
             let w = text.chars().count();

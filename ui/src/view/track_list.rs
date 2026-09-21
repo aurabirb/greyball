@@ -565,24 +565,20 @@ impl TrackList {
         self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel)
     }
 
-    /// The title row: `<name>`, optionally followed by `  (<hint>)`; the search text being typed while it is.
+    /// The title row: `<name>`; the search text being typed while it is.
     fn title(&self, s: &Session) -> String {
         if let Some(query) = self.query.as_deref().filter(|_| self.filterable()) {
             return format!("filter {query:?}");
         }
-        let (name, hint) = match (self.kind, &self.open) {
-            (ListKind::NowPlaying, _) => (s.playing_context_name(), None),
-            (_, Open::Remote(sid, name, _)) => (Some(format!("[{sid}] {name}")), Some("Esc to go back")),
-            (ListKind::Search, _) => (self.results(s).map(|r| r.query().to_string()), None),
-            (ListKind::Playlists, Open::Local(_)) => (self.context_name(s), Some("Esc to go back")),
-            _ => (None, None),
+        let name = match (self.kind, &self.open) {
+            (ListKind::NowPlaying, _) => s.playing_context_name(),
+            (_, Open::Remote(sid, name, _)) => Some(format!("[{sid}] {name}")),
+            (ListKind::Search, _) => self.results(s).map(|r| r.query().to_string()),
+            (ListKind::Playlists, Open::Local(_)) => self.context_name(s),
+            _ => None,
         };
         let heading = if self.at_playlists_top() && self.kinds == KindFilter::Albums { "Albums" } else { self.kind.label() };
-        let name = name.unwrap_or_else(|| heading.to_string());
-        match hint {
-            Some(hint) => format!("{name}  ({hint})"),
-            None => name,
-        }
+        name.unwrap_or_else(|| heading.to_string())
     }
 
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
