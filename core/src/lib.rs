@@ -49,7 +49,7 @@ pub use paged::{PagedList, PagedMap, RemotePage};
 pub use playlist_m3u::{M3uDoc, M3uEntry, ParsedRendition, PlaylistMeta, SoftMeta, parse_m3u, write_m3u};
 pub use plugin::{MutexExt, Plugin, PluginCommand, PluginHealth, SetupLog, SetupPrompt, SharedMedia, Wiring};
 pub use queue::{Queue, RepeatSetting};
-pub use rate_limit::RateLimiter;
+pub use rate_limit::{RateGate, RateLimiter};
 pub use resolver::{Resolution, Resolver, Target, is_local_source, local_path_from_uri};
 pub use scan::{Outcome, ScanDriver, ScanMode, ScanPlugin, ScanStatus, TrackMeta};
 pub use search::Search;

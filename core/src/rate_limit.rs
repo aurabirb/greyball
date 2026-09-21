@@ -45,3 +45,42 @@ impl RateLimiter {
         *last = Instant::now();
     }
 }
+
+/// A [`RateLimiter`] plus a shared cool-down: once any caller sets one, every
+/// subsequent caller (a source's search and browse threads share one) waits it out.
+pub struct RateGate {
+    limiter: RateLimiter,
+    cooldown_until: Mutex<Option<Instant>>,
+}
+
+impl RateGate {
+    pub fn new(min_interval: Duration, jitter_max: Duration) -> Self {
+        Self { limiter: RateLimiter::new(min_interval, jitter_max), cooldown_until: Mutex::new(None) }
+    }
+
+    pub fn wait_turn(&self) {
+        loop {
+            let until = *self.cooldown_until.lock().unwrap();
+            match until {
+                Some(t) => match t.checked_duration_since(Instant::now()) {
+                    Some(remaining) => std::thread::sleep(remaining.min(Duration::from_secs(2))),
+                    None => {
+                        *self.cooldown_until.lock().unwrap() = None;
+                        break;
+                    }
+                },
+                None => break,
+            }
+        }
+        self.limiter.throttle();
+    }
+
+    /// Make every caller back off for at least `wait`.
+    pub fn set_cooldown(&self, wait: Duration) {
+        let until = Instant::now() + wait;
+        let mut slot = self.cooldown_until.lock().unwrap();
+        if slot.is_none_or(|current| current < until) {
+            *slot = Some(until);
+        }
+    }
+}

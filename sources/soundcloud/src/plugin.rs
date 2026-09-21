@@ -62,6 +62,9 @@ impl Plugin for SoundcloudPlugin {
 
     fn probe(&self) -> PluginHealth {
         if self.token.locked().is_some() {
+            if self.source.locked().as_ref().is_some_and(|s| s.login_expired()) {
+                return PluginHealth::Warn("SoundCloud login expired — set up again".to_string());
+            }
             PluginHealth::Ok
         } else {
             if let Some(e) = &self.config_error {

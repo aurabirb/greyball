@@ -7,9 +7,9 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use core::{RateLimiter, RemotePage, Track};
+use core::{RateGate, RemotePage, Track};
 use serde::Deserialize;
 
 const API: &str = "https://api.spotify.com/v1";
@@ -30,53 +30,6 @@ const API_MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// How many times a single call is retried through rate limiting before
 /// giving up.
 const API_MAX_ATTEMPTS: u32 = 6;
-
-/// Paces every request through a shared [`RateLimiter`] and, once any
-/// request gets a `429`, holds every *subsequent* request (this is the only
-/// caller for Spotify's search + browse endpoints, but callers can arrive
-/// from several threads at once — see `core::search`'s one-thread-per-source
-/// fan-out) back until the shared cool-down expires.
-struct RateGate {
-    limiter: RateLimiter,
-    cooldown_until: Mutex<Option<Instant>>,
-}
-
-impl Default for RateGate {
-    fn default() -> Self {
-        Self {
-            limiter: RateLimiter::new(API_MIN_INTERVAL, Duration::from_millis(API_JITTER_MAX_MS)),
-            cooldown_until: Mutex::new(None),
-        }
-    }
-}
-
-impl RateGate {
-    fn wait_turn(&self) {
-        loop {
-            let until = *self.cooldown_until.lock().unwrap();
-            match until {
-                Some(t) => match t.checked_duration_since(Instant::now()) {
-                    Some(remaining) => std::thread::sleep(remaining.min(Duration::from_secs(2))),
-                    None => {
-                        *self.cooldown_until.lock().unwrap() = None;
-                        break;
-                    }
-                },
-                None => break,
-            }
-        }
-        self.limiter.throttle();
-    }
-
-    /// Make every caller back off for at least `wait`.
-    fn set_cooldown(&self, wait: Duration) {
-        let until = Instant::now() + wait;
-        let mut slot = self.cooldown_until.lock().unwrap();
-        if slot.is_none_or(|current| current < until) {
-            *slot = Some(until);
-        }
-    }
-}
 
 /// Cheap to `Clone` (an `Arc` around the shared state) — the background
 /// Liked Songs walk (`SpotifySource`) holds its own clone so it keeps
@@ -268,7 +221,7 @@ impl WebApi {
                     .timeout(std::time::Duration::from_secs(15))
                     .build()
                     .unwrap_or_default(),
-                gate: RateGate::default(),
+                gate: RateGate::new(API_MIN_INTERVAL, Duration::from_millis(API_JITTER_MAX_MS)),
                 web_player: Mutex::new(None),
             }),
         }
