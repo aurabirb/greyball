@@ -480,11 +480,11 @@ fn start_load(
     });
 }
 
+/// A cached file decoding to under this percent of the catalog length is a truncated preview.
+const TRUNCATED_PERCENT: u64 = 90;
+
 /// Runs on the background thread `start_load` spawns: opens the stream, waits for its first bytes and
 /// builds the decoder — nothing here touches worker-thread-only state.
-/// A cached file decoding to under 1/this of the catalog length is a truncated preview.
-const TRUNCATED_FACTOR: u32 = 2;
-
 fn open_and_decode(
     engine: &StreamEngine,
     r: &Rendition,
@@ -494,7 +494,7 @@ fn open_and_decode(
 ) -> core::Result<LoadedTrack> {
     let (handle, claim, from_cache) = engine.open_play(r)?;
     let (loaded, decoded_ms) = decode_stream(r, handle, claim, tap, inner, current)?;
-    if from_cache && decoded_ms > 0 && decoded_ms.saturating_mul(TRUNCATED_FACTOR) < r.duration_ms && current() {
+    if from_cache && decoded_ms > 0 && u64::from(decoded_ms) * 100 < u64::from(r.duration_ms) * TRUNCATED_PERCENT && current() {
         log::warn!("player: cached {} is {decoded_ms} ms but the catalog says {} ms; re-fetching", r.uri, r.duration_ms);
         let fresh = engine.refetch(r).and_then(Result::ok).and_then(|(handle, claim)| decode_stream(r, handle, claim, tap, inner, current).ok());
         if let Some((fresh, _)) = fresh.filter(|(_, ms)| *ms > decoded_ms) {
