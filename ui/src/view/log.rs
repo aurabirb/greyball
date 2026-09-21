@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use cursive::Printer;
+use cursive::{Printer, Rect};
 use cursive::theme::ColorStyle;
 
 use core::LogBuf;
@@ -99,10 +99,14 @@ impl LogPane {
         }
     }
 
+    pub(super) fn scrolled(&self) -> bool {
+        self.scroll > 0
+    }
+
     /// Title row plus the wrapped lines, newest at the bottom.
     pub(super) fn draw(&self, printer: &Printer, focused: bool) {
         let mut title = Kind::Log.label().to_string();
-        if self.scroll > 0 {
+        if self.scrolled() {
             title.push_str(" (scrolled, PgDn to catch up)");
         }
         if focused {
@@ -111,10 +115,14 @@ impl LogPane {
         printer.with_color(ColorStyle::title_secondary(), |p| {
             p.print((0, 0), &pad(&title, p.size.x));
         });
+        self.draw_lines(&printer.windowed(Rect::from_size((0, 1), (printer.size.x, printer.size.y.saturating_sub(1)))));
+    }
 
+    /// The wrapped lines alone, newest at the bottom of `printer`.
+    pub(super) fn draw_lines(&self, printer: &Printer) {
         let width = printer.size.x;
         let visible_len = self.visible_len(self.sync(width));
-        let h = printer.size.y.saturating_sub(1);
+        let h = printer.size.y;
 
         let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         let total = Self::wrapped_len(&cache, visible_len);
@@ -126,7 +134,7 @@ impl LogPane {
         }
 
         let (line_lo, mut skip) = Self::locate(cache.rows.iter().take(visible_len).map(Vec::len), start);
-        let mut row_y = 1;
+        let mut row_y = 0;
         let mut emitted = 0;
         // Render only the already-wrapped rows the visible window needs, from the same locked cache used above.
         'outer: for wrapped in cache.rows.iter().skip(line_lo).take(visible_len - line_lo) {

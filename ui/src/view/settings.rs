@@ -33,6 +33,8 @@ pub(super) enum SettingsEntry {
     CacheDir(PathBuf),
     /// Playlist unsourced likes go to — Enter edits it; applies at once.
     LikedPlaylist(String),
+    /// Enter opens this plugin's setup dialog.
+    Setup(SourceId),
 }
 
 const VIS_FPS_STEPS: [u32; 6] = [10, 15, 20, 30, 45, 60];
@@ -49,6 +51,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
         SettingsEntry::CacheDir(dir) => format!("cache.dir:        {}", core::tilde(dir)),
         SettingsEntry::LikedPlaylist(name) => format!("likes.playlist:   {name}"),
+        SettingsEntry::Setup(id) => format!("    [Enter] set up {id}"),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
     }
@@ -65,8 +68,12 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     ];
     for name in TOGGLABLE_SOURCES {
         v.push(SettingsEntry::Source { name, enabled: cfg.source_enabled(name).unwrap_or(false) });
-        if let Some(detail) = s.plugin(&SourceId::from(name)).and_then(|p| p.detail()) {
-            v.push(SettingsEntry::Info(format!("    {detail}")));
+        let id = SourceId::from(name);
+        if let Some(plugin) = s.plugin(&id) {
+            v.push(SettingsEntry::Setup(id));
+            if let Some(detail) = plugin.detail() {
+                v.push(SettingsEntry::Info(format!("    {detail}")));
+            }
         }
     }
     v.push(SettingsEntry::Scan {
@@ -165,6 +172,7 @@ impl MedleyView {
                 self.editing = Editing::LikedPlaylist;
                 self.buffer = name;
             }
+            SettingsEntry::Setup(id) => self.open_setup(&id),
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
         }
     }

@@ -272,10 +272,10 @@ on `revision` — it is read fresh or kept in its own small cache.
 2. `on_edit_event`: an active text field (`Editing`) captures everything. A `/`-filter being typed is
    written through to the active list's `set_query`, a search query to its window's `set_input`, on every keystroke.
 3. The open `Modal` (`modal.rs`), if any, takes every event: `MedleyView::modal` is one
-   `Option<Modal>` (`Warnings`, `Picker`), so there is
+   `Option<Modal>` (`Warnings`, `Picker`, `Setup`), so there is
    no precedence to order — a modal swallows all input, hence nothing can open a second one.
    `draw_modal`/`on_modal_event`/`relayout_modal` are the only matches over it; a modal's `on_event`
-   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`).
+   returns a `ModalOutcome` (`Stay`, `Close`, `Run(Command)`, `Setup(row)`, `Submit`).
 4. A left press on the warnings button (its rect from `status_widget`) opens the warnings modal. Fixed-row mouse (not under a `Screen` window, which covers those rows): row 0 → `TabBar::click`; bottom (when the scrubber line is shown) → `StatusLine::click` over the width the button leaves.
 5. Any other mouse event goes to the topmost shown window whose `Placed::frame` contains it. The
    window takes focus when it uses the event, and on any press — so a press on a floating window's
@@ -305,6 +305,9 @@ printer, rect, title, footer)` draws the title bar and footer hint and returns t
 `modal_body`/`modal_list` are the layout both draw and hit-test use, from the modal's `Rect`; the
 picker is a floating box (`draw_float_frame`, `float_body`) sized to its playlists and centred over the still-drawn main view, and a left press outside it closes it; the warnings modal covers the whole screen (`Modal::covers_screen`) and splits its list rows once more (`WarningsModal::areas`) into the list and the message
 area that wraps the selected row's full text.
+
+
+The setup dialog (`setup.rs`, `SetupModal`) is a floating box over the main view that runs one plugin's setup as a chat: each `Plugin::setup_prompt` (text, `secret`, `default`) is logged, then the answer (masked when secret), then the progress lines the running `setup` sends through its `SetupLog` (`CoreEvent::SetupLine`) and, for that plugin's context, background warnings. The log is a `LogPane` over its own `LogBuf`, scrolled like the Log window; the input line sits under it and takes every key, so a long paste is plain characters, never a command. It is opened from a warnings row or the Settings `set up <source>` row (`open_setup`). `setup` runs on a spawned thread and reports `SetupDone`; once its health is `Ok` the dialog logs that it waits for the source and closes when the session's plugin health is `Ok` too, else it stays open with the reason (Enter starts over). Esc, the `[ Close ]` button or dropping the modal cancels the run (`SetupLog::cancelled`, which a plugin polls in its waits); a thread stuck in a blocking call finishes unseen and its result is dropped.
 
 ## Adding a component
 

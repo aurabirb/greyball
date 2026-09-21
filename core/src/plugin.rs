@@ -13,9 +13,75 @@
 //! "warnings" panel.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::event::{Bus, CoreEvent};
 use crate::traits::{MediaProvider, Player, Source};
 use crate::types::SourceId;
+
+/// One question of a plugin's setup: `text` may span lines, and the answer is an input line under it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetupPrompt {
+    pub text: String,
+    /// Masked wherever the answer is shown.
+    pub secret: bool,
+    /// What an empty answer means, shown next to a plain question.
+    pub default: Option<String>,
+}
+
+impl SetupPrompt {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), secret: false, default: None }
+    }
+
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self
+    }
+
+    pub fn default(mut self, value: impl Into<String>) -> Self {
+        self.default = Some(value.into());
+        self
+    }
+}
+
+/// A running setup's link to the UI: progress lines out, abandonment in.
+#[derive(Clone)]
+pub struct SetupLog {
+    id: SourceId,
+    run: u64,
+    bus: Bus,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl SetupLog {
+    pub fn new(id: SourceId, bus: Bus) -> Self {
+        static RUNS: AtomicU64 = AtomicU64::new(0);
+        Self { id, run: RUNS.fetch_add(1, Ordering::Relaxed), bus, cancelled: Arc::default() }
+    }
+
+    pub fn id(&self) -> &SourceId {
+        &self.id
+    }
+
+    pub fn run(&self) -> u64 {
+        self.run
+    }
+
+    /// Adds a line to the setup dialog's log.
+    pub fn say(&self, line: impl Into<String>) {
+        self.bus.send(CoreEvent::SetupLine { id: self.id.clone(), run: self.run, line: line.into() });
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    /// The user abandoned the setup: stop waiting, its result is dropped.
+    pub fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
 
 /// A plugin's health as of the last [`Plugin::probe`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,9 +144,9 @@ pub trait Plugin: Send + Sync {
     /// prompt. Safe to call from a UI render path on every redraw.
     fn probe(&self) -> PluginHealth;
 
-    /// The next prompt to show given the `answers` collected so far, or `None` once
-    /// [`Plugin::setup`] can run (immediately, for a plugin needing no input). Non-blocking.
-    fn setup_prompt(&self, _answers: &[String]) -> Option<String> {
+    /// The next question given the `answers` collected so far (an empty answer already replaced by its
+    /// default), or `None` once [`Plugin::setup`] can run (immediately, for a plugin needing no input). Non-blocking.
+    fn setup_prompt(&self, _answers: &[String]) -> Option<SetupPrompt> {
         None
     }
 
@@ -97,9 +163,9 @@ pub trait Plugin: Send + Sync {
     /// Run the actual fix-up. Blocking and possibly interactive (an OAuth
     /// browser flow, a network call) is fine here — the only caller is an
     /// explicit user action, always off the UI thread. `answers` holds one entry per
-    /// `setup_prompt`. Returns the resulting health; call
-    /// `wiring()` again afterward to pick up anything newly available.
-    fn setup(&self, answers: Vec<String>) -> PluginHealth;
+    /// `setup_prompt`; `log` reports progress to the dialog and says when the user gave up. Returns the
+    /// resulting health; call `wiring()` again afterward to pick up anything newly available.
+    fn setup(&self, answers: Vec<String>, log: &SetupLog) -> PluginHealth;
 
     /// `:`-commands this plugin wants registered at startup, beyond the
     /// generic probe/setup/wiring lifecycle every plugin already gets.

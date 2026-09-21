@@ -6,7 +6,7 @@ use cursive::event::{Event, EventResult, Key, MouseEvent};
 use cursive::view::Nameable;
 use cursive::views::{Dialog, OnEventView, ScrollView, TextView};
 
-use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin, SourceId};
+use core::{Command, CoreEvent, Dispatch, HotkeyTarget, PlaylistId, Plugin};
 
 use crate::command;
 use crate::keybindings::{self, Action};
@@ -26,8 +26,6 @@ pub(super) enum Editing {
     /// Typing this Search window's query in its title row.
     Search(WindowId),
     CommandLine,
-    /// Collecting the answers to a warnings-panel plugin's `setup_prompt`s, one per Enter.
-    PluginSetup(SourceId, Vec<String>),
     /// Typing the media cache directory (Settings).
     CacheDir,
     /// Typing the default likes playlist name (Settings).
@@ -152,16 +150,6 @@ impl MedleyView {
                     Ok(c) => self.run(c),
                     Err(e) => self.notify(Notice::failed(e)),
                 }
-            }
-            Editing::PluginSetup(id, mut answers) => {
-                answers.push(text);
-                let more = self.with_session(|s| s.plugin(&id).and_then(|p| p.setup_prompt(&answers))).is_some();
-                if more {
-                    self.editing = Editing::PluginSetup(id, answers);
-                } else {
-                    self.run_plugin_setup(id, answers);
-                }
-                EventResult::consumed()
             }
             Editing::CacheDir => match self.with_session_mut(|s| s.set_media_cache_dir(&text)) {
                 Ok(dir) => self.notify(Notice::Flash(format!("cache dir {}: restart to move and use it", core::tilde(&dir)))),
@@ -461,7 +449,6 @@ impl MedleyView {
         match &self.editing {
             Editing::Filter => Some(format!("/{}", self.buffer)),
             Editing::CommandLine => Some(format!(":{}", self.buffer)),
-            Editing::PluginSetup(..) => Some(format!("> {}", self.buffer)),
             Editing::CacheDir => Some(format!("cache dir> {}", self.buffer)),
             Editing::LikedPlaylist => Some(format!("likes playlist> {}", self.buffer)),
             Editing::None | Editing::Search(_) => None,

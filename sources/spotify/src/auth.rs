@@ -31,6 +31,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use core::SetupLog;
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
 use librespot_oauth::OAuthClientBuilder;
@@ -252,7 +253,7 @@ impl Auth {
     /// browser) — the `core::Plugin::setup` path; never called at startup.
     /// Only ever touches the `DEFAULT_ACCOUNT` pair (and makes it active
     /// again) — any other stored pair is untouched.
-    pub fn login(cache_dir: &Path) -> Result<Auth, String> {
+    pub fn login(cache_dir: &Path, log: &SetupLog) -> Result<Auth, String> {
         std::fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
         let cache = Self::cache(cache_dir)?;
         let mut store = load_token_store(cache_dir);
@@ -290,6 +291,8 @@ impl Auth {
 
         if credentials.is_none() {
             log::info!("spotify: launching OAuth browser login (music)");
+            log.say("Opening your browser to log in to Spotify (for playback)…");
+            log.say("Waiting for you to finish in the browser…");
             let tok = run_music_oauth()?;
             let creds = Credentials::with_access_token(tok.access_token);
             // Otherwise nothing persists these until a later `Session::connect(_, true)`
@@ -301,6 +304,11 @@ impl Auth {
         }
 
         if access_token.is_none() {
+            if log.cancelled() {
+                return Err("abandoned".to_string());
+            }
+            log.say("Opening your browser again to let medley read your playlists…");
+            log.say("Waiting for you to finish in the browser…");
             Self::add_login(cache_dir, None, None)?;
             store = load_token_store(cache_dir);
         }

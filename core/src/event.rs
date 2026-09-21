@@ -48,7 +48,11 @@ pub enum CoreEvent {
     MembershipResult(MembershipOutcome),
     /// A liked-list like/unlike came to this; the session settles the local fallback, then reports it.
     LikeResult { track: TrackId, like: bool, outcome: MembershipOutcome },
-    /// What a plugin's `:`-command returned, or why the setup the user ran failed.
+    /// A line of progress from setup run `run` of plugin `id`.
+    SetupLine { id: SourceId, run: u64, line: String },
+    /// Setup run `run` of plugin `id` finished (unless abandoned) with `health`, its wiring applied and its health recorded.
+    SetupDone { id: SourceId, run: u64, health: crate::plugin::PluginHealth },
+    /// What a plugin's `:`-command returned.
     PluginReport(String),
     /// What `:update` came to: a status line, or why it failed.
     UpdateResult(Result<String, String>),

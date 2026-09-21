@@ -57,7 +57,7 @@ impl SoulseekSource {
     fn downloads_dir(&self) -> Result<&Path> {
         self.downloads_dir
             .as_deref()
-            .ok_or_else(|| src_err("no slskd downloads directory known — finish setup from the warnings panel"))
+            .ok_or_else(|| src_err("no slskd downloads directory known — run Soulseek setup from Settings"))
     }
 
     /// Downloads `track` (blocking) and returns its local path, first

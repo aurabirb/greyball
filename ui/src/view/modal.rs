@@ -7,8 +7,8 @@ use core::Command;
 use crate::screen::Corners;
 
 use super::{Focus, MedleyView};
-use super::input::Editing;
 use super::playlist_picker::PlaylistPicker;
+use super::setup::SetupModal;
 use super::text::pad;
 use super::warnings::{Warnings, WarningsModal};
 
@@ -16,6 +16,7 @@ use super::warnings::{Warnings, WarningsModal};
 pub(super) enum Modal {
     Warnings(WarningsModal),
     Picker(PlaylistPicker),
+    Setup(SetupModal),
 }
 
 impl Modal {
@@ -36,6 +37,8 @@ pub(super) enum ModalOutcome {
     Run(Command),
     /// Run setup for the plugin at this row of `plugin_statuses`.
     Setup(usize),
+    /// The setup dialog's input line was sent.
+    Submit,
 }
 
 /// `rect` minus its footer row and, when `titled`, its title row — shared by `draw_modal_frame` and hit-tests.
@@ -88,26 +91,16 @@ impl MedleyView {
         match &mut self.modal {
             Some(Modal::Warnings(m)) => m.relayout(resized, rect, &Warnings::read(&s)),
             Some(Modal::Picker(picker)) => picker.relayout(resized, self.last_screen_size, &s),
-            None => {}
+            Some(Modal::Setup(_)) | None => {}
         }
     }
 
     pub(super) fn draw_modal(&self, modal: &Modal, printer: &Printer) {
         let rect = Rect::from_size((0, 0), printer.size);
         match modal {
-            Modal::Warnings(m) => {
-                let (warnings, prompt) = self.with_session(|s| {
-                    let prompt = match &self.editing {
-                        Editing::PluginSetup(id, answers) => {
-                            Some(s.plugin(id).and_then(|p| p.setup_prompt(answers)).unwrap_or_default())
-                        }
-                        _ => None,
-                    };
-                    (Warnings::read(s), prompt)
-                });
-                m.draw(printer, rect, &warnings, prompt.as_deref().map(|p| (p, self.buffer.as_str())));
-            }
+            Modal::Warnings(m) => m.draw(printer, rect, &self.with_session(Warnings::read)),
             Modal::Picker(picker) => picker.draw(printer, printer.size),
+            Modal::Setup(m) => m.draw(printer, printer.size),
         }
     }
 
@@ -118,6 +111,7 @@ impl MedleyView {
             None => return EventResult::Ignored,
             Some(Modal::Warnings(m)) => m.on_event(event, rect, &Warnings::read(&session.lock().unwrap())),
             Some(Modal::Picker(picker)) => picker.on_event(event, self.last_screen_size),
+            Some(Modal::Setup(m)) => m.on_event(event, self.last_screen_size),
         };
         match outcome {
             ModalOutcome::Stay => {}
@@ -127,6 +121,7 @@ impl MedleyView {
                 return self.run(cmd);
             }
             ModalOutcome::Setup(row) => self.activate_warning(row),
+            ModalOutcome::Submit => self.submit_setup(),
         }
         EventResult::consumed()
     }

@@ -87,4 +87,8 @@ pub fn deliver(siv: &mut Cursive, events: &[CoreEvent]) {
     for notice in events.iter().filter_map(view::Notice::of_event) {
         on_root(siv, |view| view.notify(notice));
     }
+    on_root(siv, |view| {
+        view.on_setup_events(events);
+        EventResult::consumed()
+    });
 }

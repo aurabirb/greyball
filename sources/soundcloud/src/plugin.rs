@@ -1,13 +1,13 @@
 //! `core::Plugin` impl — non-blocking startup health + deferred token setup.
 //! See `core::plugin` for why this exists (replacing a startup-blocking
 //! login) and `auth.rs` for why token entry itself moved entirely into the
-//! caller (the UI's warnings panel), not this crate.
+//! caller (the UI's setup dialog), not this crate.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, Source, SourceId, StreamHandle, Track, Wiring, waveform};
+use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, SetupLog, SetupPrompt, Source, SourceId, StreamHandle, Track, Wiring, waveform};
 
 use crate::auth;
 use crate::client::{SoundcloudSource, WAVEFORM_URL_ATTR, source_id};
@@ -61,11 +61,13 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
-    fn setup_prompt(&self, answers: &[String]) -> Option<String> {
+    fn setup_prompt(&self, answers: &[String]) -> Option<SetupPrompt> {
         answers.is_empty().then(|| {
-            "SoundCloud OAuth token — devtools on soundcloud.com, Application tab, \
-             Local Storage, the `oauth_token` key (or a request's Authorization header)"
-                .to_string()
+            SetupPrompt::new(
+                "SoundCloud OAuth token — devtools on soundcloud.com, Application tab, \
+                 Local Storage, the `oauth_token` key (or a request's Authorization header)",
+            )
+            .secret()
         })
     }
 
@@ -84,7 +86,7 @@ impl Plugin for SoundcloudPlugin {
         }
     }
 
-    fn setup(&self, answers: Vec<String>) -> PluginHealth {
+    fn setup(&self, answers: Vec<String>, _log: &SetupLog) -> PluginHealth {
         let token = answers.first().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let Some(token) = token else {
             return PluginHealth::Warn("no token entered".to_string());

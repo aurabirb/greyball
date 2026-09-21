@@ -39,6 +39,7 @@ mod kind_bar;
 mod log;
 mod memo;
 mod modal;
+mod setup;
 mod notice;
 mod panes;
 mod playlist_picker;

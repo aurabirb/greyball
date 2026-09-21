@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use core::{Bus, CoreEvent, Plugin, PluginCommand, PluginHealth, SourceId, Wiring};
+use core::{Bus, CoreEvent, Plugin, PluginCommand, PluginHealth, SetupLog, SourceId, Wiring};
 
 use crate::auth::Auth;
 use crate::provider::SpotifyMediaProvider;
@@ -125,10 +125,11 @@ impl Plugin for SpotifyPlugin {
         Wiring { source: Some(source), player: None, media: Some(media) }
     }
 
-    fn setup(&self, _answers: Vec<String>) -> PluginHealth {
+    fn setup(&self, _answers: Vec<String>, log: &SetupLog) -> PluginHealth {
         let had_credentials = Auth::cache(&self.cache_dir).is_ok_and(|c| c.credentials().is_some());
-        match Auth::login(&self.cache_dir) {
+        match Auth::login(&self.cache_dir, log) {
             Ok(_) => {
+                log.say("Logged in to Spotify.");
                 // A fresh music login may be a different account; the cached provider is bound to the old one.
                 if !had_credentials {
                     *self.wired.lock().unwrap_or_else(|e| e.into_inner()) = None;

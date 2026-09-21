@@ -564,7 +564,7 @@ pub struct Session {
     hotkey_memberships: Mutex<HotkeyMemo>,
 
     /// Most recent `Plugin::setup` outcome per plugin, until superseded — see
-    /// `refresh_plugin_health`. Written by the UI's `run_plugin_setup` once
+    /// `refresh_plugin_health`. Written by the UI's setup dialog once
     /// `setup()` returns, so a real failure (an OAuth error, a listener-bind
     /// failure, ...) shows instead of `probe()`'s generic pre-login text.
     last_setup: HashMap<SourceId, PluginHealth>,
@@ -1044,7 +1044,7 @@ impl Session {
                 self.bus.send(CoreEvent::MembershipResult(outcome));
                 Ok(true)
             }
-            CoreEvent::PluginLoginSucceeded | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
+            CoreEvent::PluginLoginSucceeded | CoreEvent::SetupLine { .. } | CoreEvent::SetupDone { .. } | CoreEvent::MembershipResult(_) | CoreEvent::PluginReport(_) | CoreEvent::UpdateResult(_) | CoreEvent::LinkResolved(_) => Ok(true),
         }
     }
 
@@ -1119,7 +1119,7 @@ impl Session {
     }
 
     /// Record `id`'s last `Plugin::setup` result — called once `setup()`
-    /// returns, by `run_plugin_setup`, which always sends
+    /// returns, by the UI's setup dialog, which always sends
     /// `CoreEvent::PluginStatusChanged` right after; that event's handler
     /// does the actual re-probe, so this only needs to update `last_setup`.
     pub fn record_setup_result(&mut self, id: SourceId, health: PluginHealth) {
@@ -1128,7 +1128,7 @@ impl Session {
     }
 
     /// A cloned handle to one plugin, to call its (blocking) `setup()` off
-    /// the session lock — see `run_plugin_setup`'s doc for why this exists
+    /// the session lock — see the UI's setup dialog
     /// instead of a `Session` method that calls `setup()` itself.
     pub fn plugin(&self, id: &SourceId) -> Option<Arc<dyn Plugin>> {
         self.plugins.iter().find(|p| &p.id() == id).cloned()
@@ -1147,7 +1147,7 @@ impl Session {
     /// before falling through to "unknown command", and the same cloned-
     /// handle-then-drop-the-lock handle `ui::run_plugin_command` runs the
     /// (possibly blocking) command through off the session lock, mirroring
-    /// `plugin`/`run_plugin_setup`.
+    /// `plugin` and the setup dialog.
     pub fn plugin_for_command(&self, word: &str) -> Option<Arc<dyn Plugin>> {
         self.plugin_commands.get(word).cloned()
     }

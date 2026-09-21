@@ -1,17 +1,14 @@
 use unicode_width::UnicodeWidthStr;
-use std::thread;
 
 use cursive::{Printer, Rect};
 use cursive::event::Event;
-use cursive::theme::ColorStyle;
 
-use core::{CoreEvent, PluginHealth, Session, SourceId};
+use core::{PluginHealth, Session, SourceId};
 
 use super::MedleyView;
-use super::input::Editing;
 use super::modal::{Modal, ModalOutcome, draw_modal_frame, modal_list};
 use super::scroll::{ListEvent, ListState};
-use super::text::{pad, wrap};
+use super::text::wrap;
 
 /// Rows of the message area under the list, which shows the selected row's text in full.
 const MESSAGE_ROWS: usize = 5;
@@ -81,8 +78,7 @@ impl WarningsModal {
         }
     }
 
-    /// `setup` is the `(prompt, typed text)` of a plugin setup value being collected, if any.
-    pub(super) fn draw(&self, printer: &Printer, rect: Rect, warnings: &Warnings, setup: Option<(&str, &str)>) {
+    pub(super) fn draw(&self, printer: &Printer, rect: Rect, warnings: &Warnings) {
         let body = draw_modal_frame(printer, rect, Some("Warnings"), "  [Enter] run setup   [Esc] close");
         if warnings.rows() == 0 {
             body.print((0, 1), "(no plugins registered)");
@@ -104,16 +100,6 @@ impl WarningsModal {
         for (y, line) in wrap(&text, message.width()).iter().take(message.height()).enumerate() {
             printer.windowed(message).print((0, y), line);
         }
-
-        // The setup prompt takes the footer's place, its typed text on the bottom row.
-        if let Some((prompt, typed)) = setup {
-            let frame = printer.windowed(rect);
-            let bottom = frame.size.y.saturating_sub(1);
-            frame.print((0, bottom), &pad(&format!("> {typed}  [Esc] cancel"), frame.size.x));
-            frame.with_color(ColorStyle::highlight_inactive(), |p| {
-                p.print((0, bottom.saturating_sub(1)), &pad(prompt, p.size.x));
-            });
-        }
     }
 }
 
@@ -131,49 +117,8 @@ impl MedleyView {
 
     /// `Enter` (or a click) on row `selected` of the warnings modal.
     pub(super) fn activate_warning(&mut self, selected: usize) {
-        let Some((id, _)) = self.with_session(|s| s.plugin_statuses().get(selected).cloned()) else {
-            return;
-        };
-        let Some(plugin) = self.with_session(|s| s.plugin(&id)) else {
-            return;
-        };
-        if plugin.setup_prompt(&[]).is_some() {
-            self.buffer.clear();
-            self.editing = Editing::PluginSetup(id, Vec::new());
-        } else {
-            self.run_plugin_setup(id, Vec::new());
+        if let Some((id, _)) = self.with_session(|s| s.plugin_statuses().get(selected).cloned()) {
+            self.open_setup(&id);
         }
-    }
-
-    /// Run a plugin's `setup()` on a background thread.
-    pub(super) fn run_plugin_setup(&self, id: SourceId, answers: Vec<String>) {
-        let session = self.session.clone();
-        let bus = self.with_session(|s| s.bus.clone());
-        thread::spawn(move || {
-            let Some(plugin) = session.lock().unwrap().plugin(&id) else {
-                return;
-            };
-            let health = plugin.setup(answers);
-            let succeeded = health.is_ok();
-            // A degraded-but-usable result stays a warnings row.
-            let failure = match &health {
-                PluginHealth::Fail(msg) => Some(format!("{id} setup: {msg}")),
-                PluginHealth::Ok | PluginHealth::Warn(_) => None,
-            };
-            let wiring = plugin.wiring();
-            let mut guard = session.lock().unwrap();
-            guard.apply_wiring(&id, wiring);
-            // See `Session::plugin_statuses`.
-            guard.record_setup_result(id, health);
-            drop(guard);
-            // The UI's cue to redraw the warnings panel / pick up whatever just got registered.
-            bus.send(CoreEvent::PluginStatusChanged);
-            if succeeded {
-                bus.send(CoreEvent::PluginLoginSucceeded);
-            }
-            if let Some(failure) = failure {
-                bus.send(CoreEvent::PluginReport(failure));
-            }
-        });
     }
 }
