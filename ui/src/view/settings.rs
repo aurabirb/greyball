@@ -31,6 +31,8 @@ pub(super) enum SettingsEntry {
     AutoUpdate(bool),
     /// Media cache directory — Enter edits it; applies at the next launch.
     CacheDir(PathBuf),
+    /// Playlist unsourced likes go to — Enter edits it; applies at once.
+    LikedPlaylist(String),
 }
 
 const VIS_FPS_STEPS: [u32; 6] = [10, 15, 20, 30, 45, 60];
@@ -46,6 +48,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::ShowHints(shown) => format!("[{}] hints", if *shown { "x" } else { " " }),
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
         SettingsEntry::CacheDir(dir) => format!("cache.dir:        {}", core::tilde(dir)),
+        SettingsEntry::LikedPlaylist(name) => format!("likes.playlist:   {name}"),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
         SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
     }
@@ -75,6 +78,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
     v.push(SettingsEntry::ShowHints(cfg.show_hints));
     v.push(SettingsEntry::AutoUpdate(cfg.auto_update));
     v.push(SettingsEntry::CacheDir(cfg.media_cache_dir.clone()));
+    v.push(SettingsEntry::LikedPlaylist(cfg.liked_playlist.clone()));
     v.push(SettingsEntry::Info(String::new()));
     v.push(SettingsEntry::Info(format!("panes.side:       {:?}", pane_cfg.side)));
     v.push(SettingsEntry::Info(format!("panes.stack:      {:?}", pane_cfg.stack)));
@@ -156,6 +160,10 @@ impl MedleyView {
             SettingsEntry::CacheDir(dir) => {
                 self.editing = Editing::CacheDir;
                 self.buffer = core::tilde(&dir);
+            }
+            SettingsEntry::LikedPlaylist(name) => {
+                self.editing = Editing::LikedPlaylist;
+                self.buffer = name;
             }
             SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
         }

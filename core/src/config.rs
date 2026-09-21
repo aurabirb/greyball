@@ -37,6 +37,8 @@ pub struct Config {
     pub show_hints: bool,
     /// Whether a newer release is downloaded in the background at startup.
     pub auto_update: bool,
+    /// Local playlist that receives likes no source can hold.
+    pub liked_playlist: String,
     /// Media cache directory; changing it applies at the next launch.
     pub media_cache_dir: PathBuf,
     pub theme: String,
@@ -273,6 +275,7 @@ impl Default for Config {
             status_line: false,
             show_hints: true,
             auto_update: true,
+            liked_playlist: "Liked Tracks".to_string(),
             media_cache_dir: PathBuf::new(),
             theme: "default".to_string(),
             volume: 1.0,

@@ -249,10 +249,14 @@ fn save_last_played(last: &LastPlayed) {
     }
 }
 
-fn load_state_path(key: &str) -> Option<PathBuf> {
+fn load_state_string(key: &str) -> Option<String> {
     let text = std::fs::read_to_string(state_path()).ok()?;
     let v: toml::Value = text.parse().ok()?;
-    v.get(key)?.as_str().map(PathBuf::from)
+    v.get(key)?.as_str().map(str::to_string)
+}
+
+fn load_state_path(key: &str) -> Option<PathBuf> {
+    load_state_string(key).map(PathBuf::from)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -263,6 +267,7 @@ fn save_state(
     status_line: Option<bool>,
     show_hints: Option<bool>,
     auto_update: Option<bool>,
+    liked_playlist: Option<&str>,
     media_cache_dir: Option<&std::path::Path>,
     media_cache_move_from: Option<&std::path::Path>,
     scan_mode: Option<ScanMode>,
@@ -283,6 +288,9 @@ fn save_state(
     }
     if let Some(on) = auto_update {
         text.push_str(&format!("auto_update = {on}\n"));
+    }
+    if let Some(name) = liked_playlist {
+        text.push_str(&format!("liked_playlist = {}\n", toml::Value::String(name.to_string())));
     }
     if let Some(dir) = media_cache_dir {
         text.push_str(&format!("media_cache_dir = {}\n", toml::Value::String(dir.to_string_lossy().into_owned())));
@@ -463,6 +471,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let config_auto_update = cfg.auto_update;
     if let Some(on) = load_auto_update() {
         cfg.auto_update = on;
+    }
+    let config_liked_playlist = cfg.liked_playlist.clone();
+    if let Some(name) = load_state_string("liked_playlist") {
+        cfg.liked_playlist = name;
     }
     if cfg.media_cache_dir.as_os_str().is_empty() {
         cfg.media_cache_dir = data_dir().join("media-cache");
@@ -785,9 +797,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let status_line = Some(s.cfg.status_line).filter(|&shown| shown != config_status_line);
     let show_hints = Some(s.cfg.show_hints).filter(|&shown| shown != config_show_hints);
     let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
+    let liked_playlist = Some(s.cfg.liked_playlist.as_str()).filter(|&name| name != config_liked_playlist);
     let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
     let media_cache_move_from = Some(running_media_cache_dir.as_path()).filter(|&dir| dir != s.cfg.media_cache_dir);
-    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, media_cache_dir, media_cache_move_from, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
+    save_state(last_played.as_ref(), s.player_status().volume, vis_fps, status_line, show_hints, auto_update, liked_playlist, media_cache_dir, media_cache_move_from, scan_mode, &s.hotkeys().into_iter().collect(), &source_overrides, layout);
     s.save_queue();
     drop(s);
     Ok(())

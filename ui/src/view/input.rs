@@ -30,6 +30,8 @@ pub(super) enum Editing {
     PluginSetup(SourceId, Vec<String>),
     /// Typing the media cache directory (Settings).
     CacheDir,
+    /// Typing the default likes playlist name (Settings).
+    LikedPlaylist,
     /// Screen-local fuzzy filter (`/` on any track-list screen other than Search itself).
     Filter,
 }
@@ -163,6 +165,10 @@ impl MedleyView {
             }
             Editing::CacheDir => match self.with_session_mut(|s| s.set_media_cache_dir(&text)) {
                 Ok(dir) => self.notify(Notice::Flash(format!("cache dir {}: restart to move and use it", core::tilde(&dir)))),
+                Err(e) => self.notify(Notice::failed(e)),
+            },
+            Editing::LikedPlaylist => match self.with_session_mut(|s| s.set_liked_playlist(&text)) {
+                Ok(()) => EventResult::consumed(),
                 Err(e) => self.notify(Notice::failed(e)),
             },
             Editing::Filter => {
@@ -457,6 +463,7 @@ impl MedleyView {
             Editing::CommandLine => Some(format!(":{}", self.buffer)),
             Editing::PluginSetup(..) => Some(format!("> {}", self.buffer)),
             Editing::CacheDir => Some(format!("cache dir> {}", self.buffer)),
+            Editing::LikedPlaylist => Some(format!("likes playlist> {}", self.buffer)),
             Editing::None | Editing::Search(_) => None,
         }
     }

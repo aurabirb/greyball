@@ -267,7 +267,7 @@ pub enum Command {
     },
     LinkPick(TrackId),
     Unlink(TrackId),
-    /// `l`: toggles the track in the liked/favorites synthetic playlist(s) of its own sources —
+    /// `l`: toggles the track in the liked/favorites synthetic playlist(s) of its own sources, else in the default local likes playlist —
     /// see `Session::liked_targets`.
     Like(TrackId),
     /// Ask the track's sources for a shareable web URL.
@@ -470,6 +470,8 @@ pub struct Session {
     /// being hand-added to `ui::command`.
     plugin_commands: HashMap<String, Arc<dyn Plugin>>,
     pub cfg: Arc<Config>,
+    /// The local playlist named `cfg.liked_playlist`, when it exists.
+    liked_local: Option<PlaylistId>,
     /// Background scan driver (bpm, later genre/...), if any plugin is
     /// registered. Built and spawned in `session_builder::build_session`.
     pub scan: Option<Arc<crate::scan::ScanDriver>>,
@@ -610,6 +612,7 @@ impl Session {
             players,
             plugins,
             plugin_commands,
+            liked_local: None,
             cfg: Arc::new(cfg),
             scan: None,
             media_cache,
@@ -634,6 +637,7 @@ impl Session {
             pending_enqueues: Vec::new(),
             enqueue_timer: None,
         };
+        session.liked_local = session.find_playlist_named(&session.cfg.liked_playlist);
         session.refresh_plugin_health();
         session
     }
@@ -831,12 +835,7 @@ impl Session {
                 Ok(Dispatch::Ok)
             }
             Command::NewPlaylist(name) => {
-                let p = Playlist {
-                    id: PlaylistId::new(),
-                    name,
-                    notes: String::new(),
-                    items: vec![],
-                };
+                let p = Self::blank_playlist(name);
                 self.save_playlist(&p)?;
                 Ok(Dispatch::PlaylistCreated(p.id))
             }
@@ -1641,6 +1640,7 @@ impl Session {
         self.sources
             .iter()
             .filter_map(|(id, src)| self.view.liked_mark(id, &src.liked_songs_node()?, track))
+            .chain(self.liked_local.filter(|&id| self.playlist_track_ids(id).contains(&track)).map(|_| false))
             .reduce(|a, b| a || b)
     }
 
@@ -1839,6 +1839,26 @@ impl Session {
     pub fn set_show_hints(&mut self, shown: bool) {
         self.touch();
         Arc::make_mut(&mut self.cfg).show_hints = shown;
+    }
+
+    /// Names the playlist likes no source can hold go to from now on; an existing playlist of that name is reused.
+    pub fn set_liked_playlist(&mut self, text: &str) -> std::result::Result<(), String> {
+        let name = text.trim();
+        if name.is_empty() {
+            return Err("playlist name is empty".into());
+        }
+        self.touch();
+        Arc::make_mut(&mut self.cfg).liked_playlist = name.to_string();
+        self.liked_local = self.find_playlist_named(name);
+        Ok(())
+    }
+
+    fn find_playlist_named(&self, name: &str) -> Option<PlaylistId> {
+        self.playlists().into_iter().find(|p| p.name == name).map(|p| p.id)
+    }
+
+    fn blank_playlist(name: String) -> Playlist {
+        Playlist { id: PlaylistId::new(), name, notes: String::new(), items: vec![] }
     }
 
     pub fn set_auto_update(&mut self, on: bool) {
@@ -2642,7 +2662,11 @@ impl Session {
     }
 
     fn is_liked(&self, track: &Track) -> bool {
-        self.liked_targets(track).iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
+        let targets = self.liked_targets(track);
+        if targets.is_empty() {
+            return self.liked_local.is_some_and(|id| self.playlist_track_ids(id).contains(&track.id));
+        }
+        targets.iter().any(|(src, node, _)| self.view.remote_occurrences(&src.id(), node, track.id) > 0)
     }
 
     fn toggle_remote_playlist_membership(&mut self, track: TrackId, source: SourceId, node: BrowseNode, position: Option<usize>) -> Dispatch {
@@ -2760,8 +2784,7 @@ impl Session {
         let name = t.display_name();
         let like = !self.is_liked(&t);
         if targets.is_empty() {
-            let verb = if like { "like" } else { "unlike" };
-            return Ok(refused("set_liked", format!("Can't {verb} {name:?}: no liked-songs source for this track")));
+            return self.set_liked_locally(&t, like);
         }
         let mut started = false;
         for (src, node, uri) in targets {
@@ -2772,6 +2795,22 @@ impl Session {
             return Ok(Dispatch::Refused(format!("Still updating {name:?} in Liked Songs")));
         }
         Ok(Dispatch::Ok)
+    }
+
+    /// Likes into the default local playlist, created on first use, when no source of the track can hold a like.
+    fn set_liked_locally(&mut self, track: &Track, like: bool) -> Result<Dispatch> {
+        let mut p = match self.liked_local.and_then(|id| self.store.get_playlist(id).ok().flatten()) {
+            Some(p) => p,
+            None => Self::blank_playlist(self.cfg.liked_playlist.clone()),
+        };
+        if like {
+            p.items.push(track.id);
+        } else {
+            p.items.retain(|&t| t != track.id);
+        }
+        self.save_playlist(&p)?;
+        self.liked_local = Some(p.id);
+        Ok(Dispatch::MembershipSet { track: track.display_name(), playlist: p.name, added: like })
     }
 
     /// Turn a bare primary URI with no matching `#MEDLEY-RENDITION` into one
