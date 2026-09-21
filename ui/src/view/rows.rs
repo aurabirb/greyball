@@ -321,7 +321,8 @@ pub(super) type Layout = [Option<(usize, usize, bool)>; 5];
 
 pub(super) fn column_layout(width: usize) -> Layout {
     let wide = width + ROW_MARK_W + 1 >= WIDE_MIN_LIST_W;
-    let (hotkeys_w, source_w) = if wide { (HOTKEYS_COL_W + 1, SOURCE_COL_W + 1) } else { (0, 0) };
+    let hotkeys_w = HOTKEYS_COL_W + 1;
+    let source_w = if wide { SOURCE_COL_W + 1 } else { 0 };
     let fixed = TAGS_COL_W + hotkeys_w + 1 + source_w + DURATION_COL_W;
     if width <= fixed {
         return [None; 5];
@@ -334,13 +335,13 @@ pub(super) fn column_layout(width: usize) -> Layout {
     [
         Some((0, TAGS_COL_W, true)),
         Some((main_start, main_w, false)),
-        wide.then_some((hotkeys_start, HOTKEYS_COL_W, false)),
+        Some((hotkeys_start, HOTKEYS_COL_W, false)),
         wide.then_some((source_start, SOURCE_COL_W, false)),
         Some((duration_start, DURATION_COL_W, false)),
     ]
 }
 
-/// Narrowest list (including mark and scrollbar gutter) that still shows the hotkeys and source columns.
+/// Narrowest list (including mark and scrollbar gutter) that still shows the source column; the hotkeys column is always reserved.
 const WIDE_MIN_LIST_W: usize = 80;
 
 /// Width of a row's leading now-playing marker (`"> "`/`"  "`).

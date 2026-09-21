@@ -108,10 +108,6 @@
   from there. Show the track as liked in rows/status the same way as a source-side like, and tell
   the user in a notice which playlist it went to. The playlist's name should be configurable in
   Settings.
-- [ ] Always show a playlist's bound hotkey in the Playlists view (`` ` ``, `BuiltinAction::SwitchPlaylists`):
-  every row whose playlist/collection has a hotkey (`Session::effective_hotkey`,
-  `Session::hotkeys`; the Help panel already resolves them in `ui/src/view/help.rs`) shows the key
-  in a fixed spot, in every layout width, not only while selected or when there is room.
 - [ ] Make soundcloud provide explore page playlist in the playlists view
 - [ ] Create playlist files (m3u8) when the playlist cache updates automatically, this basically creates playlist sync feature for the user. It should be in a Documents directory so the user doesnt have to adjust it (but it should be possible in settings). Each entry should point at the track's path in the media cache — ask the media cache to resolve/convert a track to its assumed on-disk location there (even if it hasn't actually been downloaded/cached yet) — so the written m3u8 files are actually playable.
 - [ ] Add a YouTube source/plugin (alongside the existing Spotify/SoundCloud/HTTP/local sources), wired into Search like the others.
