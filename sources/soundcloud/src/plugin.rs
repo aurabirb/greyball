@@ -5,8 +5,9 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use core::{Bus, MediaProvider, Plugin, PluginHealth, Source, SourceId, Wiring};
+use core::{Bus, MediaProvider, Outcome, Plugin, PluginHealth, ScanPlugin, Source, SourceId, StreamHandle, Track, TrackMeta, Wiring, waveform};
 
 use crate::auth;
 use crate::client::SoundcloudSource;
@@ -33,6 +34,12 @@ impl SoundcloudPlugin {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| auth::load_cached(&cache_dir));
         Self { client_id, cache_dir, bus, token: Mutex::new(token), hls }
+    }
+
+    /// The scan plugin that reads SoundCloud's ready-made waveforms; register it before the decoding one.
+    pub fn waveform_scan_plugin(&self) -> Arc<dyn ScanPlugin> {
+        let token = self.token.lock().unwrap().clone();
+        Arc::new(WaveformPlugin(SoundcloudSource::new(self.client_id.clone(), token, self.bus.clone(), self.hls)))
     }
 }
 
@@ -83,5 +90,43 @@ impl Plugin for SoundcloudPlugin {
         auth::persist(&self.cache_dir, &token);
         *self.token.lock().unwrap() = Some(token);
         PluginHealth::Ok
+    }
+}
+
+/// Fills the waveform attr from SoundCloud's own drawn waveform, so the decode plugin never runs for its tracks.
+struct WaveformPlugin(SoundcloudSource);
+
+impl ScanPlugin for WaveformPlugin {
+    fn id(&self) -> &'static str {
+        "soundcloud-waveform"
+    }
+
+    fn name(&self) -> &'static str {
+        "SoundCloud waveform"
+    }
+
+    fn needs(&self, track: &Track) -> bool {
+        !track.attrs.contains_key(waveform::ATTR) && track.renditions.iter().any(|r| r.source.as_str() == "soundcloud")
+    }
+
+    fn analyze(&self, track: &Track, _audio: &dyn Fn() -> Result<StreamHandle, Outcome>, _wanted: &dyn Fn() -> bool) -> Outcome {
+        let Some(rendition) = track.renditions.iter().find(|r| r.source.as_str() == "soundcloud") else {
+            return Outcome::Skip;
+        };
+        match self.0.waveform_samples(&rendition.uri) {
+            Ok(Some(samples)) => match waveform::envelope(&samples) {
+                Some(buckets) => Outcome::Done(TrackMeta { attrs: [(waveform::ATTR.to_string(), waveform::encode(&buckets))].into() }),
+                None => Outcome::Skip,
+            },
+            Ok(None) => Outcome::Skip,
+            Err(e) => {
+                log::warn!("soundcloud-waveform: {e}");
+                Outcome::Retry
+            }
+        }
+    }
+
+    fn min_interval(&self) -> Duration {
+        Duration::ZERO
     }
 }

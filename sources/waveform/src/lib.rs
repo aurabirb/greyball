@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use core::audio_decode::DecodeError;
-use core::waveform::BUCKETS;
+use core::waveform::{BUCKETS, bucket_of, envelope, normalise};
 use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta, waveform};
 
 /// Frames per RMS window before the windows are max-reduced into buckets.
@@ -100,30 +100,4 @@ impl Drop for LiveGuard {
     fn drop(&mut self) {
         waveform::clear_live(self.0);
     }
-}
-
-/// The bucket window `index` of `total` falls in.
-fn bucket_of(index: usize, total: usize) -> usize {
-    (index * BUCKETS / total).min(BUCKETS - 1)
-}
-
-/// `levels` max-reduced to `BUCKETS` with the live placement, empty buckets taking the nearest level, then `normalise`d.
-fn envelope(levels: &[f32]) -> Option<Vec<u8>> {
-    let mut buckets = vec![0.0_f32; BUCKETS];
-    for (i, &level) in levels.iter().enumerate() {
-        let b = bucket_of(i, levels.len());
-        buckets[b] = buckets[b].max(level);
-    }
-    if levels.len() < BUCKETS {
-        for (i, b) in buckets.iter_mut().enumerate() {
-            *b = levels[(i * levels.len() / BUCKETS).min(levels.len().saturating_sub(1))..].first().copied().unwrap_or(0.0);
-        }
-    }
-    normalise(&buckets)
-}
-
-/// `buckets` scaled so the loudest is 255; `None` for silence or no audio.
-fn normalise(buckets: &[f32]) -> Option<Vec<u8>> {
-    let peak = buckets.iter().copied().fold(0.0, f32::max);
-    (peak > 0.0).then(|| buckets.iter().map(|v| (v / peak * 255.0).round() as u8).collect())
 }

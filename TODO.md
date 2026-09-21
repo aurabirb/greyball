@@ -75,8 +75,6 @@
   hints, notices, doc strings and prompts instead of being resolved to the key currently bound to
   that action; make those resolve through the bindings (as `Chrome`'s `*_key` fields do) or list what
   can't.
-- [ ] Waveform overview (top bar): SoundCloud tracks carry a ready-made `waveform_url` in the API
-  response — use it there instead of decoding.
 - [ ] `core::config::PaneMode` (`panes.mode` in `config.toml`: `screen`, `embedded`, `float`) only seeds
   the five pane windows' placement for a default layout; merge it into `ui::screen::Placement` so the
   config takes `tabbed` too and there is one enum and one vocabulary.

@@ -187,6 +187,26 @@ impl SoundcloudSource {
         serde_json::from_value(v).map_err(|e| src_err(format!("track {id}: {e}")))
     }
 
+    /// The track's SoundCloud-drawn waveform samples, if it has any.
+    pub(crate) fn waveform_samples(&self, uri: &str) -> Result<Option<Vec<f32>>> {
+        let Some(TrackRef::Id(id)) = TrackRef::parse(uri) else {
+            return Ok(None);
+        };
+        let Some(url) = self.track_by_id(id)?.waveform_url else {
+            return Ok(None);
+        };
+        self.limiter.throttle();
+        let json: serde_json::Value = self
+            .client
+            .get(&url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.json())
+            .map_err(|e| src_err(format!("waveform {url}: {e}")))?;
+        let samples = json.get("samples").and_then(|s| s.as_array());
+        Ok(samples.map(|a| a.iter().filter_map(|v| v.as_f64()).map(|v| v as f32).collect()))
+    }
+
     fn resolve_permalink(&self, url: &str) -> Result<ApiTrack> {
         let v = self.api_get("/resolve", &[("url", url)])?;
         if v.get("kind").and_then(|k| k.as_str()) != Some("track") {
@@ -542,6 +562,8 @@ struct ApiTrack {
     publisher_metadata: Option<ApiPublisher>,
     #[serde(default)]
     media: ApiMedia,
+    #[serde(default)]
+    waveform_url: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
