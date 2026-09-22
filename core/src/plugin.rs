@@ -216,6 +216,10 @@ impl SharedMedia {
         self.0.read().unwrap().contains_key(id)
     }
 
+    pub fn get(&self, id: &SourceId) -> Option<Arc<dyn MediaProvider>> {
+        self.0.read().unwrap().get(id).cloned()
+    }
+
     /// Cheap Arc-clone copy, so callers never hold the lock across a blocking fetch.
     pub fn snapshot(&self) -> std::collections::HashMap<SourceId, Arc<dyn MediaProvider>> {
         self.0.read().unwrap().clone()

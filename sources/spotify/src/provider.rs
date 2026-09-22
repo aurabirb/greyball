@@ -5,11 +5,12 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::Duration;
 
-use core::{Error, Media, MediaProvider, Rendition, Result, SourceId};
+use core::{Error, Media, MediaProvider, PlaybackReport, Rendition, Result, SourceId};
 use librespot_audio::{AudioDecrypt, AudioFile};
 use librespot_core::{FileId, Session, SpotifyId, SpotifyUri};
 use librespot_metadata::audio::{AudioFileFormat, AudioItem};
 
+use crate::connect_state::{ConnectReporter, PlaybackState};
 use crate::link::{self, Live, Slot};
 
 /// Spotify prepends a proprietary header to its Ogg Vorbis streams; real Vorbis data starts here.
@@ -24,11 +25,12 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct SpotifyMediaProvider {
     slot: Arc<Slot>,
+    connect: Arc<ConnectReporter>,
 }
 
 impl SpotifyMediaProvider {
     pub fn new(auth: crate::auth::Auth) -> Self {
-        Self { slot: link::spawn(auth) }
+        Self { slot: link::spawn(auth), connect: ConnectReporter::new() }
     }
 }
 
@@ -40,6 +42,21 @@ impl MediaProvider for SpotifyMediaProvider {
     fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media> {
         let inner = open_with_retry(&self.slot, &r.uri, wanted)?;
         Ok(Media::from_reader(inner))
+    }
+
+    /// Best-effort: never blocks playback on Spotify's connect-state endpoint, silently does
+    /// nothing without a live session (e.g. still reconnecting).
+    fn report_playback(&self, uri: &str, report: PlaybackReport) {
+        let Some(live) = self.slot.current() else { return };
+        match report {
+            PlaybackReport::Playing { position_ms, duration_ms } => {
+                self.connect.report(&live, uri, PlaybackState::Playing { position_ms, duration_ms });
+            }
+            PlaybackReport::Paused { position_ms, duration_ms } => {
+                self.connect.report(&live, uri, PlaybackState::Paused { position_ms, duration_ms });
+            }
+            PlaybackReport::Stopped => self.connect.stopped(&live),
+        }
     }
 }
 

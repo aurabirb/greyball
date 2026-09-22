@@ -36,12 +36,6 @@
   should force a full clear + redraw (`Cursive::clear`), and `last_screen_size`/`MedleyView::placed`
   must be refreshed before the first post-resize draw. Repro on macOS by resizing with a long list
   and wide-glyph titles on screen.
-- [ ] Spotify's own listening history (spotify.com "Recently played") does not show tracks played in
-  medley. medley's own history is source-agnostic and unaffected. `SpotifyMediaProvider` only downloads
-  audio (AudioFile + audio key), which Spotify counts as no play; nothing reports a play. Confirm on
-  the owner's account first (play a Spotify track >30 s, check spotify.com). If confirmed, options:
-  a librespot Spirc/Connect device or Web API playback for Spotify tracks (registers plays, costs the
-  streaming-into-rodio design), or accept it and use Last.fm-style scrobbling of medley's history.
 - [ ] Soulseek: play before slskd finishes the transfer. `SoulseekSource::open` waits for the whole download
   and returns `Media::Path`. slskd writes the partial file under `<folder>/incomplete/<user>/<remote dirs>/`;
   following it with a `Media::Stream` producer needs its exact incomplete file name and resume behavior

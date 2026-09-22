@@ -56,7 +56,7 @@ pub use search::Search;
 pub use store::{MemStore, RedbStore};
 pub use stream::{Claim, Intent, Key as StreamKey, StreamEngine, StreamHandle, StreamInfo, StreamReader, StreamState, StreamWriter, Stopped, fill_from_seekable, retry as stream_retry};
 pub use traits::{
-    BrowseNode, BrowsePage, Error, Media, MediaProvider, NodeMeta, Player, PlayerState, PlayerStatus,
+    BrowseNode, BrowsePage, Error, Media, MediaProvider, NodeMeta, PlaybackReport, Player, PlayerState, PlayerStatus,
     Result, Source, Store,
 };
 pub use types::{

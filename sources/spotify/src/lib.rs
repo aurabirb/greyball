@@ -9,6 +9,7 @@
 //! * [`auth::Auth`] — librespot OAuth login + credential/token cache.
 
 pub mod auth;
+mod connect_state;
 mod link;
 mod plugin;
 mod provider;

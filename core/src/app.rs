@@ -26,7 +26,7 @@ use crate::resolver::{Resolution, Resolver, Target, local_path_from_uri};
 use crate::revised::Revised;
 use crate::search::Search;
 use crate::traits::{
-    BrowseNode, Error, NodeMeta, Player, PlayerState, PlayerStatus, Result, Source, Store,
+    BrowseNode, Error, NodeMeta, PlaybackReport, Player, PlayerState, PlayerStatus, Result, Source, Store,
 };
 use crate::types::{
     LinkReason, Playlist, PlaylistId, Quality, Rendition, SearchQuery, SourceId, Track,
@@ -1256,11 +1256,19 @@ impl Session {
                 // A tick from the previous track, still playing until the new load swaps in, is not the shown track's.
                 if self.is_now_playing(source, uri) {
                     self.update_progress(*position_ms, *duration_ms);
+                    if let Some(m) = self.media.get(source) {
+                        m.report_playback(uri, PlaybackReport::Playing { position_ms: *position_ms, duration_ms: *duration_ms });
+                    }
                 }
                 Ok(true)
             }
             PlayerEvent::Paused => {
                 self.shown.write().player_state = PlayerState::Paused;
+                if let Some((source, uri, _)) = &self.now_playing_rendition
+                    && let Some(m) = self.media.get(source)
+                {
+                    m.report_playback(uri, PlaybackReport::Paused { position_ms: self.progress.0, duration_ms: self.progress.1 });
+                }
                 Ok(true)
             }
             PlayerEvent::Stopped => {
@@ -2156,6 +2164,9 @@ impl Session {
         self.progress = (0, track.duration_ms);
         self.now_playing_player = Some(p);
         self.now_playing_rendition = Some((r.source.clone(), r.uri.clone(), track.id));
+        if let Some(m) = self.media.get(&r.source) {
+            m.report_playback(&r.uri, PlaybackReport::Playing { position_ms: 0, duration_ms: track.duration_ms });
+        }
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
         }
@@ -2223,6 +2234,11 @@ impl Session {
 
     /// Nothing left to play: silence the player (it may still be on the previous track) and clear `current`.
     fn stop_playback(&mut self) {
+        if let Some((source, uri, _)) = &self.now_playing_rendition
+            && let Some(m) = self.media.get(source)
+        {
+            m.report_playback(uri, PlaybackReport::Stopped);
+        }
         if let Some(p) = self.now_playing_player.take() {
             log::debug!("player: nothing left to play, stopping the player");
             p.stop();

@@ -180,11 +180,25 @@ impl Media {
     }
 }
 
+/// Best-effort playback state a `MediaProvider` may want to know about — e.g. Spotify Connect-state
+/// reporting, so a track played through medley's own player still shows up in Spotify's own
+/// "Recently Played" (medley never participates in Spotify Connect itself).
+#[derive(Clone, Copy, Debug)]
+pub enum PlaybackReport {
+    Playing { position_ms: u32, duration_ms: u32 },
+    Paused { position_ms: u32, duration_ms: u32 },
+    Stopped,
+}
+
 pub trait MediaProvider: Send + Sync {
     fn id(&self) -> SourceId;
     /// Blocking, on a stream thread. `wanted` turns false once nobody wants the stream any more; a
     /// provider that waits for something must poll it and return an error then.
     fn open(&self, r: &Rendition, wanted: &dyn Fn() -> bool) -> Result<Media>;
+
+    /// Told about this provider's own rendition reaching a new playback state (play/pause/stop).
+    /// Default: no-op — only a provider that cares (Spotify Connect-state) overrides it.
+    fn report_playback(&self, _uri: &str, _report: PlaybackReport) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
