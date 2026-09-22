@@ -61,6 +61,15 @@
   receiving it as events from the live analysis (the stream engine lets it run while the track
   downloads) over reading a stored value only. The pane then flashes/pulses on each anticipated beat
   and stays quiet when no tempo is known.
+- [ ] Gate waveform generation behind a settings toggle. Spotify tracks have no source-provided waveform,
+  so the generic decode-based scan plugin (`sources/waveform/src/lib.rs`, registered unconditionally at
+  `app/src/main.rs:665`) burns real battery decoding audio just to draw a waveform; SoundCloud already
+  provides its own waveform data for free via `SoundcloudSource::waveform_samples`
+  (`sources/soundcloud/src/client.rs:490`, consumed by its own scan plugin, `sources/soundcloud/src/plugin.rs:152-181`,
+  registered at `app/src/main.rs:551`) and should keep using that regardless of the toggle — only the
+  decode-based generic plugin needs gating. Follow the existing `ScanConfig`/`BpmScanConfig.enabled`
+  pattern (`core/src/config.rs:191-207`) for the config/state.toml shape and the Settings-screen wiring
+  (`ui/src/view/settings.rs:84-86`, `159-166`).
 - [ ] SoundCloud playlist creation (`POST /playlists`); needs a create-playlist hook on the `Source` trait first.
 - [ ] SoundCloud: show charts and genre explore playlists (their own endpoints) and station shelves from `/mixed-selections` in the Playlists view.
 - [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
