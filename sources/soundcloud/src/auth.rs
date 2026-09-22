@@ -18,17 +18,25 @@ static HEADER: LazyLock<Regex> = LazyLock::new(|| {
 
 /// The bare oauth token from a bare token, an Authorization header value, a cookie string, or a JSON/JS literal of one.
 pub fn extract_token(input: &str) -> Result<String, String> {
+    extract(input).map(|(token, _)| token)
+}
+
+/// Same parse as `extract_token`, plus the `datadome=` cookie value carried alongside it in the
+/// same paste (a document.cookie or cookie-jar-JSON paste), if any. An Authorization-header-only
+/// paste never carries one.
+pub fn extract(input: &str) -> Result<(String, Option<String>), String> {
     let text = unwrap_literal(input.trim());
     let text = text.trim();
     if let Some(c) = HEADER.captures(text) {
-        return Ok(c[1].to_string());
+        return Ok((c[1].to_string(), None));
     }
     let pairs = if text.starts_with('{') || text.starts_with('[') {
         json_pairs(text)
     } else {
         text.split(';').filter_map(|c| c.split_once('=')).map(|(n, v)| (n.trim().to_string(), v.to_string())).collect()
     };
-    token_from_pairs(&pairs).ok_or_else(|| NOT_FOUND.to_string())
+    let token = token_from_pairs(&pairs).ok_or_else(|| NOT_FOUND.to_string())?;
+    Ok((token, datadome_from_pairs(&pairs)))
 }
 
 fn unwrap_literal(s: &str) -> String {
@@ -100,8 +108,17 @@ fn token_from_pairs(pairs: &[(String, String)]) -> Option<String> {
     })
 }
 
+fn datadome_from_pairs(pairs: &[(String, String)]) -> Option<String> {
+    let (_, v) = pairs.iter().find(|(n, _)| n == "datadome")?;
+    Some(percent_decode_str(v.trim().trim_matches('"')).decode_utf8_lossy().into_owned())
+}
+
 fn token_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("token.txt")
+}
+
+fn datadome_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("datadome.txt")
 }
 
 /// A previously pasted-and-cached token: `Ok(None)` when there is no file, `Err` when it no longer parses.
@@ -113,8 +130,23 @@ pub fn load_cached(cache_dir: &Path) -> Result<Option<String>, String> {
     extract_token(&text).map(Some).map_err(|e| format!("{} is unusable: {e}", path.display()))
 }
 
+/// A previously persisted DataDome cookie value, if any — absent or unreadable is just `None`, never an error.
+pub fn load_cached_datadome(cache_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(datadome_path(cache_dir)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
 /// Cache a freshly pasted token, readable by the owner only from the moment the file exists.
 pub fn persist(cache_dir: &Path, token: &str) -> std::io::Result<()> {
+    write_secret(cache_dir, &token_path(cache_dir), token)
+}
+
+/// Persist a DataDome cookie value rotated in by a response.
+pub fn persist_datadome(cache_dir: &Path, value: &str) -> std::io::Result<()> {
+    write_secret(cache_dir, &datadome_path(cache_dir), value)
+}
+
+/// Writes `contents` to `path`, readable by the owner only from the moment the file exists.
+fn write_secret(cache_dir: &Path, path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     std::fs::create_dir_all(cache_dir)?;
     let mut opts = std::fs::OpenOptions::new();
@@ -124,11 +156,11 @@ pub fn persist(cache_dir: &Path, token: &str) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts.open(token_path(cache_dir))?;
+    let mut file = opts.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(token.as_bytes())
+    file.write_all(contents.as_bytes())
 }

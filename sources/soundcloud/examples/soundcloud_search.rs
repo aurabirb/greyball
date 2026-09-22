@@ -12,6 +12,7 @@ fn main() {
     let src = SoundcloudSource::new(
         std::env::var("SC_CLIENT_ID").ok(),
         std::env::var("SC_OAUTH_TOKEN").ok(),
+        std::env::temp_dir().join("soundcloud_search_example"),
         Bus::new(),
         true,
     );

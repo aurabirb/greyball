@@ -19,6 +19,8 @@ pub struct SoundcloudPlugin {
     config_error: Option<String>,
     /// The wired source; only a successful `setup()` replaces it.
     source: Mutex<Arc<SoundcloudSource>>,
+    /// The `datadome=` cookie seen alongside the token in the last `setup_answer`, applied by `setup()`.
+    pending_datadome: Mutex<Option<String>>,
 }
 
 impl SoundcloudPlugin {
@@ -41,8 +43,8 @@ impl SoundcloudPlugin {
         if let Some(e) = &config_error {
             log::warn!("soundcloud: {e}");
         }
-        let source = Arc::new(SoundcloudSource::new(client_id, token, bus.clone(), hls));
-        Self { cache_dir, bus, config_error, source: Mutex::new(source) }
+        let source = Arc::new(SoundcloudSource::new(client_id, token, cache_dir.clone(), bus.clone(), hls));
+        Self { cache_dir, bus, config_error, source: Mutex::new(source), pending_datadome: Mutex::new(None) }
     }
 
     /// The scan plugin that reads SoundCloud's ready-made waveforms; register it before the decoding one.
@@ -83,7 +85,8 @@ impl Plugin for SoundcloudPlugin {
         answers.is_empty().then(|| {
             SetupPrompt::new(
                 "Log in on soundcloud.com in your browser, then either:\n\
-                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value.\n\
+                 A. Press F12, open Console, type document.cookie, press Enter and copy the printed value. \
+                 Preferred: this also picks up your browser's anti-bot cookie, so writes (likes, playlist edits) look like they come from it.\n\
                  B. Press F12, open Network, click any request to api-v2.soundcloud.com (most look like me?client_id=...) and copy the value \
                  of its Authorization request header (it starts with OAuth ).\n\
                  Paste it here as a single line; it is hidden as you type. A token SoundCloud rejects is \
@@ -94,7 +97,9 @@ impl Plugin for SoundcloudPlugin {
     }
 
     fn setup_answer(&self, _answers: &[String], answer: String) -> Result<String, String> {
-        auth::extract_token(&answer)
+        let (token, datadome) = auth::extract(&answer)?;
+        *self.pending_datadome.locked() = datadome;
+        Ok(token)
     }
 
     fn wiring(&self) -> Wiring {
@@ -124,6 +129,12 @@ impl Plugin for SoundcloudPlugin {
                 log.say(format!("Logged in as {name}"));
                 if let Err(e) = auth::persist(&self.cache_dir, &token) {
                     log.say(format!("Could not save the token, you will need to log in again next launch: {e}"));
+                }
+                if let Some(dd) = self.pending_datadome.locked().take() {
+                    source.set_datadome(dd.clone());
+                    if let Err(e) = auth::persist_datadome(&self.cache_dir, &dd) {
+                        log.say(format!("Could not save the DataDome cookie: {e}"));
+                    }
                 }
                 // A new login gets fresh lists and caches, so another account never sees the old one's.
                 *self.source.locked() = Arc::new(source.with_bus(self.bus.clone()));

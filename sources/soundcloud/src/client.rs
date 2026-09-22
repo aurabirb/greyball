@@ -1,6 +1,7 @@
 //! The SoundCloud API client + `Source` / `MediaProvider` impls.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -12,11 +13,17 @@ use core::{
 use regex::Regex;
 use serde::Deserialize;
 
+use crate::auth;
 use crate::uri::TrackRef;
 
 const API: &str = "https://api-v2.soundcloud.com";
 const WEB: &str = "https://soundcloud.com/";
-const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+// Matches the browser session the datadome cookie/clientid were captured from — DataDome
+// fingerprints UA consistency with the clientid, so this must stay a Chrome/Edg UA.
+const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0";
+/// From a captured browser request; api-v2 doesn't reject a stale value, but send what a real client would.
+const APP_VERSION: &str = "1790019589";
+const APP_LOCALE: &str = "en";
 
 /// `BrowseNode::Path` sentinel for the synthetic "Liked Tracks" folder — not
 /// a real SoundCloud id (those are numeric), so it can't collide with one.
@@ -146,15 +153,21 @@ pub struct SoundcloudSource {
     hls: bool,
     /// Paces every request; a 429 or 5xx cools all callers down together.
     gate: Arc<RateGate>,
+    /// Where `token.txt` and `datadome.txt` live.
+    cache_dir: PathBuf,
+    /// The DataDome anti-bot cookie value, echoed as `x-datadome-clientid` and `Cookie: datadome=`;
+    /// rotated in from response headers and persisted to `datadome.txt` when it changes.
+    datadome: Arc<Mutex<Option<String>>>,
 }
 
 impl SoundcloudSource {
-    pub fn new(configured_id: Option<String>, oauth_token: Option<String>, bus: Bus, hls: bool) -> Self {
+    pub fn new(configured_id: Option<String>, oauth_token: Option<String>, cache_dir: PathBuf, bus: Bus, hls: bool) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent(UA)
             .build()
             .unwrap_or_default();
+        let datadome = auth::load_cached_datadome(&cache_dir);
         Self {
             client,
             configured_id: configured_id.filter(|s| !s.trim().is_empty()),
@@ -171,12 +184,14 @@ impl SoundcloudSource {
             playlist_docs: Arc::default(),
             hls,
             gate: Arc::new(RateGate::new(Duration::from_millis(200), Duration::from_millis(100))),
+            cache_dir,
+            datadome: Arc::new(Mutex::new(datadome)),
         }
     }
 
     /// A fresh source for `token` on a detached bus, so validating it raises no events.
     pub(crate) fn with_token(&self, token: String) -> Self {
-        Self::new(self.configured_id.clone(), Some(token), Bus::new(), self.hls)
+        Self::new(self.configured_id.clone(), Some(token), self.cache_dir.clone(), Bus::new(), self.hls)
     }
 
     pub(crate) fn with_bus(mut self, bus: Bus) -> Self {
@@ -186,6 +201,11 @@ impl SoundcloudSource {
 
     pub(crate) fn has_token(&self) -> bool {
         self.oauth_token.is_some()
+    }
+
+    /// Seeds the in-memory DataDome cookie right after setup, ahead of the file `new` already read at construction.
+    pub(crate) fn set_datadome(&self, value: String) {
+        *self.datadome.lock().unwrap() = Some(value);
     }
 
     /// The `client_id` query param every endpoint needs: configured, else scraped and cached.
@@ -368,7 +388,18 @@ impl SoundcloudSource {
             if !self.gate.wait_turn_while(wanted) {
                 return Err(src_err("no longer wanted"));
             }
-            let mut req = self.client.request(method.clone(), url);
+            let mut req = self
+                .client
+                .request(method.clone(), url)
+                .header("Accept", "application/json, text/javascript, */*; q=0.1")
+                .header("Accept-Language", "en,en-GB;q=0.9")
+                .header("Referer", WEB);
+            if method != reqwest::Method::GET {
+                req = req.header("Origin", WEB.trim_end_matches('/'));
+            }
+            if let Some(dd) = self.datadome.lock().unwrap().clone() {
+                req = req.header("x-datadome-clientid", dd.clone()).header("Cookie", format!("datadome={dd}"));
+            }
             if let Some(body) = body {
                 req = req.json(body);
             }
@@ -386,6 +417,7 @@ impl SoundcloudSource {
                 }
                 Err(e) => return Err(src_err(format!("{path}: {}", e.without_url()))),
             };
+            self.update_datadome(&resp);
             let status = resp.status();
             if status.is_success() {
                 log::debug!("soundcloud: {method} {path} -> {status}");
@@ -418,6 +450,11 @@ impl SoundcloudSource {
                     if self.oauth_token.is_some() && status.as_u16() == 401 {
                         self.set_login_expired(true);
                         return Ok(None);
+                    }
+                    // A JSON API's 403 body is JSON; an HTML body means DataDome served its captcha page instead.
+                    let html = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.contains("text/html"));
+                    if status.as_u16() == 403 && html {
+                        return Err(src_err(format!("{path}: HTTP {status}: bot protection challenged the request; refresh datadome.txt from a browser session")));
                     }
                     let body: String = resp.text().unwrap_or_default().chars().take(200).collect();
                     return Err(src_err(format!("{path}: HTTP {status} {body}")));
@@ -715,6 +752,30 @@ impl SoundcloudSource {
         }))))
     }
 
+    /// DataDome delivers its rotated cookie cross-origin via `x-set-cookie` (not `Set-Cookie`);
+    /// picks the last `datadome=` value across every header instance and persists it if it changed.
+    fn update_datadome(&self, resp: &reqwest::blocking::Response) {
+        let mut latest = None;
+        for value in resp.headers().get_all("x-set-cookie") {
+            if let Ok(s) = value.to_str()
+                && let Some((name, v)) = s.split(';').next().and_then(|kv| kv.split_once('='))
+                && name.trim() == "datadome"
+            {
+                latest = Some(v.trim().to_string());
+            }
+        }
+        let Some(new_value) = latest else { return };
+        let mut cur = self.datadome.lock().unwrap();
+        if cur.as_deref() == Some(new_value.as_str()) {
+            return;
+        }
+        *cur = Some(new_value.clone());
+        drop(cur);
+        if let Err(e) = auth::persist_datadome(&self.cache_dir, &new_value) {
+            log::debug!("soundcloud: could not persist rotated datadome cookie: {e}");
+        }
+    }
+
     fn hls_playlist(&self, playlist_url: &str, preset: &str) -> Result<HlsPlaylist> {
         log::debug!("soundcloud: GET {playlist_url} (HLS playlist, preset {preset})");
         let text = self
@@ -754,6 +815,8 @@ fn request_url(target: &str, query: &[(&str, &str)], client_id: &str) -> Result<
         .collect();
     pairs.extend(query.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     pairs.push(("client_id".to_string(), client_id.to_string()));
+    pairs.push(("app_version".to_string(), APP_VERSION.to_string()));
+    pairs.push(("app_locale".to_string(), APP_LOCALE.to_string()));
     url.query_pairs_mut().clear().extend_pairs(pairs);
     Ok(url)
 }
