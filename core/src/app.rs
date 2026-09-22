@@ -485,9 +485,14 @@ const UPDATE_CHECKS_PER_DAY: f64 = 3.0;
 /// is silently missed) stays unlikely for normal listening.
 pub const RECENTLY_PLAYED_MERGE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// A remote play within this of an existing history entry for the same track counts as the same
-/// play (Spotify's `played_at` and medley's own recorded timestamp for the same play won't be
-/// byte-identical) — two distinct plays of the same track are normally minutes apart.
-const REMOTE_PLAY_DEDUP_WINDOW: chrono::Duration = chrono::Duration::seconds(5);
+/// play. Wide on purpose: since `ConnectReporter` (`sources/spotify/src/connect_state.rs`) already
+/// reports medley's own Spotify plays back to Spotify, most remote entries this merges *are*
+/// medley's own plays echoed back with Spotify's server-side timestamp — which can drift well past
+/// a few seconds from medley's local `played_at` on clock skew or reporting latency. A missed
+/// dedup (routine duplicate history entries for the common case: playing Spotify through medley)
+/// is worse than an over-eager one (skipping a genuine same-track replay within a few minutes), so
+/// this stays comfortably under "two distinct plays of the same track are normally minutes apart."
+const REMOTE_PLAY_DEDUP_WINDOW: chrono::Duration = chrono::Duration::minutes(3);
 
 /// Why `Session::bind_hotkey` refused.
 #[derive(Debug)]
@@ -1633,7 +1638,7 @@ impl Session {
             return 0;
         }
         let mut combined = load_history_file(&self.history_path);
-        let mut added = 0usize;
+        let mut new_entries = Vec::new();
         for (track, played_at) in remote {
             let tid = match self.catalog.ingest(track) {
                 Ok(id) => id,
@@ -1649,31 +1654,38 @@ impl Session {
                 continue;
             }
             combined.push((tid, played_at));
-            added += 1;
+            new_entries.push((tid, played_at));
         }
-        if added == 0 {
+        if new_entries.is_empty() {
             return 0;
         }
         // Remote plays can be older than the most recent native entry — an in-order append can't
-        // interleave them, so the whole file (small; capped by what `MAX_HISTORY` ever restores
-        // anyway) is rewritten in the merged chronological order instead.
+        // interleave them, so the whole file is rewritten in the merged chronological order
+        // instead (and capped to MAX_HISTORY on the way out — see `rewrite_history_file`).
         combined.sort_by_key(|(_, at)| *at);
         self.rewrite_history_file(&combined);
-        self.queue.restore_history(combined);
+        // Only the newly-found entries are folded into the live queue's in-memory history —
+        // not a full reload from `combined` — so this can't resurrect entries
+        // `Queue::previous_from_history` already consumed this session (see its doc comment).
+        let added = new_entries.len();
+        self.queue.merge_new_history(new_entries);
         added
     }
 
-    /// Rewrites `history_path` from scratch in `entries`' order (oldest first) — the one caller,
-    /// `merge_remote_history`, needs this instead of a plain append because a merged remote play
-    /// can land anywhere in the timeline, not just at the end. Written to a temp file and renamed
-    /// over the original so a crash mid-write can't leave a truncated log.
+    /// Rewrites `history_path` from scratch in `entries`' order (oldest first), trimmed to the
+    /// most recent `queue::MAX_HISTORY` — the one caller, `merge_remote_history`, needs this
+    /// instead of a plain append because a merged remote play can land anywhere in the timeline,
+    /// not just at the end, and the file has no other trim point (unlike the in-memory history,
+    /// `append_history_entry` never caps it). Written to a temp file and renamed over the
+    /// original so a crash mid-write can't leave a truncated log.
     fn rewrite_history_file(&mut self, entries: &[(TrackId, DateTime<Utc>)]) {
         let mut text = write_header(&PlaylistMeta {
             id: None,
             name: "__history__".to_string(),
             notes: String::new(),
         });
-        for (id, played_at) in entries {
+        let start = entries.len().saturating_sub(crate::queue::MAX_HISTORY);
+        for (id, played_at) in &entries[start..] {
             let Ok(Some(track)) = self.store.get_track(*id) else { continue };
             let primary = self
                 .export_primary_uri(&track)

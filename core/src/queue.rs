@@ -30,8 +30,10 @@ use serde::{Deserialize, Serialize};
 use crate::event::{Bus, CoreEvent};
 use crate::types::TrackId;
 
-/// Cap on [`Queue::history`] — old enough plays just fall off the front.
-const MAX_HISTORY: usize = 5000;
+/// Cap on [`Queue::history`] — old enough plays just fall off the front. Also used by
+/// `Session::rewrite_history_file` (`core/src/app.rs`) to cap the on-disk M3U history log itself,
+/// so it doesn't grow unbounded.
+pub(crate) const MAX_HISTORY: usize = 5000;
 
 /// Repeat behavior for the [Queue]. `RepeatPlaylist` no longer has a
 /// queue-specific meaning: it used to mean "wrap the queue's own Vec back to
@@ -172,6 +174,27 @@ impl Queue {
     pub fn restore_history(&self, entries: Vec<(TrackId, DateTime<Utc>)>) {
         let mut h = self.history.write().unwrap();
         *h = entries.into_iter().collect();
+        while h.len() > MAX_HISTORY {
+            h.pop_front();
+        }
+        self.history_changed();
+    }
+
+    /// Fold newly-discovered remote plays into the in-memory history in place, keeping each
+    /// existing entry (including any already consumed by `previous_from_history` this session —
+    /// those aren't in `new_entries` since they came from disk) untouched. Unlike
+    /// `restore_history`'s full replace, this can't resurrect entries `previous_from_history`
+    /// already popped, so it's safe to call mid-session — see `Session::merge_remote_history`.
+    /// `new_entries` needn't be sorted; each is inserted at its chronological position.
+    pub fn merge_new_history(&self, new_entries: Vec<(TrackId, DateTime<Utc>)>) {
+        if new_entries.is_empty() {
+            return;
+        }
+        let mut h = self.history.write().unwrap();
+        for entry in new_entries {
+            let pos = h.iter().rposition(|(_, at)| *at <= entry.1).map(|i| i + 1).unwrap_or(0);
+            h.insert(pos, entry);
+        }
         while h.len() > MAX_HISTORY {
             h.pop_front();
         }
