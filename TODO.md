@@ -68,6 +68,12 @@
   `SoundcloudSource::playlist_page` (`sources/soundcloud/src/client.rs`); `TrackRef::parse` (`uri.rs`) currently
   rejects 3-segment set paths. `on.soundcloud.com/...` short links need their redirect followed to the
   permalink first.
+- [ ] When the selected row and the currently playing track are the same, and the list showing it is
+  the playing track's own playlist (i.e. the selection is already "on" now playing), auto-follow the
+  selection to the new track when playback advances to the next track in that playlist — same effect
+  as pressing `0` (`BuiltinAction::RevealPlaying`, `core/src/app.rs:129`, handled by `reveal_and_show`,
+  `ui/src/view/input.rs:220`), just triggered automatically by the track change instead of a keypress.
+  Only when both conditions hold; otherwise leave the selection where the user left it.
 - [ ] Bracketed paste in the TUI: enable it in terminal setup, add a paste event to the edit buffer
   (`ui/src/view/input.rs`) and strip newlines so a multi-line paste can't run a command.
 - [ ] `y` (copy shared link) polish: debounce repeated presses (each spawns a detached thread and a
