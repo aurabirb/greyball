@@ -185,7 +185,9 @@ impl Media {
 /// "Recently Played" (medley never participates in Spotify Connect itself).
 #[derive(Clone, Copy, Debug)]
 pub enum PlaybackReport {
-    Playing { position_ms: u32, duration_ms: u32 },
+    /// `force`: bypass a provider's own throttling (track start, seek) instead of the usual
+    /// infrequent heartbeat cadence for an unchanged, still-playing track.
+    Playing { position_ms: u32, duration_ms: u32, force: bool },
     Paused { position_ms: u32, duration_ms: u32 },
     Stopped,
 }

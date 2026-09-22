@@ -5,6 +5,7 @@
 //! real playback events + deregister on stop.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use librespot_core::Session;
 use librespot_core::dealer::protocol::Message as DealerMessage;
@@ -12,6 +13,7 @@ use librespot_protocol::connect::{Capabilities, Device, DeviceInfo, MemberType, 
 use librespot_protocol::devices::DeviceType;
 use librespot_protocol::player::{ContextPlayerOptions, PlayOrigin, PlayerState, ProvidedTrack, Suppressions};
 use protobuf::{EnumOrUnknown, MessageField};
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::auth::MUSIC_CLIENT_ID;
@@ -21,24 +23,49 @@ const DEVICE_NAME: &str = "medley";
 const CONNECTION_ID_TOPIC: &str = "hm://pusher/v1/connections/";
 const CONNECTION_ID_HEADER: &str = "Spotify-Connection-Id";
 
+/// Real Spotify clients report `Playing` on discrete events plus an infrequent heartbeat, not on
+/// every progress tick — this caps that heartbeat, while a forced report (track start, seek)
+/// always bypasses it.
+const PLAYING_HEARTBEAT: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Copy)]
 pub enum PlaybackState {
     Playing { position_ms: u32, duration_ms: u32 },
     Paused { position_ms: u32, duration_ms: u32 },
 }
 
-/// Serializes dealer-hello attempts so two playback events racing in don't both try to start the
-/// dealer for the same `Live` generation.
+impl PlaybackState {
+    fn label(&self) -> &'static str {
+        match self {
+            PlaybackState::Playing { .. } => "playing",
+            PlaybackState::Paused { .. } => "paused",
+        }
+    }
+}
+
+/// One dealer-hello attempt's outcome, cached per `Live` generation so a failure isn't retried
+/// forever: `DealerManager::start()` consumes its one-shot builder win or lose, so a retry after
+/// failure on the same session can only ever fail again — only a reconnect (new generation, new
+/// session, new builder) is worth trying again.
 struct Ready {
     generation: u32,
+    ok: bool,
+}
+
+enum Job {
+    State { live: Live, uri: String, state: PlaybackState },
+    Inactive { live: Live },
 }
 
 /// Fire-and-forget from any thread; the actual dealer/HTTP work runs on the session's own tokio
-/// runtime (`Live::handle`). One instance is shared for the whole provider's lifetime — it just
-/// re-hellos whenever the session's `generation` moves on from a reconnect.
+/// runtime (`Live::handle`), serialized through one background task so racing reports can't land
+/// out of order at Spotify's backend. One instance is shared for the whole provider's lifetime —
+/// it just re-hellos whenever the session's `generation` moves on from a reconnect.
 #[derive(Default)]
 pub struct ConnectReporter {
     ready: tokio::sync::Mutex<Option<Ready>>,
+    last_playing: std::sync::Mutex<Option<(String, Instant)>>,
+    jobs: std::sync::OnceLock<mpsc::UnboundedSender<Job>>,
 }
 
 impl ConnectReporter {
@@ -46,48 +73,92 @@ impl ConnectReporter {
         Arc::new(Self::default())
     }
 
-    pub fn report(self: &Arc<Self>, live: &Live, uri: &str, state: PlaybackState) {
-        let this = self.clone();
-        let live = live.clone();
-        let uri = uri.to_string();
-        let handle = live.handle.clone();
-        handle.spawn(async move {
-            if !this.ensure_ready(&live).await {
-                return;
-            }
-            let request = build_request(&live.session, &uri, state);
-            match live.session.spclient().put_connect_state_request(&request).await {
-                Ok(_) => log::debug!("spotify connect: state PUT accepted ({uri})"),
-                Err(e) => log::debug!("spotify connect: state PUT failed for {uri}: {e}"),
-            }
-        });
+    pub fn report(self: &Arc<Self>, live: &Live, uri: &str, state: PlaybackState, force: bool) {
+        if matches!(state, PlaybackState::Playing { .. }) && !self.should_send_playing(uri, force) {
+            return;
+        }
+        self.send(live, Job::State { live: live.clone(), uri: uri.to_string(), state });
     }
 
     /// Track stopped / moved off Spotify: mark the device inactive so it doesn't linger as
     /// "playing" on spotify.com.
     pub fn stopped(self: &Arc<Self>, live: &Live) {
-        let this = self.clone();
-        let live = live.clone();
-        let handle = live.handle.clone();
-        handle.spawn(async move {
-            if !this.ensure_ready(&live).await {
-                return;
-            }
-            match live.session.spclient().put_connect_state_inactive(false).await {
-                Ok(_) => log::debug!("spotify connect: marked inactive"),
-                Err(e) => log::debug!("spotify connect: inactive PUT failed: {e}"),
-            }
+        self.send(live, Job::Inactive { live: live.clone() });
+    }
+
+    /// `true` at most once per `PLAYING_HEARTBEAT` for the same still-playing uri; always `true`
+    /// on `force` (track start, seek) or when the uri changed. Updates the heartbeat clock as a
+    /// side effect of a `true` result, since that's exactly when a report is about to go out.
+    fn should_send_playing(&self, uri: &str, force: bool) -> bool {
+        let mut guard = self.last_playing.lock().unwrap_or_else(|e| e.into_inner());
+        let send = force || guard.as_ref().is_none_or(|(last_uri, at)| last_uri != uri || at.elapsed() >= PLAYING_HEARTBEAT);
+        if send {
+            *guard = Some((uri.to_string(), Instant::now()));
+        }
+        send
+    }
+
+    fn send(self: &Arc<Self>, live: &Live, job: Job) {
+        let tx = self.jobs.get_or_init(|| {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let this = self.clone();
+            live.handle.spawn(this.run_jobs(rx));
+            tx
         });
+        let _ = tx.send(job);
+    }
+
+    /// The single consumer that makes PUTs land in send order: one job runs to completion (its
+    /// HTTP response awaited) before the next starts.
+    async fn run_jobs(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<Job>) {
+        while let Some(job) = rx.recv().await {
+            match job {
+                Job::State { live, uri, state } => {
+                    if !self.ensure_ready(&live).await {
+                        continue;
+                    }
+                    let label = state.label();
+                    let request = build_request(&live.session, &uri, state);
+                    match live.session.spclient().put_connect_state_request(&request).await {
+                        Ok(_) => log::debug!("spotify connect: state PUT accepted ({label}, {uri})"),
+                        Err(e) => log::debug!("spotify connect: state PUT failed ({label}, {uri}): {e}"),
+                    }
+                }
+                Job::Inactive { live } => {
+                    if !self.ensure_ready(&live).await {
+                        continue;
+                    }
+                    match live.session.spclient().put_connect_state_inactive(false).await {
+                        Ok(_) => log::debug!("spotify connect: marked inactive"),
+                        Err(e) => log::debug!("spotify connect: inactive PUT failed: {e}"),
+                    }
+                }
+            }
+        }
     }
 
     /// Starts the dealer and fetches `connection_id` at most once per `Live` generation — the
     /// state PUT is rejected without one. A reconnect bumps `generation`, forcing a fresh hello.
+    /// A failed hello is cached (not retried) for the rest of that generation — see `Ready`.
     async fn ensure_ready(&self, live: &Live) -> bool {
         let mut guard = self.ready.lock().await;
-        if guard.as_ref().is_some_and(|r| r.generation == live.generation) {
-            return true;
+        if let Some(r) = guard.as_ref()
+            && r.generation == live.generation
+        {
+            return r.ok;
         }
-        *guard = None;
+        let ok = Self::hello(live).await;
+        if !ok {
+            log::warn!(
+                "spotify connect: dealer hello failed for this session (generation {}); reporting disabled until the next reconnect",
+                live.generation
+            );
+        }
+        *guard = Some(Ready { generation: live.generation, ok });
+        ok
+    }
+
+    async fn hello(live: &Live) -> bool {
         if let Err(e) = live.session.dealer().start().await {
             log::warn!("spotify connect: dealer start failed: {e}");
             return false;
@@ -104,7 +175,6 @@ impl ConnectReporter {
             return false;
         };
         live.session.set_connection_id(&connection_id);
-        *guard = Some(Ready { generation: live.generation });
         log::debug!("spotify connect: registered device, connection id received");
         true
     }

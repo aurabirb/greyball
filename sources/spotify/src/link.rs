@@ -69,10 +69,19 @@ impl Slot {
     pub fn failed(&self, live: &Live) {
         if self.failures.fetch_add(1, Ordering::SeqCst) + 1 >= WEDGED_AFTER_FAILURES {
             log::warn!("spotify: {WEDGED_AFTER_FAILURES} opens failed in a row, recycling the session");
-            live.session.shutdown();
+            retire(&live.session, &live.handle);
             self.failures.store(0, Ordering::SeqCst);
         }
     }
+}
+
+/// `Session::shutdown()` only shuts down mercury/channel, not the dealer websocket + its retry
+/// task (`ConnectReporter`'s hello) — closing it explicitly here is what actually releases them,
+/// instead of leaking one per abandoned session.
+fn retire(session: &Session, handle: &tokio::runtime::Handle) {
+    session.shutdown();
+    let session = session.clone();
+    handle.spawn(async move { session.dealer().close().await });
 }
 
 fn session_config() -> SessionConfig {
@@ -168,6 +177,7 @@ impl Link {
             } else {
                 self.died_streak.saturating_add(1)
             };
+            retire(&self.session, &tokio::runtime::Handle::current());
             self.spawn_connect();
         }
     }

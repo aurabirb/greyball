@@ -875,6 +875,7 @@ impl Session {
                     let cur = p.status();
                     let target = (cur.position_ms as i64 + delta).max(0) as u32;
                     p.seek(target);
+                    self.report_now_playing(PlaybackReport::Playing { position_ms: target, duration_ms: cur.duration_ms, force: true });
                 }
                 Ok(Dispatch::Ok)
             }
@@ -1230,6 +1231,21 @@ impl Session {
         self.now_playing_rendition.as_ref().is_some_and(|(s, u, _)| s == source && u == uri)
     }
 
+    /// Tells `source`'s `MediaProvider` about a playback-state change for `uri` (e.g. Spotify
+    /// Connect-state reporting) when a provider is registered for it.
+    fn report_media(&self, source: &SourceId, uri: &str, report: PlaybackReport) {
+        if let Some(m) = self.media.get(source) {
+            m.report_playback(uri, report);
+        }
+    }
+
+    /// Same as `report_media`, for call sites that only have the currently-playing rendition.
+    fn report_now_playing(&self, report: PlaybackReport) {
+        if let Some((source, uri, _)) = &self.now_playing_rendition {
+            self.report_media(source, uri, report);
+        }
+    }
+
     fn on_player_event(&mut self, pe: &PlayerEvent) -> Result<bool> {
         match pe {
             PlayerEvent::Loading { source, uri } | PlayerEvent::Playing { source, uri } => {
@@ -1256,19 +1272,13 @@ impl Session {
                 // A tick from the previous track, still playing until the new load swaps in, is not the shown track's.
                 if self.is_now_playing(source, uri) {
                     self.update_progress(*position_ms, *duration_ms);
-                    if let Some(m) = self.media.get(source) {
-                        m.report_playback(uri, PlaybackReport::Playing { position_ms: *position_ms, duration_ms: *duration_ms });
-                    }
+                    self.report_media(source, uri, PlaybackReport::Playing { position_ms: *position_ms, duration_ms: *duration_ms, force: false });
                 }
                 Ok(true)
             }
             PlayerEvent::Paused => {
                 self.shown.write().player_state = PlayerState::Paused;
-                if let Some((source, uri, _)) = &self.now_playing_rendition
-                    && let Some(m) = self.media.get(source)
-                {
-                    m.report_playback(uri, PlaybackReport::Paused { position_ms: self.progress.0, duration_ms: self.progress.1 });
-                }
+                self.report_now_playing(PlaybackReport::Paused { position_ms: self.progress.0, duration_ms: self.progress.1 });
                 Ok(true)
             }
             PlayerEvent::Stopped => {
@@ -2164,9 +2174,7 @@ impl Session {
         self.progress = (0, track.duration_ms);
         self.now_playing_player = Some(p);
         self.now_playing_rendition = Some((r.source.clone(), r.uri.clone(), track.id));
-        if let Some(m) = self.media.get(&r.source) {
-            m.report_playback(&r.uri, PlaybackReport::Playing { position_ms: 0, duration_ms: track.duration_ms });
-        }
+        self.report_media(&r.source, &r.uri, PlaybackReport::Playing { position_ms: 0, duration_ms: track.duration_ms, force: true });
         if record && let Some(played_at) = self.queue.record_played(track.id) {
             self.append_history_entry(track, played_at, r);
         }
@@ -2234,11 +2242,7 @@ impl Session {
 
     /// Nothing left to play: silence the player (it may still be on the previous track) and clear `current`.
     fn stop_playback(&mut self) {
-        if let Some((source, uri, _)) = &self.now_playing_rendition
-            && let Some(m) = self.media.get(source)
-        {
-            m.report_playback(uri, PlaybackReport::Stopped);
-        }
+        self.report_now_playing(PlaybackReport::Stopped);
         if let Some(p) = self.now_playing_player.take() {
             log::debug!("player: nothing left to play, stopping the player");
             p.stop();

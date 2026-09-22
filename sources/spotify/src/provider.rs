@@ -49,11 +49,11 @@ impl MediaProvider for SpotifyMediaProvider {
     fn report_playback(&self, uri: &str, report: PlaybackReport) {
         let Some(live) = self.slot.current() else { return };
         match report {
-            PlaybackReport::Playing { position_ms, duration_ms } => {
-                self.connect.report(&live, uri, PlaybackState::Playing { position_ms, duration_ms });
+            PlaybackReport::Playing { position_ms, duration_ms, force } => {
+                self.connect.report(&live, uri, PlaybackState::Playing { position_ms, duration_ms }, force);
             }
             PlaybackReport::Paused { position_ms, duration_ms } => {
-                self.connect.report(&live, uri, PlaybackState::Paused { position_ms, duration_ms });
+                self.connect.report(&live, uri, PlaybackState::Paused { position_ms, duration_ms }, true);
             }
             PlaybackReport::Stopped => self.connect.stopped(&live),
         }
