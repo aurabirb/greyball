@@ -15,7 +15,7 @@ use super::text::{active_style, in_span, scroll_title};
 use super::transport::{LIKED_ICON, TRANSPORT_GAP, Transport, heart_glyph, transport_labels, transport_layout};
 
 /// Last resampled (or placeholder) waveform, keyed by (track, width, envelope length).
-pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[u8]>>;
+pub(super) type WaveformMemo = Memo<(Option<TrackId>, usize, usize), Arc<[Option<u8>]>>;
 
 /// Narrower than this the waveform is not drawn.
 const WAVE_MIN: usize = 40;
@@ -51,15 +51,16 @@ fn bar(eighths: usize) -> &'static str {
     GLYPHS[eighths.clamp(1, 8) - 1]
 }
 
-/// `envelope` (blank-padded to `BUCKETS`) reduced to `width` columns by their max, as 0..=8 eighths.
-fn resample(envelope: &[u8], width: usize) -> Arc<[u8]> {
+/// `envelope` (blank-padded to `BUCKETS`) reduced to `width` columns by their max, as 0..=8 eighths;
+/// `None` for a bucket past the filled prefix (no data yet), distinct from `Some(0)` (true silence).
+fn resample(envelope: &[u8], width: usize) -> Arc<[Option<u8>]> {
     let total = envelope.len().max(waveform::BUCKETS);
     (0..width)
         .map(|x| {
             let lo = x * total / width;
             let hi = ((x + 1) * total / width).max(lo + 1).min(total);
-            let peak = envelope.get(lo..hi.min(envelope.len())).and_then(|s| s.iter().copied().max()).unwrap_or(0);
-            (peak as usize * 8).div_ceil(255).min(8) as u8
+            let peak = envelope.get(lo..hi.min(envelope.len()))?.iter().copied().max()?;
+            Some((peak as usize * 8).div_ceil(255).min(8) as u8)
         })
         .collect()
 }
@@ -206,11 +207,8 @@ impl TabBar<'_> {
         let (start, text) = self.title(&layout);
         if let Some((wave_start, wave_w)) = layout.wave {
             let envelope = &self.status.waveform;
-            let placeholder = envelope.is_empty();
-            let levels = levels_memo.get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || {
-                if placeholder { vec![8; wave_w].into() } else { resample(envelope, wave_w) }
-            });
-            self.draw_waveform(printer, wave_start, &levels, placeholder);
+            let levels = levels_memo.get_or_build((self.status.now_playing_id, wave_w, envelope.len()), || resample(envelope, wave_w));
+            self.draw_waveform(printer, wave_start, &levels);
         }
         if !text.is_empty() {
             let played = match self.status.duration_ms {
@@ -242,22 +240,26 @@ impl TabBar<'_> {
         }
     }
 
-    fn draw_waveform(&self, printer: &Printer, start: usize, levels: &[u8], placeholder: bool) {
+    fn draw_waveform(&self, printer: &Printer, start: usize, levels: &[Option<u8>]) {
         let played = match self.status.duration_ms {
             0 => 0,
             d => levels.len() * self.status.position_ms.min(d) as usize / d as usize,
         };
         for (x, &level) in levels.iter().enumerate() {
-            if level > 0 {
-                let glyph = bar(level as usize);
-                if x < played {
-                    printer.with_color(ColorStyle::title_primary(), |p| {
-                        p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
-                    });
-                } else {
-                    let effect = if placeholder { Effect::Dim } else { Effect::Simple };
-                    printer.with_effect(effect, |p| p.print((start + x, 0), glyph));
-                }
+            let eighths = match level {
+                Some(0) => continue, // true silence: no bar
+                Some(v) => v,
+                None => 8, // no data yet: flat bar in white
+            };
+            let glyph = bar(eighths as usize);
+            if x < played {
+                printer.with_color(ColorStyle::title_primary(), |p| {
+                    p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
+                });
+            } else if level.is_none() {
+                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| p.print((start + x, 0), glyph));
+            } else {
+                printer.with_effect(Effect::Simple, |p| p.print((start + x, 0), glyph));
             }
         }
     }
