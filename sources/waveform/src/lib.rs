@@ -1,5 +1,7 @@
 //! `WaveformPlugin`: reduces a whole track to a fixed-length amplitude envelope; implements `core::ScanPlugin`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use core::audio_decode::DecodeError;
@@ -14,11 +16,14 @@ const LIVE_STEP: usize = BUCKETS / 20;
 
 pub struct WaveformPlugin {
     min_interval: Duration,
+    /// Settings-toggled: gates this decode-based plugin only. SoundCloud's
+    /// own API-provided waveform plugin doesn't decode, so it never checks this.
+    enabled: Arc<AtomicBool>,
 }
 
 impl WaveformPlugin {
-    pub fn new(min_interval_secs: u64) -> Self {
-        Self { min_interval: Duration::from_secs(min_interval_secs) }
+    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
+        Self { min_interval: Duration::from_secs(min_interval_secs), enabled }
     }
 }
 
@@ -32,7 +37,7 @@ impl ScanPlugin for WaveformPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        !track.attrs.contains_key(waveform::ATTR)
+        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key(waveform::ATTR)
     }
 
     fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {

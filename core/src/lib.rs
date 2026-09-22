@@ -37,7 +37,7 @@ pub use view_cache::{PendingRows, ResultSet};
 pub use catalog::Catalog;
 pub use config::{
     expand_home, tilde, Axis, BpmScanConfig, Config, HttpConfig, Layout, PaneLayoutConfig, PaneMode, ScanConfig, Side,
-    SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES, VisConfig,
+    SoulseekConfig, SoundcloudConfig, SpotifyConfig, TOGGLABLE_SOURCES, VisConfig, WaveformScanConfig,
 };
 pub use event::{Bus, CoreEvent, MembershipOutcome, PlayerEvent};
 pub use http::{HttpOptions, RangeReader, fetch_url_bytes, fetch_url_to};

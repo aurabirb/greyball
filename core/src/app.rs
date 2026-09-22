@@ -545,6 +545,11 @@ pub struct Session {
     /// Background scan driver (bpm, later genre/...), if any plugin is
     /// registered. Built and spawned in `session_builder::build_session`.
     pub scan: Option<Arc<crate::scan::ScanDriver>>,
+    /// Live on/off for the decode-based waveform scan plugin, shared with
+    /// `waveform::WaveformPlugin` so Settings can gate it without a restart.
+    /// Seeded from `cfg.scan.waveform.enabled`; SoundCloud's own
+    /// (API-provided, no decode) waveform plugin never consults this.
+    pub waveform_enabled: Arc<std::sync::atomic::AtomicBool>,
     /// Same cache the player and scan driver decode audio into
     /// (`session_builder::build_session` hands all three the same `Arc`) —
     /// held here too so the UI can ask "is this track's audio already on
@@ -671,6 +676,7 @@ impl Session {
                 plugin_commands.insert(c.word, p.clone());
             }
         }
+        let waveform_enabled = Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.waveform.enabled));
         let mut session = Self {
             bus,
             store,
@@ -685,6 +691,7 @@ impl Session {
             liked_local: Mutex::new(None),
             cfg: Arc::new(cfg),
             scan: None,
+            waveform_enabled,
             media_cache,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
@@ -2133,6 +2140,13 @@ impl Session {
         if let Some(scan) = &self.scan {
             scan.set_mode(if enabled { crate::scan::ScanMode::CacheOnly } else { crate::scan::ScanMode::Disabled });
         }
+    }
+
+    /// Live on/off for the decode-based waveform scan plugin (SoundCloud's own is unaffected).
+    pub fn set_waveform_gen_enabled(&mut self, enabled: bool) {
+        self.touch();
+        Arc::make_mut(&mut self.cfg).scan.waveform.enabled = enabled;
+        self.waveform_enabled.store(enabled, Ordering::Relaxed);
     }
 
 

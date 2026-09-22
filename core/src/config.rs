@@ -190,6 +190,7 @@ pub struct SoulseekConfig {
 #[serde(default)]
 pub struct ScanConfig {
     pub bpm: BpmScanConfig,
+    pub waveform: WaveformScanConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -206,6 +207,24 @@ pub struct BpmScanConfig {
     pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WaveformScanConfig {
+    /// Whether the decode-based waveform scan plugin runs at all. Live-toggled
+    /// from Settings (`Session::set_waveform_gen_enabled`), no dedicated hotkey.
+    /// SoundCloud's own waveform plugin (API-provided, no decode) ignores this.
+    /// On by default, matching `BpmScanConfig`: existing libraries already show
+    /// waveforms, so this is an opt-out for the battery-conscious rather than
+    /// an opt-in.
+    pub enabled: bool,
+}
+
+impl Default for WaveformScanConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Where an open optional pane (Log, Settings) renders.
