@@ -70,6 +70,15 @@
   decode-based generic plugin needs gating. Follow the existing `ScanConfig`/`BpmScanConfig.enabled`
   pattern (`core/src/config.rs:191-207`) for the config/state.toml shape and the Settings-screen wiring
   (`ui/src/view/settings.rs:84-86`, `159-166`).
+- [ ] The fallback waveform (no envelope yet) and the not-yet-streamed tail of a partially-loaded
+  waveform should both render as plain white, not the current styling. Today (`ui/src/view/tab_bar.rs`):
+  the fallback (`placeholder = envelope.is_empty()`, ~line 208) draws flat max-height bars dimmed via
+  `Effect::Dim` (~line 258) rather than a distinct color; the streaming case (a partial envelope fed
+  from `core::waveform::live`, `ui/src/view/status_line.rs:93-96`) has no placeholder handling at all —
+  `resample` (~line 55-65) returns `peak = 0` for buckets past the filled prefix, and `draw_waveform`'s
+  `level > 0` gate (~line 251) means that tail draws no glyph, indistinguishable from true silence. Make
+  both cases explicitly draw white bars (not dimmed default, not blank) so "unknown" always reads the
+  same regardless of which case produced it.
 - [ ] SoundCloud playlist creation (`POST /playlists`); needs a create-playlist hook on the `Source` trait first.
 - [ ] SoundCloud: show charts and genre explore playlists (their own endpoints) and station shelves from `/mixed-selections` in the Playlists view.
 - [ ] `:open` for SoundCloud sets and short links: `soundcloud.com/<user>/sets/<slug>` needs a
