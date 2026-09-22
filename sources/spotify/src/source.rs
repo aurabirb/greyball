@@ -149,6 +149,10 @@ impl Source for SpotifySource {
         self.api.track(&r.id).map_err(src_err)
     }
 
+    fn recently_played(&self) -> Result<Vec<(Track, chrono::DateTime<chrono::Utc>)>> {
+        self.api.recently_played(50).map_err(src_err)
+    }
+
     fn browse_uri(&self, uri: &str) -> Option<BrowseNode> {
         let r = SpotifyRef::parse(uri)?;
         match r.kind {

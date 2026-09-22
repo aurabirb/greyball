@@ -3427,6 +3427,7 @@ dependencies = [
 name = "sources-spotify"
 version = "0.4.9"
 dependencies = [
+ "chrono",
  "core",
  "futures",
  "hmac",

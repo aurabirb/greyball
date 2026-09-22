@@ -2,6 +2,8 @@
 
 use std::io::{Read, Seek};
 
+use chrono::{DateTime, Utc};
+
 use crate::types::{
     ItemKind, Playlist, PlaylistId, Rendition, SearchQuery, SourceId, Track, TrackId,
 };
@@ -161,6 +163,15 @@ pub trait Source: Send + Sync {
     /// (Spotify's Liked Songs lists newest first). Default: appended.
     fn adds_first(&self, _node: &BrowseNode) -> bool {
         false
+    }
+
+    /// Best-effort backfill of plays made through this account from *other* clients (e.g.
+    /// Spotify's own "Recently Played") as `(Track, played_at)` pairs, in any order —
+    /// `Session::merge_remote_history` folds them into medley's local history so it reflects
+    /// plays made elsewhere too, not just through medley itself. Blocking, like `resolve`/
+    /// `browse` — callers must not run this on the UI thread. Default: no such API.
+    fn recently_played(&self) -> Result<Vec<(Track, DateTime<Utc>)>> {
+        Err(Error::Unsupported("recently_played"))
     }
 }
 

@@ -477,6 +477,18 @@ const HOTKEY_MEMO_LOADING_RECHECK: Duration = Duration::from_secs(1);
 pub const PLUGIN_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const UPDATE_CHECKS_PER_DAY: f64 = 3.0;
 
+/// How often `app/src/main.rs`'s background thread re-pulls a source's own remote play history
+/// (e.g. Spotify's "Recently Played") and folds new plays into medley's local history — see
+/// `Session::merge_remote_history`. That endpoint only ever exposes the ~50 most recent plays, so
+/// this needs to run periodically to avoid losing entries between runs; long enough not to hammer
+/// it, short enough that piling up more than 50 external plays between two runs (the only way one
+/// is silently missed) stays unlikely for normal listening.
+pub const RECENTLY_PLAYED_MERGE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// A remote play within this of an existing history entry for the same track counts as the same
+/// play (Spotify's `played_at` and medley's own recorded timestamp for the same play won't be
+/// byte-identical) — two distinct plays of the same track are normally minutes apart.
+const REMOTE_PLAY_DEDUP_WINDOW: chrono::Duration = chrono::Duration::seconds(5);
+
 /// Why `Session::bind_hotkey` refused.
 #[derive(Debug)]
 pub enum BindError {
@@ -1605,6 +1617,75 @@ impl Session {
         match file.and_then(|mut f| f.write_all(text.as_bytes())) {
             Ok(()) => {}
             Err(e) => self.warn("history", &format!("failed to append to {}: {e}", self.history_path.display())),
+        }
+    }
+
+    /// Pulls each registered source's own remote play history (e.g. Spotify's "Recently
+    /// Played") and folds new plays into `history_path` — called by `app/src/main.rs`'s
+    /// background timer with `remote` already fetched off the session lock (a source's
+    /// `recently_played` is blocking network I/O, like `resolve`/`browse`); everything here is
+    /// local store/disk work, cheap enough to run under the lock like any other command. Each
+    /// remote play is resolved to a local `TrackId` the same way any other fresh hit is
+    /// (`Catalog::ingest`), then skipped if a history entry for that track already exists within
+    /// `REMOTE_PLAY_DEDUP_WINDOW` of it. Returns how many new entries were actually added.
+    pub fn merge_remote_history(&mut self, remote: Vec<(Track, DateTime<Utc>)>) -> usize {
+        if remote.is_empty() {
+            return 0;
+        }
+        let mut combined = load_history_file(&self.history_path);
+        let mut added = 0usize;
+        for (track, played_at) in remote {
+            let tid = match self.catalog.ingest(track) {
+                Ok(id) => id,
+                Err(e) => {
+                    self.warn("history", &format!("couldn't resolve a remote play: {e}"));
+                    continue;
+                }
+            };
+            let dup = combined
+                .iter()
+                .any(|(id, at)| *id == tid && (*at - played_at).abs() <= REMOTE_PLAY_DEDUP_WINDOW);
+            if dup {
+                continue;
+            }
+            combined.push((tid, played_at));
+            added += 1;
+        }
+        if added == 0 {
+            return 0;
+        }
+        // Remote plays can be older than the most recent native entry — an in-order append can't
+        // interleave them, so the whole file (small; capped by what `MAX_HISTORY` ever restores
+        // anyway) is rewritten in the merged chronological order instead.
+        combined.sort_by_key(|(_, at)| *at);
+        self.rewrite_history_file(&combined);
+        self.queue.restore_history(combined);
+        added
+    }
+
+    /// Rewrites `history_path` from scratch in `entries`' order (oldest first) — the one caller,
+    /// `merge_remote_history`, needs this instead of a plain append because a merged remote play
+    /// can land anywhere in the timeline, not just at the end. Written to a temp file and renamed
+    /// over the original so a crash mid-write can't leave a truncated log.
+    fn rewrite_history_file(&mut self, entries: &[(TrackId, DateTime<Utc>)]) {
+        let mut text = write_header(&PlaylistMeta {
+            id: None,
+            name: "__history__".to_string(),
+            notes: String::new(),
+        });
+        for (id, played_at) in entries {
+            let Ok(Some(track)) = self.store.get_track(*id) else { continue };
+            let primary = self
+                .export_primary_uri(&track)
+                .unwrap_or_else(|| track.renditions.first().map(|r| r.uri.clone()).unwrap_or_default());
+            let mut entry = build_entry(&track, primary);
+            entry.played_at = Some(*played_at);
+            text.push_str(&write_entry(&entry));
+        }
+        let tmp = self.history_path.with_extension("tmp");
+        let result = std::fs::write(&tmp, &text).and_then(|()| std::fs::rename(&tmp, &self.history_path));
+        if let Err(e) = result {
+            self.warn("history", &format!("failed to rewrite {}: {e}", self.history_path.display()));
         }
     }
 

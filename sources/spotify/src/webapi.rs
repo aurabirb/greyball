@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use core::{RateGate, RemotePage, Track};
 use serde::Deserialize;
 
@@ -211,6 +212,19 @@ struct AlbumTracks {
 #[derive(Deserialize)]
 struct SeveralTracks {
     tracks: Vec<Option<ApiTrack>>,
+}
+
+/// `/v1/me/player/recently-played` item shape: the track object sits directly under `track`,
+/// alongside the ISO 8601 timestamp of that specific play.
+#[derive(Deserialize)]
+struct RecentlyPlayedItem {
+    track: ApiTrack,
+    played_at: String,
+}
+
+#[derive(Deserialize)]
+struct RecentlyPlayed {
+    items: Vec<RecentlyPlayedItem>,
 }
 
 impl ApiTrack {
@@ -637,6 +651,24 @@ impl WebApi {
     pub fn remove_saved_track(&self, track_id: &str) -> Result<(), String> {
         let url = format!("{API}/me/tracks");
         self.delete(&url, &serde_json::json!({ "ids": [track_id] }))
+    }
+
+    /// `GET /v1/me/player/recently-played` — the current user's most recent plays across every
+    /// Spotify client (not just medley), up to `limit` (capped at 50, the API's own ceiling —
+    /// there's no fuller history behind it, so unlike `saved_tracks_page`/`playlist_tracks_page`
+    /// there's no `offset`/cursor walk here worth building: one page is the whole answer).
+    pub fn recently_played(&self, limit: usize) -> Result<Vec<(Track, DateTime<Utc>)>, String> {
+        let url = format!("{API}/me/player/recently-played?limit={}", limit.min(50));
+        let body: RecentlyPlayed = self.get(&url)?.json().map_err(|e| e.to_string())?;
+        Ok(body
+            .items
+            .into_iter()
+            .filter_map(|item| {
+                let played_at = item.played_at.parse::<DateTime<Utc>>().ok()?;
+                let track = item.track.into_track()?;
+                Some((track, played_at))
+            })
+            .collect())
     }
 }
 

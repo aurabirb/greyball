@@ -31,7 +31,7 @@ mod view_cache;
 
 pub use app::{
     BindError, BuiltinAction, Command, Dispatch, HotkeyMembership, HotkeyTarget, LastPlayed, LikeKind, LikeMark, ListRef,
-    PLUGIN_HEALTH_CHECK_INTERVAL, Session, cache_rendition,
+    PLUGIN_HEALTH_CHECK_INTERVAL, RECENTLY_PLAYED_MERGE_INTERVAL, Session, cache_rendition,
 };
 pub use view_cache::{PendingRows, ResultSet};
 pub use catalog::Catalog;

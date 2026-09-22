@@ -68,6 +68,9 @@ const WEBAPI_SCOPES: &[&str] = &[
     // Needed for `webapi.rs`'s save_track/remove_saved_track (Liked Songs,
     // `/v1/me/tracks`) — without this the like/unlike hotkey 403s.
     "user-library-modify",
+    // Needed for `webapi.rs`'s recently_played (`/v1/me/player/recently-played`) — the
+    // remote-history merge (`Session::merge_remote_history`) 403s without it.
+    "user-read-recently-played",
 ];
 
 /// 60 s slack so a token that is about to expire is treated as expired.

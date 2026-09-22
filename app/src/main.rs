@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use medley_core::{
     BrowseNode, Bus, BuiltinAction, Config, HotkeyTarget, LastPlayed, Layout, LogBuf, MediaCache, Player, SharedMedia,
-    PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, TrackId, Uuid,
+    PlaylistId, Plugin, ScanMode, ScanPlugin, Source, SourceId, Store, TOGGLABLE_SOURCES, Track, TrackId, Uuid,
 };
 #[cfg(any(feature = "spotify", feature = "soundcloud", feature = "soulseek"))]
 use medley_core::{PluginHealth, Wiring};
@@ -435,6 +436,38 @@ fn spawn_plugin_health_timer(session: Arc<Mutex<medley_core::Session>>, bus: Bus
         .expect("failed to spawn plugin-health thread");
 }
 
+/// Background thread, independent of the UI: periodically pulls each registered source's own
+/// remote play history (e.g. Spotify's "Recently Played") and folds new plays into medley's
+/// local history — see `medley_core::Session::merge_remote_history`. `recently_played` is
+/// blocking network I/O, so (like `spawn_plugin_health_timer`'s `probe()`) it runs with the
+/// session lock released; only the ingest + file rewrite happen under the lock.
+fn spawn_recently_played_merge_timer(session: Arc<Mutex<medley_core::Session>>) {
+    std::thread::Builder::new()
+        .name("recently-played".into())
+        .spawn(move || {
+            loop {
+                let sources: Vec<Arc<dyn Source>> = session.lock().unwrap().sources.values().cloned().collect();
+                let remote: Vec<(Track, DateTime<Utc>)> = sources
+                    .iter()
+                    .flat_map(|s| {
+                        s.recently_played().unwrap_or_else(|e| {
+                            log::debug!("recently-played: {}: {e}", s.id());
+                            Vec::new()
+                        })
+                    })
+                    .collect();
+                if !remote.is_empty() {
+                    let added = session.lock().unwrap().merge_remote_history(remote);
+                    if added > 0 {
+                        log::info!("recently-played: merged {added} play(s) into history");
+                    }
+                }
+                std::thread::sleep(medley_core::RECENTLY_PLAYED_MERGE_INTERVAL);
+            }
+        })
+        .expect("failed to spawn recently-played thread");
+}
+
 fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let (mut cfg, mut config_problems) = load_config();
     // Diff base for `source_overrides` at shutdown — captured before Settings-toggled overrides apply.
@@ -639,6 +672,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     session.check_for_update();
     let session = Arc::new(Mutex::new(session));
     spawn_plugin_health_timer(session.clone(), bus.clone());
+    spawn_recently_played_merge_timer(session.clone());
 
     let mut last_played = load_last_played();
     siv.set_theme(ui::theme::load(&theme));
