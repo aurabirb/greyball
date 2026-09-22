@@ -252,12 +252,12 @@ impl TabBar<'_> {
                 None => 8, // no data yet: flat bar in white
             };
             let glyph = bar(eighths as usize);
-            if x < played {
+            if level.is_none() {
+                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| p.print((start + x, 0), glyph));
+            } else if x < played {
                 printer.with_color(ColorStyle::title_primary(), |p| {
                     p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
                 });
-            } else if level.is_none() {
-                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| p.print((start + x, 0), glyph));
             } else {
                 printer.with_effect(Effect::Simple, |p| p.print((start + x, 0), glyph));
             }
