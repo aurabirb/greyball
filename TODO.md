@@ -15,29 +15,6 @@
 ### Owner's list — do these first, in this order
 ### Bugs
 - [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
-- [ ] `:spotify addlogin` with no arguments should try a Web API client id that isn't already
-  logged in, picked from an embedded list, instead of always the one fixed default — a fix path for
-  a user to reach for when Spotify auth is failing. Today `resolve_client_id`
-  (`sources/spotify/src/auth.rs:83-89`) always resolves an omitted `client_id` argument to
-  `NCSPOT_CLIENT_ID` (ncspot's published Web API client id). Restore the second embedded id, the
-  `blueball`/medley app on the Spotify developer dashboard, removed in `93a3bf8` — it was dropped
-  entirely because it was wrongly being used for the *librespot streaming session*, not because the
-  id itself was bad; it's Web API only (Development mode, no Web Playback SDK/streaming grant) and
-  is exactly the kind of second Web API fallback this item wants. Its former constants (`git show
-  93a3bf8~1:sources/spotify/src/auth.rs`): `WEBAPI_CLIENT_ID = "89485716cfd24928b4d7ffc2bee5e07e"`,
-  and — unlike `MUSIC_CLIENT_ID`/`NCSPOT_CLIENT_ID`'s loopback-any-port matching — this one needs an
-  exact, byte-for-byte redirect URI match registered against it on the dashboard:
-  `WEBAPI_REDIRECT_URI = "http://127.0.0.1:3121/callback"` (`librespot_oauth` parses the port back
-  out of this string itself for its local listener, so passing the full URI through is enough — see
-  the removed `webapi_redirect_uri()` in that same old revision for how it was wired). When
-  `addlogin` gets no `client_id` argument, walk the app's embedded client-id list (ncspot, then
-  blueball) in order and use the first one with no stored credential pair yet (cross-check against
-  `load_token_store`'s `TokenStore::accounts` — each `CachedToken` already records the `client_id`
-  that minted it), not always the same fixed one; if every embedded id already has a stored pair,
-  fall back to the first one in the list (today's behavior). Store the embedded ids as a single bare
-  ordered list of strings (e.g. `const EMBEDDED_WEBAPI_CLIENT_IDS: &[&str]`), not a pair of named
-  constants — the owner will add more ids to it later, unlabeled, so the shape needs to support that
-  without a name per entry.
 - [ ] Connect-state fix landed (`18aafad`, `sources/spotify/src/connect_state.rs`:
   `hidden`/`connect_disabled` → `false`, `provider: "context"` added) after the root cause was
   confirmed end-to-end against the real Spotify backend by a standalone research script — but never
