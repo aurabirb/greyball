@@ -206,10 +206,12 @@ Design: `docs/collections.md`.
   2. **BPM and waveform independently decode the same track from scratch** — no shared PCM/decode
      cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/`decode_once` job model).
      Sequential, not simultaneous, but real overlapping decode cost in a fresh track's first 60s.
-  3. **`ScanDriver::new` hardcodes `ScanMode::Active`** on every launch, not read from persisted
-     config (`core/src/scan.rs:219-236`) — actively *fetches* (downloads) audio purely to analyze
-     unplayed tracks too, stacking network + CPU cost continuously whenever there's a backlog; also
-     means playback and the background walk's decode pipelines run concurrently.
+  3. **FIXED (`743e137`, reviewed clean)**: `ScanDriver::new` used to hardcode `ScanMode::Active` on
+     every launch instead of the persisted setting, corrected via a fragile call-order-dependent
+     post-hoc `set_mode`; now takes the initial mode as a constructor parameter, read from
+     `state.toml` before the driver is built. Verified true no-op in the deployed configuration
+     before this fix (empty plugin list gated all candidate population regardless of mode) — this
+     was an explicit-contract cleanup, not a live behavior bug in practice, but still correct to fix.
   4. **`BpmPlugin::analyze`**'s ~150M-flop/track FFT pass (`sources/bpm/src/lib.rs`, `ANALYSIS_SECONDS
      = 60.0`) is genuine necessary work, but has minor waste: decodes stereo then immediately
      downmixes to mono (only needs mono), assumes a hardcoded 44.1kHz sample rate regardless of the
