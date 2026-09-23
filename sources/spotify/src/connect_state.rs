@@ -50,9 +50,7 @@ impl PlaybackState {
 struct Ready {
     generation: u32,
     ok: bool,
-    /// Whether the first state PUT for this generation has gone out yet — it must be tagged
-    /// `NEW_DEVICE` (not `PLAYER_STATE_CHANGED`) or the device never registers in Spotify's
-    /// connect-state cluster, even though the PUT itself reports success.
+    /// First PUT of the generation must be `NEW_DEVICE` or the device never registers.
     first_state_put_sent: bool,
 }
 
@@ -118,11 +116,10 @@ impl ConnectReporter {
         while let Some(job) = rx.recv().await {
             match job {
                 Job::State { live, uri, state } => {
-                    if !self.ensure_ready(&live).await {
+                    let Some(reason) = self.state_put_reason(&live).await else {
                         continue;
-                    }
+                    };
                     let label = state.label();
-                    let reason = self.state_put_reason(&live).await;
                     let request = build_request(&live.session, &uri, state, reason);
                     match live.session.spclient().put_connect_state_request(&request).await {
                         Ok(_) => log::debug!("spotify connect: state PUT accepted ({label}, {uri})"),
@@ -134,7 +131,11 @@ impl ConnectReporter {
                         continue;
                     }
                     match live.session.spclient().put_connect_state_inactive(false).await {
-                        Ok(_) => log::debug!("spotify connect: marked inactive"),
+                        Ok(_) => {
+                            log::debug!("spotify connect: marked inactive");
+                            // Backend tears down the cluster registration on deregister, so re-arm NEW_DEVICE.
+                            self.reset_first_put(&live).await;
+                        }
                         Err(e) => log::debug!("spotify connect: inactive PUT failed: {e}"),
                     }
                 }
@@ -147,34 +148,46 @@ impl ConnectReporter {
     /// A failed hello is cached (not retried) for the rest of that generation — see `Ready`.
     async fn ensure_ready(&self, live: &Live) -> bool {
         let mut guard = self.ready.lock().await;
-        if let Some(r) = guard.as_ref()
-            && r.generation == live.generation
-        {
-            return r.ok;
-        }
-        let ok = Self::hello(live).await;
-        if !ok {
-            log::warn!(
-                "spotify connect: dealer hello failed for this session (generation {}); reporting disabled until the next reconnect",
-                live.generation
-            );
-        }
-        *guard = Some(Ready { generation: live.generation, ok, first_state_put_sent: false });
-        ok
+        Self::ensure_generation(&mut guard, live).await
     }
 
-    /// `NEW_DEVICE` for the first state PUT of the current generation (registers the device in
-    /// Spotify's connect-state cluster), `PLAYER_STATE_CHANGED` for every one after — see `Ready`.
-    async fn state_put_reason(&self, live: &Live) -> EnumOrUnknown<PutStateReason> {
+    /// Shared core of `ensure_ready`/`state_put_reason`: re-hellos on a generation bump, caching the result.
+    async fn ensure_generation(guard: &mut Option<Ready>, live: &Live) -> bool {
+        if guard.as_ref().is_none_or(|r| r.generation != live.generation) {
+            let ok = Self::hello(live).await;
+            if !ok {
+                log::warn!(
+                    "spotify connect: dealer hello failed for this session (generation {}); reporting disabled until the next reconnect",
+                    live.generation
+                );
+            }
+            *guard = Some(Ready { generation: live.generation, ok, first_state_put_sent: false });
+        }
+        guard.as_ref().is_some_and(|r| r.ok)
+    }
+
+    /// Ensures readiness and returns the reason for this PUT (`NEW_DEVICE` first, then `PLAYER_STATE_CHANGED`), or `None` if not ready.
+    async fn state_put_reason(&self, live: &Live) -> Option<EnumOrUnknown<PutStateReason>> {
+        let mut guard = self.ready.lock().await;
+        if !Self::ensure_generation(&mut guard, live).await {
+            return None;
+        }
+        let r = guard.as_mut().expect("ensure_generation set it");
+        if r.first_state_put_sent {
+            return Some(EnumOrUnknown::new(PutStateReason::PLAYER_STATE_CHANGED));
+        }
+        r.first_state_put_sent = true;
+        Some(EnumOrUnknown::new(PutStateReason::NEW_DEVICE))
+    }
+
+    /// Re-arms `NEW_DEVICE` after going inactive, in case the backend drops the cluster registration.
+    async fn reset_first_put(&self, live: &Live) {
         let mut guard = self.ready.lock().await;
         if let Some(r) = guard.as_mut()
             && r.generation == live.generation
-            && !r.first_state_put_sent
         {
-            r.first_state_put_sent = true;
-            return EnumOrUnknown::new(PutStateReason::NEW_DEVICE);
+            r.first_state_put_sent = false;
         }
-        EnumOrUnknown::new(PutStateReason::PLAYER_STATE_CHANGED)
     }
 
     async fn hello(live: &Live) -> bool {
