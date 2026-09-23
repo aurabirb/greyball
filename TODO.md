@@ -15,6 +15,18 @@
 ### Owner's list — do these first, in this order
 ### Bugs
 - [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
+- [ ] `:spotify addlogin` with no arguments should try a Web API client id that isn't already
+  logged in, picked from an embedded list, instead of always the one fixed default — a fix path for
+  a user to reach for when Spotify auth is failing. Today `resolve_client_id`
+  (`sources/spotify/src/auth.rs:83-89`) always resolves an omitted `client_id` argument to
+  `NCSPOT_CLIENT_ID` (ncspot's published Web API client id). Add a second embedded client id for
+  medley itself alongside `NCSPOT_CLIENT_ID` (the owner referred to it as "blueball/medley" —
+  **needs the owner to supply the actual registered client id value**, this can't be guessed/
+  invented), and when `addlogin` gets no `client_id` argument, pick whichever of the embedded ids
+  has no stored credential pair yet (cross-check against `load_token_store`'s `TokenStore::accounts`
+  — each `CachedToken` already records the `client_id` that minted it) rather than always defaulting
+  to the same one. If every embedded id already has a stored pair, fall back to the current
+  behavior (ncspot).
 - [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
   in the Spotify Web API (`/v1/me/player/currently-playing`, `/v1/me/player/recently-played`), with
   no visible error. Likely cause: `ConnectReporter::build_request`
