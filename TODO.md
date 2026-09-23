@@ -130,6 +130,15 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] A "cached music" special playlist/source — a browsable list of every track medley already has
+  locally cached (`core::MediaCache`, `core/src/media_cache.rs`), regardless of which real source it
+  came from. Owner's framing: build it as a normal plugin, the same shape as `http`/`soundcloud`
+  (implementing `core::Source`, `core/src/traits.rs:81`; see `TOGGLABLE_SOURCES`,
+  `core/src/config.rs:50`, for how a source gets a Settings on/off toggle) rather than a special-cased
+  UI feature — `search`/`resolve`/etc. over the cache instead of a network. Figure out what
+  `MediaCache` already exposes to enumerate cached files by source+uri (`cached_path`, and whatever
+  backs `prune_orphans`'s own enumeration) vs. what's missing to map a cached file back to its
+  original `Track`/catalog entry for display.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
@@ -251,7 +260,20 @@ Design: `docs/collections.md`.
      any code change here.
   2. **BPM and waveform independently decode the same track from scratch** — no shared PCM/decode
      cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/`decode_once` job model).
-     Sequential, not simultaneous, but real overlapping decode cost in a fresh track's first 60s.
+     Sequential, not simultaneous. **Measured** (8 real MP3 tracks, temporary instrumentation,
+     reverted): BPM's total analyze time splits ~62% decode / ~38% FFT DSP (`onset_envelope`) — the
+     DSP share is real, not negligible, contrary to Step 1's "cost is entirely decode" assumption for
+     this plugin specifically (waveform's own cost genuinely is ~99%+ decode, that part of the
+     assumption held). BPM only decodes the first 60s; waveform decodes the whole track, so full
+     decode-sharing wouldn't let waveform skip anything — but the *first 60s gets decoded twice*
+     today (once per plugin); sharing just that overlapping window would save ~4s/track, ~60% of
+     BPM's total per-track cost — a real, worthwhile saving if this is ever picked up. Also found:
+     `push_frames` (interleaved-buffer materialization into `Vec<[f32;2]>`) is its own real ~8% cost
+     bucket in both plugins, independent of decode and DSP — pure format-conversion/allocation
+     overhead, paid by BPM even though it only needs mono. Demuxing and each plugin's own per-block
+     callback (mono downmix, RMS accumulation) are both genuinely negligible (<1% each). Owner
+     decided (2026-09-23) not to pursue the shared-decode implementation right now — left here as a
+     scoped, numbers-backed future option, not queued.
   3. **FIXED (`743e137`, reviewed clean)**: `ScanDriver::new` used to hardcode `ScanMode::Active` on
      every launch instead of the persisted setting, corrected via a fragile call-order-dependent
      post-hoc `set_mode`; now takes the initial mode as a constructor parameter, read from
