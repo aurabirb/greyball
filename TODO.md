@@ -286,9 +286,6 @@ Design: `docs/collections.md`.
   unrelated walk attempt, since `last_run` is shared per-plugin between the background walk and the
   priority/now-playing worker. A real fix likely needs a separate, smaller CPU-pacing interval
   distinct from the network cooldown, and/or per-worker rather than per-plugin `last_run` tracking.
-- [ ] `AudioTap` (`player/src/tap.rs`) runs unconditionally for every played track (one mutex lock +
-  copy every ~23ms) even when the Vis pane has never been opened — cheap per sample, but a permanent
-  tax on all playback; likely direction is lazy-init behind Vis actually being opened once.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
