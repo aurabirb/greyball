@@ -138,12 +138,23 @@
   track list window (same paths as Search results). It must work in any placement — docked next to
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
-- [ ] Make sure the local filter (`/`) works in every panel that shows a track list — Now Playing,
-  Playlists (and an open playlist), Search, History, Queue, and the similar-tracks panel above — and in
-  Log, in every placement (tab, docked, floating), filtering that window's own list through the same
-  `TrackList` path (Log through its existing filter). `/` on a window that has its own filter filters
-  that window; it jumps to the Search window only from a window with nothing to filter (e.g. Settings).
-  List the panels where it does nothing or acts on the wrong window, then fix them.
+- [ ] `/` ("view filter") is broken/inconsistent across windows and needs a redesign, not just a
+  bugfix pass: on some windows it doesn't filter at all, and on others it wrongly persists its state
+  after Enter instead of being a fully ephemeral filter over the window's current contents.
+  Target design: `/` always means "fuzzy-filter the list currently displayed in the focused window"
+  and must never jump to the global Search window, with exactly one exception — when the Search
+  window is open and empty, `/` focuses the actual search input field there instead (make that
+  global search input a real focusable input field rather than however it's wired today, and have
+  `/` just focus it). Once search results are showing, `/` opens a second filter layer on top of
+  those results (plain substring/fuzzy match on the result list, same as any other window's view
+  filter); Enter locks that filter in place so the filtered list can be browsed/acted on normally;
+  Esc or any command key resets/clears the view filter for that window. The view filter is a
+  property of the window (its list/results at the time), not of the app — every window that shows a
+  track list (Now Playing, Playlists/an open playlist, Search results, History, Queue, the
+  similar-tracks panel, Log) needs its own independent view-filter state, in every placement (tab,
+  docked, floating), through the same `TrackList` path (Log through its existing filter). Audit which
+  panels currently do nothing or act on the wrong window before implementing, then fix all of them
+  under this one model.
 
 ### Album support
 Design: `docs/collections.md`.
