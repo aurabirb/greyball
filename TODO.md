@@ -63,6 +63,11 @@
   starts) sometimes stall near the end until librespot's 8 s read timeout; `SpotifyMediaProvider`'s reader
   reopens and finishes, but a stall while the playing track is the one behind shows as buffering. Find out
   whether librespot's fetch loop or the CDN causes it, and consider cutting a released Spotify fetch at once.
+- [ ] Rapid/repeated scrubbing (seeking) causes an ALSA underrun: `ALSA lib pcm.c:8787:(snd_pcm_recover)
+  [error.pcm] underrun occurred`, seen alongside a burst of Spotify stream reads all hitting `Deadline
+  expired before operation could complete { wait timeout exceeded }` and dropping `Fetching -> Buffering
+  -> Cancelled` for several tracks at once while a priority track scan stalls. Find the actual audio
+  glitch/dropout this produces during heavy scrubbing and fix the underrun, not just the log noise.
 - [ ] Gapless playback as a generic preload: `StreamEngine::open(next, Intent::Play)` shortly before the
   current track ends; `RodioPlayer` keeps `Player::preload`.
 - [ ] A "downloading" mark on rows from the engine's stream status.
