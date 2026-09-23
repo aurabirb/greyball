@@ -40,18 +40,25 @@
   without a name per entry.
 - [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
   in the Spotify Web API (`/v1/me/player/currently-playing`, `/v1/me/player/recently-played`), with
-  no visible error. Likely cause: `ConnectReporter::build_request`
-  (`sources/spotify/src/connect_state.rs`) always sends `PutStateReason::PLAYER_STATE_CHANGED`, even
-  for the very first state PUT after a fresh dealer hello (`ensure_ready`). Prior art for this same
-  minimal (no-spirc) PutStateRequest approach — Cadence (`ForeverInLaw/windence#20`) — sends the
-  first state PUT after session+dealer come up with reason `NEW_DEVICE`, and only switches to
-  `PLAYER_STATE_CHANGED` for updates after that; without a `NEW_DEVICE`-tagged PUT first, Spotify's
-  backend has nothing to attach later `PLAYER_STATE_CHANGED` PUTs to, so they can 200 OK while never
-  registering the device. Fix: track (alongside `Ready`, per generation) whether the first state PUT
-  for this dealer session has gone out yet, and force `PutStateReason::NEW_DEVICE` on that one,
-  `PLAYER_STATE_CHANGED` after. Verify against a real playback session (`medley.log` at debug) once
-  changed — confirm the PUT is accepted and the track then actually appears on spotify.com/the Web
-  API before considering this fixed.
+  no visible error — reporting to Spotify's connect-state/recently-played still doesn't seem to
+  actually work despite the fix below, so this needs real validation, not another guess at the
+  protocol. `ConnectReporter` (`sources/spotify/src/connect_state.rs`) already sends the first state
+  PUT per dealer-hello generation with `PutStateReason::NEW_DEVICE` (not always
+  `PLAYER_STATE_CHANGED`, per prior art — Cadence, `ForeverInLaw/windence#20`) and resets that on
+  `Job::Inactive`, but this was never confirmed against Spotify's actual backend, only that the code
+  builds and the PUT gets a 200. Before touching `connect_state.rs` again: write a separate,
+  throwaway script (own scratch dir, not part of the medley build/workspace) that drives the same
+  sequence directly against Spotify's endpoints — dealer hello for a `connection_id`, a
+  `NEW_DEVICE`-reason `PutStateRequest` for a real/fake track uri, then `PLAYER_STATE_CHANGED`
+  follow-ups — then polls `/v1/me/player/recently-played` (and `/currently-playing` while "playing")
+  after a real interval to see whether it actually registers. Iterate the script's request shape
+  (fields, ordering, timing between the hello and the first PUT, anything else Spotify's backend
+  might be silently rejecting) until either it works or a real blocker is identified (e.g. a
+  capability/scope Spotify requires that this device intentionally doesn't advertise, a field this
+  minimal non-spirc approach can't supply, a rate/dedup rule). Only port whatever sequence the
+  script proves works back into `connect_state.rs` — don't hand-edit the real code by guesswork
+  again. If a genuine blocker is found (not just "we haven't tried X yet"), document it here instead
+  of continuing to iterate.
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio
