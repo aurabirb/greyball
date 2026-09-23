@@ -163,31 +163,43 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Performance
-- [ ] Investigate high idle and analysis CPU usage in medley. Known strong lead: analyzing a track
-  that has no cached waveform audibly spins up the fan (owner-observed) — the waveform/BPM scan path
-  (`sources/bpm` and wherever the waveform scan itself lives) is a prime suspect and should be
-  profiled first, alongside idle and navigation. Step 1 (read-only, can fan out several subagents):
-  find which parts of the code are responsible for CPU use while idle, during playback (including
-  skipping tracks every 30 seconds), and during navigation; inspect the scanner plugins' code too.
-  Look for duplicated work, unused/stale computations, event storms, and frequent updates that could
-  be batched, delayed, or removed. Step 2: measure a clean baseline in each of three states — idle,
-  playback (playing, and skipping tracks every 30 seconds), and scanning (a track with no cached
-  waveform analyzed) — using the same methodology each time. Step 3: apply the fixes the
-  investigation turned up. Step 4: re-measure all three states the same way and compare against the
-  baseline. Report findings as simple markdown lists.
-  Architectural lead worth profiling specifically (found while answering an owner question, not yet
-  measured): the whole UI redraws on a real `set_fps` timer, `ui::BASELINE_FPS = 4`
-  (`ui/src/lib.rs:49`, `app/src/main.rs:719`) — every ~250ms, idle or not, cursive fires
-  `Event::Refresh` and the app rebuilds a full `Frame` (`ui/src/view/frame.rs`). Most of that frame
-  is memoized behind `Session::revision()`/`warnings_revision()` (`Chrome::get_or_build`,
-  `frame.rs:44`), so it's cheap when nothing changed — but `StatusLine::assemble`
-  (`ui/src/view/status_line.rs:80`, explicitly commented "Live per-tick data, never memoized") is
-  NOT behind that cache and runs in full on every single one of those ~4/s ticks regardless of
-  whether anything is actually playing or changing, including a `waveform::live(id)` lookup
-  (`core/src/waveform.rs`) and `s.player_status()`/`bpm_status_tag`/`s.liked_mark(id)`. Worth
-  measuring whether this unconditional per-tick work (times every window's own `relayout`/rows
-  rebuild that also runs each frame, per the existing UI-reactivity TODO further down) is a
-  meaningful idle-CPU contributor on its own, separate from the scan-plugin lead above.
+- [ ] High idle/analysis CPU usage — investigation (Step 1) done, read-only, findings below; Step 2
+  (baseline measurement in idle / playback+30s-skips / scanning-an-uncached-track, same methodology
+  each time), Step 3 (apply fixes), Step 4 (re-measure, compare) still to do. The 4Hz `set_fps`
+  timer (`ui::BASELINE_FPS`, `ui/src/lib.rs:49`) and the unmemoized per-tick `StatusLine::assemble`
+  (`ui/src/view/status_line.rs:80`) were both confirmed real but individually cheap — not the
+  fan-noise driver. Ranked findings, most likely cause first:
+  1. **`WaveformPlugin::decode`'s unbounded full-track decode** (`sources/waveform/src/lib.rs:57-107`,
+     `core::audio_decode::decode_blocks` with no frame cap) — matches the owner's exact trigger
+     (uncached waveform). No pacing beyond the walk cadence once a track's audio is already locally
+     cached (`min_interval` is skipped when `has_stream` is true, `core/src/scan.rs:619-630`).
+  2. **BPM and waveform independently decode the same track from scratch** — no shared PCM/decode
+     cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/`decode_once` job model).
+     Sequential, not simultaneous, but real overlapping decode cost in a fresh track's first 60s.
+  3. **`ScanDriver::new` hardcodes `ScanMode::Active`** on every launch, not read from persisted
+     config (`core/src/scan.rs:219-236`) — actively *fetches* (downloads) audio purely to analyze
+     unplayed tracks too, stacking network + CPU cost continuously whenever there's a backlog; also
+     means playback and the background walk's decode pipelines run concurrently.
+  4. **`BpmPlugin::analyze`**'s ~150M-flop/track FFT pass (`sources/bpm/src/lib.rs`, `ANALYSIS_SECONDS
+     = 60.0`) is genuine necessary work, but has minor waste: decodes stereo then immediately
+     downmixes to mono (only needs mono), assumes a hardcoded 44.1kHz sample rate regardless of the
+     stream's actual rate, and replans an FFT (`FftPlanner::new()`) fresh per track instead of
+     amortizing it.
+  5. **Every arrow-key cursor move on the Playlists-top window re-reads the whole playlist store**:
+     `TrackList::rows()`'s memo key includes `cursor` (`ui/src/view/track_list.rs:719-729`), so every
+     Down/Up press misses the memo and calls `s.playlists()` → `store.all_playlists()`
+     (`core/src/store.rs:432-441`, a full redb read + JSON-deserialize of every playlist including
+     its items) from scratch — cost scales with total playlist count, not visible rows (253
+     playlists on the machine this was checked on). `TrackList::visible_top()` has the same
+     unconditional-`s.playlists()`-call issue when a `/`-filter is active (`track_list.rs:465-472`,
+     called before the memo's `get_or_build`, so it pays even on a cache hit).
+  6. Confirmed NOT the cause: scan concurrency is tightly bounded (exactly 2 threads, `scan.rs:241-
+     258`) — ruled out "many tracks scanning in parallel"; navigation doesn't bump `Session::revision`
+     so `Chrome`'s memo isn't the problem either.
+  Also minor, not ranked: `AudioTap` (`player/src/tap.rs`) runs unconditionally for every played
+  track (one mutex lock + copy every ~23ms) even when the Vis pane has never been opened — cheap per
+  sample, but a permanent tax on all playback; likely direction is lazy-init behind Vis actually
+  being opened once.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
