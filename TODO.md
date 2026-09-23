@@ -91,6 +91,10 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Now Playing screen's like hint reads `[=] like`; change the label to `like playing` (it's the
+  playing track being liked, not whatever's under the cursor, unlike every other window's `like`
+  hint). `ui/src/view/track_list.rs:780`, the `ListKind::NowPlaying` hint row —
+  `hint(&[c.like_playing_key], "like")` — change the label string to `"like playing"`.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid
