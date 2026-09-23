@@ -841,10 +841,17 @@ impl TrackList {
                 self.kinds = KindFilter::All;
                 self.view_gen += 1;
             }
-            let hidden_by_query = self.at_playlists_top()
-                && self.query.is_some()
-                && self.top(s).iter().any(|row| row.target() == *target)
-                && !self.visible_top(s).iter().any(|row| row.target() == *target);
+            // Playlists-top uses top/visible_top, Search uses collections/visible_collections; each
+            // visible_* already falls back to its unfiltered pair outside its own window, so this
+            // stays a no-op there.
+            let (full, visible): (Arc<[TopRow]>, Arc<[TopRow]>) = if self.kind == ListKind::Search {
+                (self.collections(s), self.visible_collections(s))
+            } else {
+                (self.top(s), self.visible_top(s))
+            };
+            let hidden_by_query = self.query.is_some()
+                && full.iter().any(|row| row.target() == *target)
+                && !visible.iter().any(|row| row.target() == *target);
             if hidden_by_query {
                 self.query = None;
                 self.view_gen += 1;

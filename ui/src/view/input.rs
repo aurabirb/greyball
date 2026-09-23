@@ -91,10 +91,9 @@ impl MedleyView {
                     return self.handle_action(Action::ToggleWindow(name));
                 }
                 if let command::Parsed::Search(query) = parsed {
-                    if let Some(id) = self.search_window() {
-                        self.show(id);
-                        self.start_search(id, &query);
-                    }
+                    let id = self.search_window();
+                    self.show(id);
+                    self.start_search(id, &query);
                     return EventResult::consumed();
                 }
                 if let command::Parsed::Builtin(action) = parsed {
@@ -183,12 +182,13 @@ impl MedleyView {
     }
 
     /// The Search window a search goes to: the active list when it is one, else a shown one, else the tab.
-    pub(super) fn search_window(&self) -> Option<WindowId> {
+    pub(super) fn search_window(&self) -> WindowId {
         let is_search = |id: &WindowId| self.windows[*id].kind == Kind::List(ListKind::Search);
         Some(self.active_list_id())
             .filter(is_search)
             .or_else(|| self.visible().into_iter().find(is_search))
             .or_else(|| self.windows.named("search"))
+            .expect("\"search\" is a static WINDOWS entry")
     }
 
     /// Searches `text` from window `id`, dropping what it listed; blank text only drops.
@@ -279,7 +279,7 @@ impl MedleyView {
                 let id = self.active_list_id();
                 let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s))) else {
                     // No list here at all (e.g. fullscreen Log/Help/Settings): fall back to global search.
-                    let Some(search_id) = self.search_window() else { return EventResult::Ignored };
+                    let search_id = self.search_window();
                     self.show(search_id);
                     self.edit_search(search_id);
                     return EventResult::consumed();
