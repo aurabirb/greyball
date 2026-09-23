@@ -168,23 +168,25 @@
   medley's (model size, licensing, whether inference needs a GPU). Report findings as a simple list;
   this feeds a possible future extension of the "similar tracks" panel above (comparing tracks by
   attributes beyond BPM), not an immediate implementation task.
-- [ ] `/` ("view filter") is broken/inconsistent across windows and needs a redesign, not just a
-  bugfix pass: on some windows it doesn't filter at all, and on others it wrongly persists its state
-  after Enter instead of being a fully ephemeral filter over the window's current contents.
-  Target design: `/` always means "fuzzy-filter the list currently displayed in the focused window"
-  and must never jump to the global Search window, with exactly one exception — when the Search
-  window is open and empty, `/` focuses the actual search input field there instead (make that
-  global search input a real focusable input field rather than however it's wired today, and have
-  `/` just focus it). Once search results are showing, `/` opens a second filter layer on top of
-  those results (plain substring/fuzzy match on the result list, same as any other window's view
-  filter); Enter locks that filter in place so the filtered list can be browsed/acted on normally;
-  Esc or any command key resets/clears the view filter for that window. The view filter is a
-  property of the window (its list/results at the time), not of the app — every window that shows a
-  track list (Now Playing, Playlists/an open playlist, Search results, History, Queue, the
-  similar-tracks panel, Log) needs its own independent view-filter state, in every placement (tab,
-  docked, floating), through the same `TrackList` path (Log through its existing filter). Audit which
-  panels currently do nothing or act on the wrong window before implementing, then fix all of them
-  under this one model.
+- [ ] The `/` view-filter redesign (per-window ephemeral filter, second layer over Search results)
+  landed, but its review turned up two real bugs to fix before this can be considered done:
+  (1) `/` silently does nothing when the focused/main window is a fullscreen non-list pane (Log,
+  Help, Settings, Files, Vis via e.g. `:log`) — `Action::FocusSearch`
+  (`ui/src/view/input.rs:278-290`) returns `EventResult::Ignored` when `active_list_id()`'s window
+  has no `list()`, where the pre-redesign code used to fall through to opening global search in that
+  case; decide what `/` should do here (open global search again as the fallback, or something else)
+  and implement it, since silently doing nothing is worse than either prior behavior.
+  (2) `relayout`'s auto-widen-to-follow-a-target logic (`ui/src/view/track_list.rs:833-849`) only
+  accounts for the kind filter when deciding whether a newly-created/selected playlist is "hidden",
+  not the `/`-query filter — so creating a playlist while a Playlists-top `/`-filter is active can
+  silently fail to select/follow it (`visible_top` excludes it, the kind-filter widen doesn't help,
+  no cursor movement, no filter clear, no error). Make this widen (or clear) the `/`-filter too when
+  it's the query filter, not the kind filter, hiding the selection target.
+  Minor cleanup while in the area: `track_list.rs:627-629,644-646,674-676` build the identical
+  `"no matches for {query}"` row three times — factor into one helper; and `visible_collections`
+  (`track_list.rs:460`) gates on `self.is_results()` while `search_result_tracks` (`:477`) applies
+  the query unconditionally, relying on match-arm ordering elsewhere to stay safe — make both
+  consistent so it's not a latent trap.
 
 - [ ] The per-row like indicator dot (between BPM and title) looks visually jarring in its current
   glyph pair; use the project's first pair instead. History (`ui/src/view/transport.rs`,
@@ -193,6 +195,10 @@
   `3ee258b` to the current `•`/`∘` (U+2218 RING OPERATOR) — that last swap of the local-only glyph
   from `◦` to `∘` is likely what reads as jarring (RING OPERATOR is a math symbol, not designed to
   pair visually with a bullet). Revert `LIKED_DOT`/`LIKED_LOCAL_DOT` to the first pair, `•`/`◦`.
+- [ ] Give the Log pane (`ui/src/view/log.rs`) its own view filter — grep-style substring filtering
+  over its lines, same `/`-opens/Enter-locks/Esc-clears interaction as a `TrackList` window's view
+  filter, but built separately: Log is a raw line buffer, not backed by `TrackList`, so it needs its
+  own filter state and matching, not a generalization of the `TrackList` mechanism.
 
 ### Album support
 Design: `docs/collections.md`.
