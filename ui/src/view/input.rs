@@ -30,7 +30,7 @@ pub(super) enum Editing {
     CacheDir,
     /// Typing the default likes playlist name (Settings).
     LikedPlaylist,
-    /// Screen-local fuzzy filter (`/` on any track-list screen other than Search itself).
+    /// The focused window's `/`-filter, including a second layer over Search results.
     Filter,
 }
 
@@ -274,15 +274,17 @@ impl MedleyView {
     pub(super) fn handle_action(&mut self, action: Action) -> EventResult {
         match action {
             Action::Command(c) => self.run_confirmed(c),
-            // A list that can't be filtered locally sends `/` to a Search window's query instead.
+            // `/` filters the focused window's own list; only an empty Search window sends it to the query input instead.
             Action::FocusSearch => {
                 let id = self.active_list_id();
-                if self.windows[id].list().is_some_and(|list| !list.is_results()) {
+                let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s))) else {
+                    return EventResult::Ignored;
+                };
+                if awaiting {
+                    self.edit_search(id);
+                } else {
                     self.editing = Editing::Filter;
                     self.buffer.clear();
-                } else if let Some(id) = self.search_window() {
-                    self.show(id);
-                    self.edit_search(id);
                 }
                 EventResult::consumed()
             }
@@ -307,6 +309,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::CommandLine => {
+                self.set_filter(None);
                 self.editing = Editing::CommandLine;
                 self.buffer.clear();
                 EventResult::consumed()
@@ -342,6 +345,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::Prompt(name) => {
+                self.set_filter(None);
                 self.editing = Editing::CommandLine;
                 self.buffer = format!("{name} ");
                 EventResult::consumed()

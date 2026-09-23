@@ -110,6 +110,14 @@ fn rank_filter(matcher: &SkimMatcherV2, text: &str, query: &str) -> Option<Filte
     Some(FilterRank(tier, std::cmp::Reverse(score)))
 }
 
+/// `items` fuzzy-matched and ranked against `query` by `name`; a non-matching item is dropped.
+fn rank_rows<T: Clone>(items: &[T], query: &str, name: impl Fn(&T) -> String) -> Vec<T> {
+    let matcher = SkimMatcherV2::default();
+    let mut ranked: Vec<(T, FilterRank)> = items.iter().filter_map(|it| rank_filter(&matcher, &name(it), query).map(|r| (it.clone(), r))).collect();
+    ranked.sort_by(|a, b| a.1.cmp(&b.1));
+    ranked.into_iter().map(|(it, _)| it).collect()
+}
+
 /// Revision, view generation, scroll offset, cursor, body height, the search text being typed.
 type FrameKey = (u64, u64, usize, usize, usize, Option<String>);
 
@@ -172,6 +180,12 @@ pub(super) struct TrackList {
     top_all: Memo<(u64, u64, u64), Arc<[TopRow]>>,
     /// Search only: the collection rows after the tracks, albums then playlists, keyed on the list and view generations.
     collections: Memo<(u64, u64), Arc<[TopRow]>>,
+    /// Playlists top level only: `top` narrowed by the `/`-filter, keyed like `top`.
+    top_matches: Memo<(u64, u64, u64, u64), Arc<[TopRow]>>,
+    /// Search results only: `collections` narrowed by the `/`-filter, keyed like `collections`.
+    collection_matches: Memo<(u64, u64), Arc<[TopRow]>>,
+    /// Search results only: the result tracks narrowed by the `/`-filter, keyed like `collections`.
+    track_matches: Memo<(u64, u64), Arc<[core::Track]>>,
 }
 
 
@@ -196,6 +210,9 @@ impl TrackList {
             last_click: None,
             matches: Memo::default(),
             frame: Memo::default(),
+            top_matches: Memo::default(),
+            collection_matches: Memo::default(),
+            track_matches: Memo::default(),
         }
     }
 
@@ -237,6 +254,11 @@ impl TrackList {
 
     fn results<'a>(&self, s: &'a Session) -> Option<&'a ResultSet> {
         self.search.and_then(|id| s.results(id))
+    }
+
+    /// A Search window at its top level with no results yet: `/` should focus its query input instead of filtering.
+    pub(super) fn awaiting_search(&self, s: &Session) -> bool {
+        self.kind == ListKind::Search && matches!(self.open, Open::TopLevel) && self.results(s).is_none_or(ResultSet::is_empty)
     }
 
     /// Sets the `/`-filter and, when it changed, restarts the selection at the top.
@@ -295,15 +317,6 @@ impl TrackList {
         matches!(self.kind, ListKind::Search | ListKind::Playlists) && matches!(self.open, Open::TopLevel)
     }
 
-    /// Whether the `/`-filter narrows this list.
-    fn filterable(&self) -> bool {
-        match self.kind {
-            ListKind::NowPlaying | ListKind::Queue | ListKind::History => true,
-            ListKind::Playlists => !matches!(self.open, Open::TopLevel),
-            ListKind::Search => !matches!(self.open, Open::TopLevel),
-        }
-    }
-
     /// The generation, held by its owner, of the list on screen, plus that of track ids vanishing from any list.
     pub(super) fn list_gen(&self, s: &Session) -> u64 {
         s.removed_tracks_gen() + match (self.kind, &self.open) {
@@ -329,18 +342,16 @@ impl TrackList {
         }
     }
 
+    /// Playlists and Search top levels mix track and collection rows and filter over `visible_top`/`search_result_tracks` instead.
+    fn track_filterable(&self) -> bool {
+        !self.at_playlists_top() && !self.is_results()
+    }
+
     /// The list's ids narrowed and ranked by the filter; rows resolve them fresh via `Session::tracks_for`.
     fn filtered_ids(&self, s: &Session) -> Option<Arc<[TrackId]>> {
-        let query = self.query.as_deref().filter(|_| self.filterable())?;
+        let query = self.query.as_deref().filter(|_| self.track_filterable())?;
         Some(self.matches.get_or_build((self.list_gen(s), self.view_gen), || {
-            let matcher = SkimMatcherV2::default();
-            let mut ranked: Vec<(TrackId, FilterRank)> = self
-                .all_tracks(s)
-                .into_iter()
-                .filter_map(|t| rank_filter(&matcher, &t.main(), query).map(|r| (t.id, r)))
-                .collect();
-            ranked.sort_by(|a, b| a.1.cmp(&b.1));
-            ranked.into_iter().map(|(id, _)| id).collect()
+            rank_rows(&self.all_tracks(s), query, core::Track::main).into_iter().map(|t| t.id).collect()
         }))
     }
 
@@ -352,7 +363,7 @@ impl TrackList {
         match (self.kind, &self.open) {
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_track_ids(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_ids(),
-            (ListKind::Search, _) if self.kinds.shows_tracks() => self.results(s).map(ResultSet::track_ids).unwrap_or_default(),
+            (ListKind::Search, _) if self.kinds.shows_tracks() => self.search_result_tracks(s).iter().map(|t| t.id).collect(),
             (ListKind::Search, _) => vec![],
             (ListKind::Queue, _) => s.queue_ids(),
             (ListKind::History, _) => s.history_ids(),
@@ -443,17 +454,44 @@ impl TrackList {
         })
     }
 
-    /// How many track rows a Search window lists before its collection rows.
+    /// `collections`, narrowed by the `/`-filter over the search results' second filter layer.
+    fn visible_collections(&self, s: &Session) -> Arc<[TopRow]> {
+        let collections = self.collections(s);
+        let Some(query) = self.query.as_deref().filter(|_| self.is_results()) else { return collections };
+        self.collection_matches.get_or_build((self.list_gen(s), self.view_gen), || rank_rows(&collections, query, |row| top_row_name(row, &[])).into())
+    }
+
+    /// `top`, narrowed by the `/`-filter when this is Playlists at its top level.
+    fn visible_top(&self, s: &Session) -> Arc<[TopRow]> {
+        let top = self.top(s);
+        let Some(query) = self.query.as_deref().filter(|_| self.at_playlists_top()) else { return top };
+        let playlists = s.playlists();
+        self.top_matches.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), s.hotkeys_gen(), self.view_gen), || {
+            rank_rows(&top, query, |row| top_row_name(row, &playlists)).into()
+        })
+    }
+
+    /// The search results' tracks, narrowed and ranked by the `/`-filter's second layer when one is active.
+    fn search_result_tracks(&self, s: &Session) -> Arc<[core::Track]> {
+        let tracks = self.results(s).map_or(&[][..], ResultSet::tracks);
+        let Some(query) = self.query.as_deref() else { return tracks.into() };
+        self.track_matches.get_or_build((self.list_gen(s), self.view_gen), || rank_rows(tracks, query, core::Track::main).into())
+    }
+
+    /// How many track rows a Search window lists before its collection rows, narrowed by the `/`-filter.
     fn search_tracks(&self, s: &Session) -> usize {
-        if self.kinds.shows_tracks() { self.results(s).map_or(0, |r| r.tracks().len()) } else { 0 }
+        if !self.kinds.shows_tracks() {
+            return 0;
+        }
+        self.search_result_tracks(s).len()
     }
 
     fn top_row(&self, s: &Session) -> Option<TopRow> {
         if self.is_results() {
             let at = self.state.cursor.checked_sub(self.search_tracks(s))?;
-            return self.collections(s).get(at).cloned();
+            return self.visible_collections(s).get(at).cloned();
         }
-        self.top(s).get(self.state.cursor).cloned()
+        self.visible_top(s).get(self.state.cursor).cloned()
     }
 
     /// The open playlist.
@@ -512,11 +550,11 @@ impl TrackList {
         match (self.kind, &self.open) {
             (_, Open::Remote(sid, _, node)) => s.remote_playlist_len(sid, node),
             (ListKind::NowPlaying, _) => s.playing_context_len(),
-            (ListKind::Search, _) => self.search_tracks(s) + self.collections(s).len(),
+            (ListKind::Search, _) => self.search_tracks(s) + self.visible_collections(s).len(),
             (ListKind::Queue, _) => s.queue_len() + s.queue_info_len(),
             (ListKind::History, _) => s.queue.history_len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
-            (ListKind::Playlists, Open::TopLevel) => self.top(s).len(),
+            (ListKind::Playlists, Open::TopLevel) => self.visible_top(s).len(),
         }
     }
 
@@ -561,7 +599,7 @@ impl TrackList {
 
     /// The title row: `<name>`; the search text being typed while it is.
     fn title(&self, s: &Session) -> String {
-        if let Some(query) = self.query.as_deref().filter(|_| self.filterable()) {
+        if let Some(query) = self.query.as_deref() {
             return format!("filter {query:?}");
         }
         let name = match (self.kind, &self.open) {
@@ -603,13 +641,16 @@ impl TrackList {
                 Some(r) => vec![plain_row(format!("no results for {:?} — check the Log pane (:log) for source errors", r.query()))],
                 None => vec![],
             },
+            (ListKind::Search, _) if self.query.is_some() && self.len(s) == 0 => {
+                vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))]
+            }
             (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
             (ListKind::Search, _) => {
                 let tracks = self.search_tracks(s);
-                let found = self.results(s).map_or(&[][..], ResultSet::tracks);
+                let found = self.search_result_tracks(s);
                 let mut rows = if offset < tracks { track_rows(found.iter().skip(offset).take(limit).cloned().collect()) } else { vec![] };
                 let room = limit.saturating_sub(rows.len());
-                let collections = self.collections(s);
+                let collections = self.visible_collections(s);
                 rows.extend(collections.iter().skip(offset.saturating_sub(tracks)).take(room).map(|row| {
                     let name = top_row_name(row, &[]);
                     let mut r = plain_row(if self.kinds == KindFilter::All { format!("[{}] {name}", kind_bar::noun(row.kind())) } else { name });
@@ -630,9 +671,12 @@ impl TrackList {
             (ListKind::Playlists, Open::TopLevel) if self.kinds != KindFilter::All && self.top(s).is_empty() => {
                 vec![plain_row(format!("no {} yet", self.kinds.label()))]
             }
+            (ListKind::Playlists, Open::TopLevel) if self.query.is_some() && self.visible_top(s).is_empty() => {
+                vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))]
+            }
             (ListKind::Playlists, Open::TopLevel) => {
                 let playlists = s.playlists();
-                self.top(s)
+                self.visible_top(s)
                     .iter()
                     .skip(offset)
                     .take(limit)
@@ -801,8 +845,8 @@ impl TrackList {
         let follow = explicit.is_some();
         let target = explicit.or(anchored.map(|(.., target)| target));
         let selected = target.and_then(|target| match self.kind {
-            ListKind::Search => self.collections(s).iter().position(|row| row.target() == target).map(|at| at + self.search_tracks(s)),
-            _ => self.top(s).iter().position(|row| row.target() == target),
+            ListKind::Search => self.visible_collections(s).iter().position(|row| row.target() == target).map(|at| at + self.search_tracks(s)),
+            _ => self.visible_top(s).iter().position(|row| row.target() == target),
         });
         self.state.cursor = selected.unwrap_or(self.state.cursor).min(len.saturating_sub(1));
         self.state.relayout(resized || (selected.is_some() && follow), len, Self::body(rect).height());
@@ -902,7 +946,7 @@ impl TrackList {
         match event {
             Event::Key(Key::Backspace) if keyed => WindowOutcome::Unbind(target),
             Event::Char(key) if keybindings::taken(*key, &s.hotkeys().into_iter().collect()).is_none() => {
-                let next = self.top(s).get(self.state.cursor + 1).map(TopRow::target);
+                let next = self.visible_top(s).get(self.state.cursor + 1).map(TopRow::target);
                 self.assigned = next.filter(|_| self.keyed_first && !keyed).map(|next| (target.clone(), next));
                 WindowOutcome::Bind(target, *key)
             }
