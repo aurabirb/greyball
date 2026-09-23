@@ -91,6 +91,21 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] The fallback/no-data top-bar waveform (bars with no envelope value yet — not-yet-scanned or
+  streaming-decode-lagging-behind-playback buckets) has no working progress indicator: it renders
+  flat plain white across its whole width regardless of playback position, so it no longer works as
+  a scrubber (`draw_waveform`, `ui/src/view/tab_bar.rs:243-265`). This is a side effect of `0783ff5`
+  ("Fix waveform played+no-data-yet bars to render white, not loud"), which made the `level.is_none()`
+  branch always plain white and checked *before* the `x < played` branch — correctly fixing a bug
+  where an already-played-but-still-`None` bucket rendered identically to real loud analyzed audio
+  (`title_primary` + `Underline`, max height), but as a result no longer distinguishes played from
+  unplayed at all for `None` buckets. Needs some other visual distinction for played-vs-unplayed on
+  these white bars that doesn't reintroduce the original bug (i.e. don't just restore `title_primary`
+  color or full-height on played `None` bars — that's what looked identical to real loud audio);
+  e.g. `Underline` alone (no color change) on `x < played`, or a dim/bright white split, is likely
+  enough to read as progress without looking like real data. Verify visually (screenshot per
+  AGENTS.md's screenshot recipe) once changed, comparing played vs. unplayed fallback bars against a
+  real analyzed track's bars so they stay visually distinct from each other.
 - [ ] Now Playing screen's like hint reads `[=] like`; change the label to `like playing` (it's the
   playing track being liked, not whatever's under the cursor, unlike every other window's `like`
   hint). `ui/src/view/track_list.rs:780`, the `ListKind::NowPlaying` hint row —
