@@ -14,6 +14,12 @@
 
 ### Owner's list — do these first, in this order
 ### Bugs
+- [ ] A `NoAudio`-erroring track (probe failure, missing track, corrupt/zero sample rate) on a
+  non-seekable first decode attempt can stall a scan for up to `FINISH_TIMEOUT` (30 min) before
+  being skipped — `decode_blocks` (`core/src/audio_decode.rs:57-75`) treats any `NoAudio` there as
+  "maybe needs the full file" and waits for the stream to finish before retrying seekably, even when
+  the actual cause (corrupt container, missing track) will never be fixed by waiting. Fail fast
+  instead of waiting the full timeout for causes that are provably not "just needs more data".
 - [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
 - [ ] Spotify `recently-played` still confirmed not working — this time with real, rigorous evidence
   (raw HTTP responses quoted, two independent end-to-end runs, up to ~14 minutes elapsed each,
@@ -201,8 +207,18 @@ Design: `docs/collections.md`.
   fan-noise driver. Ranked findings, most likely cause first:
   1. **`WaveformPlugin::decode`'s unbounded full-track decode** (`sources/waveform/src/lib.rs:57-107`,
      `core::audio_decode::decode_blocks` with no frame cap) — matches the owner's exact trigger
-     (uncached waveform). No pacing beyond the walk cadence once a track's audio is already locally
-     cached (`min_interval` is skipped when `has_stream` is true, `core/src/scan.rs:619-630`).
+     (uncached waveform). This is inherent to the feature (a full-track envelope needs the full
+     track), not itself a bug. The pacing-gap part investigated separately: `min_interval` is skipped
+     once a track's audio is already locally cached (`gated` is `false` when `has_stream` is `true`,
+     `core/src/scan.rs:619-630`) — **investigated, left unresolved, needs a design decision, not a
+     guess**: this exemption is load-bearing (removing it naively would slow a first-time backfill of
+     an already-cached library to `library_size × min_interval` — hours — and delay "now playing"
+     analysis by up to 15s behind an unrelated walk attempt, since `last_run` is shared per-plugin
+     between the background walk and the priority/now-playing worker). `run_walk` already has an
+     independent, easy-to-miss 1s pass-to-pass throttle (`PASS_SPACING`) that isn't the same thing as
+     `min_interval`. A real fix needs a decision (e.g. a separate, smaller CPU-pacing interval from
+     the network-cooldown `min_interval`, and/or per-worker rather than per-plugin `last_run`) before
+     any code change here.
   2. **BPM and waveform independently decode the same track from scratch** — no shared PCM/decode
      cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/`decode_once` job model).
      Sequential, not simultaneous, but real overlapping decode cost in a fresh track's first 60s.
@@ -212,11 +228,12 @@ Design: `docs/collections.md`.
      `state.toml` before the driver is built. Verified true no-op in the deployed configuration
      before this fix (empty plugin list gated all candidate population regardless of mode) — this
      was an explicit-contract cleanup, not a live behavior bug in practice, but still correct to fix.
-  4. **`BpmPlugin::analyze`**'s ~150M-flop/track FFT pass (`sources/bpm/src/lib.rs`, `ANALYSIS_SECONDS
-     = 60.0`) is genuine necessary work, but has minor waste: decodes stereo then immediately
-     downmixes to mono (only needs mono), assumes a hardcoded 44.1kHz sample rate regardless of the
-     stream's actual rate, and replans an FFT (`FftPlanner::new()`) fresh per track instead of
-     amortizing it.
+  4. **FIXED (`6fef344`, `93f1d39`, both reviewed clean)**: `BpmPlugin::analyze` now decodes mono
+     directly (per-block downmix, no full stereo buffer), uses the decoder's real sample rate instead
+     of a hardcoded 44.1kHz assumption, and reuses one cached FFT plan across every track instead of
+     replanning per-track. The real-sample-rate change surfaced a genuine regression risk (a
+     corrupt/zero-rate container could reach an infinite-loop hazard in tempo estimation) — closed by
+     a shared `decode_once` guard (`93f1d39`) that also protects the waveform plugin's same path.
   5. **FIXED (`9f087c0`, reviewed clean)**: every arrow-key cursor move on the Playlists-top window
      used to re-read the whole playlist store from scratch (`TrackList::rows()`'s memo key included
      `cursor`, plus an unconditional `s.playlists()` call in `visible_top()`) — split into a
