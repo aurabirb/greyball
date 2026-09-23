@@ -286,13 +286,6 @@ Design: `docs/collections.md`.
   unrelated walk attempt, since `last_run` is shared per-plugin between the background walk and the
   priority/now-playing worker. A real fix likely needs a separate, smaller CPU-pacing interval
   distinct from the network cooldown, and/or per-worker rather than per-plugin `last_run` tracking.
-- [ ] BPM and waveform each independently decode the same track from scratch on a fresh scan — no
-  shared PCM/decode cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/
-  `decode_once` job model). BPM only decodes the first 60s; waveform decodes the whole track, so full
-  decode-sharing wouldn't let waveform skip anything — but that first 60s gets decoded twice today.
-  Measured (8 real MP3 tracks): sharing just the overlapping first-60s decode would save ~4s/track,
-  ~60% of BPM's total per-track cost. Owner decided (2026-09-23) not to pursue implementing this now
-  — left here as a scoped, numbers-backed option for later, not queued.
 - [ ] `AudioTap` (`player/src/tap.rs`) runs unconditionally for every played track (one mutex lock +
   copy every ~23ms) even when the Vis pane has never been opened — cheap per sample, but a permanent
   tax on all playback; likely direction is lazy-init behind Vis actually being opened once.
