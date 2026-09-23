@@ -148,18 +148,43 @@ impl WaveformPlugin {
         let span = (total_secs - window_secs).max(0.0);
         let positions: Vec<Duration> = (0..n).map(|i| Duration::from_secs_f64(span * i as f64 / n as f64)).collect();
 
-        let mut levels = vec![0.0_f32; n];
+        // `None` until `on_fragment` actually runs for that index — a failed seek (see
+        // `core::audio_decode::decode_fragments`) skips the callback, so this stays `None` rather
+        // than silently reading as measured silence.
+        let mut levels: Vec<Option<f32>> = vec![None; n];
+        // Each fragment's own bucket range, filled as fragments land, so the live preview grows
+        // left-to-right like `decode_linear`'s instead of re-stretching the whole width every publish.
+        let mut partial = vec![0.0_f32; BUCKETS];
         let live_chunk = (n / 20).max(1);
         let decoded = core::audio_decode::decode_fragments(stream, &positions, FRAGMENT_WINDOW, |i, block, _rate| {
             let (sum, count) = block.iter().fold((0.0_f32, 0usize), |(s, c), [l, r]| (s + (l * l + r * r) * 0.5, c + 1));
-            levels[i] = if count > 0 { (sum / count as f32).sqrt() } else { 0.0 };
-            if (i + 1) % live_chunk == 0
-                && let Some(prefix) = envelope(&levels[..=i])
+            let level = if count > 0 { (sum / count as f32).sqrt() } else { 0.0 };
+            levels[i] = Some(level);
+
+            let start = bucket_of(i, n);
+            let end = if i + 1 == n { BUCKETS } else { bucket_of(i + 1, n) };
+            partial[start..end].fill(level);
+
+            if ((i + 1) % live_chunk == 0 || i + 1 == n)
+                && let Some(prefix) = normalise(&partial[..end])
             {
                 waveform::publish_live(track.id, &prefix);
             }
             wanted()
         });
-        (levels, decoded)
+        (fill_gaps(levels), decoded)
     }
+}
+
+/// Fills seek-failure gaps (`None`, where `on_fragment` was never called for that index) from the
+/// nearest successfully-decoded neighbour, so a failed seek never renders as fake silence (`0.0`) —
+/// indistinguishable from genuinely quiet audio.
+fn fill_gaps(levels: Vec<Option<f32>>) -> Vec<f32> {
+    levels
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.or_else(|| levels[..i].iter().rev().find_map(|v| *v)).or_else(|| levels[i + 1..].iter().find_map(|v| *v)).unwrap_or(0.0)
+        })
+        .collect()
 }
