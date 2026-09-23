@@ -22,17 +22,9 @@ use core::audio_decode::DecodeError;
 use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta};
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
-/// librespot's fixed output sample rate — the onset/tempo DSP below assumes
-/// this rate for its own analysis windows regardless of what
-/// `core::audio_decode::decode_stereo_prefix` reports for a given source.
-const SAMPLE_RATE: f32 = 44_100.0;
-
 /// STFT window and hop for the onset envelope.
 const FFT_SIZE: usize = 2048;
 const HOP: usize = 512;
-
-/// Onset-envelope sample rate (one value per STFT hop).
-const ONSET_RATE: f32 = SAMPLE_RATE / HOP as f32;
 
 /// Number of log-spaced frequency bands the spectral flux is split into.
 const BANDS: usize = 8;
@@ -62,11 +54,14 @@ const COMB_HARMONICS: usize = 4;
 /// `:togglescan`, not by whether it's registered — see `ScanDriver::register_plugin`.
 pub struct BpmPlugin {
     min_interval: Duration,
+    /// FFT_SIZE is fixed, so the plan is built once and reused across every track this plugin
+    /// analyzes instead of replanning per call.
+    fft: Arc<dyn Fft<f32>>,
 }
 
 impl BpmPlugin {
     pub fn new(min_interval_secs: u64) -> Self {
-        Self { min_interval: Duration::from_secs(min_interval_secs) }
+        Self { min_interval: Duration::from_secs(min_interval_secs), fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE) }
     }
 }
 
@@ -89,16 +84,17 @@ impl ScanPlugin for BpmPlugin {
             Ok(s) => s,
             Err(outcome) => return outcome,
         };
-        let max_frames = (ANALYSIS_SECONDS * SAMPLE_RATE) as usize;
-        let stereo = match core::audio_decode::decode_stereo_prefix(&stream, Some(max_frames), wanted) {
-            Ok((stereo, _)) => stereo,
+        let (mono, sample_rate) = match core::audio_decode::decode_mono_prefix(&stream, Some(ANALYSIS_SECONDS), wanted) {
+            Ok(v) => v,
             Err(DecodeError::Interrupted) => return Outcome::Retry,
             Err(DecodeError::NoAudio) => {
                 log::debug!("bpm: \"{}\" — no decodable audio to analyze, skipping", track.title);
                 return Outcome::Skip;
             }
         };
-        match estimate_tempo(&onset_envelope(&downmix(&stereo))) {
+        let sample_rate = sample_rate as f32;
+        let onset_rate = sample_rate / HOP as f32;
+        match estimate_tempo(&onset_envelope(&mono, sample_rate, &self.fft), onset_rate) {
             Some(bpm) => {
                 log::debug!("bpm: \"{}\" — estimated {bpm:.0} bpm", track.title);
                 Outcome::Done(TrackMeta { attrs: [("bpm".to_string(), format!("{bpm:.0}"))].into() })
@@ -115,26 +111,20 @@ impl ScanPlugin for BpmPlugin {
     }
 }
 
-fn downmix(stereo: &[[f32; 2]]) -> Vec<f32> {
-    stereo.iter().map(|[l, r]| (l + r) * 0.5).collect()
-}
-
 // --- Onset envelope --------------------------------------------------------------------------
 
 /// Multi-band log-magnitude spectral flux. For every STFT hop and every frequency band, the sum of
 /// the positive changes in (log) magnitude relative to a frequency-max-filtered previous frame.
 /// Each band's series is then normalised to unit variance before the bands are summed, so no single
 /// part of the spectrum dominates the result.
-fn onset_envelope(signal: &[f32]) -> Vec<f32> {
-    let mut planner = FftPlanner::<f32>::new();
-    let fft: Arc<dyn Fft<f32>> = planner.plan_fft_forward(FFT_SIZE);
-
+fn onset_envelope(signal: &[f32], sample_rate: f32, fft: &Arc<dyn Fft<f32>>) -> Vec<f32> {
+    let onset_rate = sample_rate / HOP as f32;
     let window: Vec<f32> = (0..FFT_SIZE)
         .map(|n| (std::f32::consts::PI * n as f32 / FFT_SIZE as f32).sin().powi(2))
         .collect();
 
     let bins = FFT_SIZE / 2 + 1;
-    let band_edges = log_spaced_band_edges(bins);
+    let band_edges = log_spaced_band_edges(bins, sample_rate);
 
     let frames = signal.len().saturating_sub(FFT_SIZE) / HOP + 1;
     let mut band_flux: [Vec<f32>; BANDS] = std::array::from_fn(|_| Vec::with_capacity(frames));
@@ -193,13 +183,13 @@ fn onset_envelope(signal: &[f32]) -> Vec<f32> {
         }
     }
 
-    detrend(&mut envelope, (ONSET_RATE * 0.5) as usize);
+    detrend(&mut envelope, (onset_rate * 0.5) as usize);
     envelope
 }
 
 /// FFT-bin indices splitting `[LOW_HZ, HIGH_HZ]` into [`BANDS`] logarithmically-spaced bands.
-fn log_spaced_band_edges(bins: usize) -> Vec<usize> {
-    let bin_of = |hz: f32| ((hz * FFT_SIZE as f32 / SAMPLE_RATE).round() as usize).clamp(1, bins);
+fn log_spaced_band_edges(bins: usize, sample_rate: f32) -> Vec<usize> {
+    let bin_of = |hz: f32| ((hz * FFT_SIZE as f32 / sample_rate).round() as usize).clamp(1, bins);
     let (lo, hi) = (LOW_HZ.ln(), HIGH_HZ.ln());
     (0..=BANDS)
         .map(|b| {
@@ -223,12 +213,12 @@ fn tempo_weight(bpm: f32) -> f32 {
 /// window is autocorrelated and scored with a harmonic comb filter plus a perceptual tempo weight,
 /// the per-window estimates are reduced to their mode, and a final octave check decides between
 /// that value and its half / double time over the whole envelope.
-fn estimate_tempo(onset: &[f32]) -> Option<f32> {
-    let min_lag = (60.0 * ONSET_RATE / MAX_BPM).floor().max(1.0) as usize;
-    let max_lag = (60.0 * ONSET_RATE / MIN_BPM).ceil() as usize;
+fn estimate_tempo(onset: &[f32], onset_rate: f32) -> Option<f32> {
+    let min_lag = (60.0 * onset_rate / MAX_BPM).floor().max(1.0) as usize;
+    let max_lag = (60.0 * onset_rate / MIN_BPM).ceil() as usize;
 
-    let win = (WIN_SECONDS * ONSET_RATE) as usize;
-    let hop = (WIN_HOP_SECONDS * ONSET_RATE) as usize;
+    let win = (WIN_SECONDS * onset_rate) as usize;
+    let hop = (WIN_HOP_SECONDS * onset_rate) as usize;
     if onset.len() < win.min(4 * max_lag) || max_lag <= min_lag {
         return None;
     }
@@ -236,13 +226,13 @@ fn estimate_tempo(onset: &[f32]) -> Option<f32> {
     let mut estimates = Vec::new();
     let mut start = 0;
     while start + win <= onset.len() {
-        if let Some(bpm) = window_tempo(&onset[start..start + win], min_lag, max_lag) {
+        if let Some(bpm) = window_tempo(&onset[start..start + win], min_lag, max_lag, onset_rate) {
             estimates.push(bpm);
         }
         start += hop;
     }
     if estimates.is_empty()
-        && let Some(bpm) = window_tempo(onset, min_lag, max_lag)
+        && let Some(bpm) = window_tempo(onset, min_lag, max_lag, onset_rate)
     {
         estimates.push(bpm);
     }
@@ -251,7 +241,7 @@ fn estimate_tempo(onset: &[f32]) -> Option<f32> {
     }
 
     let agg = aggregate(&estimates);
-    let final_bpm = resolve_octave(onset, agg);
+    let final_bpm = resolve_octave(onset, agg, onset_rate);
     (MIN_BPM..=MAX_BPM).contains(&final_bpm).then_some(final_bpm.round())
 }
 
@@ -259,7 +249,7 @@ fn estimate_tempo(onset: &[f32]) -> Option<f32> {
 /// envelope (better periodicity SNR than any single window) with the harmonic comb filter and the
 /// perceptual tempo weight. Fixes the common failure where a backbeat-heavy track autocorrelates
 /// most strongly at half its actual tempo.
-fn resolve_octave(onset: &[f32], bpm: f32) -> f32 {
+fn resolve_octave(onset: &[f32], bpm: f32, onset_rate: f32) -> f32 {
     let (mean, _) = mean_std(onset);
     let centred: Vec<f32> = onset.iter().map(|&x| x - mean).collect();
     let energy = centred.iter().map(|&x| x * x).sum::<f32>() / centred.len() as f32;
@@ -269,7 +259,7 @@ fn resolve_octave(onset: &[f32], bpm: f32) -> f32 {
 
     let max_lag = centred.len() / 2;
     let comb = |candidate: f32| -> f32 {
-        let base = 60.0 * ONSET_RATE / candidate;
+        let base = 60.0 * onset_rate / candidate;
         let mut acc = 0.0;
         let mut count = 0.0;
         for h in 1..=COMB_HARMONICS {
@@ -326,7 +316,7 @@ fn autocorr_at(centred: &[f32], lag: f32) -> f32 {
 
 /// Tempo of a single window: autocorrelation, harmonic comb scoring, log-normal prior, parabolic
 /// interpolation on the winning lag for a fractional BPM.
-fn window_tempo(window: &[f32], min_lag: usize, max_lag: usize) -> Option<f32> {
+fn window_tempo(window: &[f32], min_lag: usize, max_lag: usize, onset_rate: f32) -> Option<f32> {
     let max_lag = max_lag.min(window.len() / 2);
     if max_lag <= min_lag {
         return None;
@@ -364,7 +354,7 @@ fn window_tempo(window: &[f32], min_lag: usize, max_lag: usize) -> Option<f32> {
             acc += acf[hl];
             count += 1.0;
         }
-        let bpm = 60.0 * ONSET_RATE / lag as f32;
+        let bpm = 60.0 * onset_rate / lag as f32;
         let prior = (-0.5 * ((bpm / TEMPO_CENTRE).ln() / 0.9).powi(2)).exp();
         let score = (acc / count) * prior;
         if score > best_score {
@@ -378,7 +368,7 @@ fn window_tempo(window: &[f32], min_lag: usize, max_lag: usize) -> Option<f32> {
     }
 
     let refined = parabolic_peak(&acf, best_lag);
-    Some(60.0 * ONSET_RATE / refined)
+    Some(60.0 * onset_rate / refined)
 }
 
 /// Reduce per-window tempo estimates to a single value: bucket to the nearest BPM, take the most

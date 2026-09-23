@@ -108,26 +108,29 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
     Ok(sample_rate)
 }
 
-/// Decode `stream` to stereo f32 frames. `max_frames` (`None` for the whole file) stops decoding once that
-/// many frames are in; `wanted` turning false abandons it as `Interrupted`. `NoAudio` for a stream too
-/// short to be useful.
-pub fn decode_stereo_prefix(stream: &StreamHandle, max_frames: Option<usize>, wanted: &dyn Fn() -> bool) -> Result<(Vec<[f32; 2]>, u32), DecodeError> {
-    let mut frames: Vec<[f32; 2]> = Vec::new();
+/// Decode `stream` to mono f32 frames (L+R averaged per block, so stereo is never materialised),
+/// covering at most `max_seconds` of audio at the stream's actual sample rate (`None` for the whole
+/// file). `wanted` turning false abandons it as `Interrupted`. `NoAudio` for a stream too short to
+/// be useful.
+pub fn decode_mono_prefix(stream: &StreamHandle, max_seconds: Option<f32>, wanted: &dyn Fn() -> bool) -> Result<(Vec<f32>, u32), DecodeError> {
+    let mut frames: Vec<f32> = Vec::new();
     let mut abandoned = false;
-    let sample_rate = decode_blocks(stream, |block, _| {
+    let mut max_frames = usize::MAX;
+    let sample_rate = decode_blocks(stream, |block, rate| {
         if !wanted() {
             abandoned = true;
             return false;
         }
-        frames.extend_from_slice(block);
-        max_frames.is_none_or(|m| frames.len() < m)
+        if max_frames == usize::MAX && let Some(secs) = max_seconds {
+            max_frames = (secs * rate as f32) as usize;
+        }
+        frames.extend(block.iter().map(|[l, r]| (l + r) * 0.5));
+        frames.len() < max_frames
     })?;
     if abandoned {
         return Err(DecodeError::Interrupted);
     }
-    if let Some(m) = max_frames {
-        frames.truncate(m);
-    }
+    frames.truncate(max_frames.min(frames.len()));
 
     // Anything shorter than a second isn't useful for analysis.
     if frames.len() >= sample_rate as usize { Ok((frames, sample_rate)) } else { Err(DecodeError::NoAudio) }
