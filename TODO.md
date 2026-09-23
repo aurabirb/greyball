@@ -156,6 +156,12 @@
   panels currently do nothing or act on the wrong window before implementing, then fix all of them
   under this one model.
 
+- [ ] Drop the unit word from the status-bar count (`12/64 tracks`, `3/10 playlists`, `5 results`,
+  …) — it's obvious from the window what's being counted, so it should just read `12/64`. Built in
+  `TrackList::count` (`ui/src/view/track_list.rs:763`, `format!("{}/{}{more} {}", …, frame.unit)`);
+  drop the trailing `{}` / `frame.unit` there. `unit`/`ListView::unit` (same file, ~line 559) and
+  `Kinds::unit` become unused once nothing reads them — remove rather than leave them dead.
+
 ### Album support
 Design: `docs/collections.md`.
 - [ ] Opened collection title line: add `subtitle: Option<String>` to `BrowsePage` (filled by the
