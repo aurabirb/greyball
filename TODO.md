@@ -161,6 +161,13 @@
   track list window (same paths as Search results). It must work in any placement — docked next to
   the playing track's list is the main use: keep playing, watch the similar tracks follow the
   playing track, and queue the ones you like with the normal queue keys.
+- [ ] Research task (read-only, no code): survey the current state of the art for audio genre/"vibe"
+  detection and audio embeddings, beyond CLAP (the owner's only current reference point) — what
+  models/approaches exist for classifying or comparing tracks by genre, mood, or general "vibe"
+  similarity, and which are practical to run locally against an already-cached personal library like
+  medley's (model size, licensing, whether inference needs a GPU). Report findings as a simple list;
+  this feeds a possible future extension of the "similar tracks" panel above (comparing tracks by
+  attributes beyond BPM), not an immediate implementation task.
 - [ ] `/` ("view filter") is broken/inconsistent across windows and needs a redesign, not just a
   bugfix pass: on some windows it doesn't filter at all, and on others it wrongly persists its state
   after Enter instead of being a fully ephemeral filter over the window's current contents.
