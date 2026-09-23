@@ -15,6 +15,20 @@
 ### Owner's list — do these first, in this order
 ### Bugs
 - [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
+- [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
+  in the Spotify Web API (`/v1/me/player/currently-playing`, `/v1/me/player/recently-played`), with
+  no visible error. Likely cause: `ConnectReporter::build_request`
+  (`sources/spotify/src/connect_state.rs`) always sends `PutStateReason::PLAYER_STATE_CHANGED`, even
+  for the very first state PUT after a fresh dealer hello (`ensure_ready`). Prior art for this same
+  minimal (no-spirc) PutStateRequest approach — Cadence (`ForeverInLaw/windence#20`) — sends the
+  first state PUT after session+dealer come up with reason `NEW_DEVICE`, and only switches to
+  `PLAYER_STATE_CHANGED` for updates after that; without a `NEW_DEVICE`-tagged PUT first, Spotify's
+  backend has nothing to attach later `PLAYER_STATE_CHANGED` PUTs to, so they can 200 OK while never
+  registering the device. Fix: track (alongside `Ready`, per generation) whether the first state PUT
+  for this dealer session has gone out yet, and force `PutStateReason::NEW_DEVICE` on that one,
+  `PLAYER_STATE_CHANGED` after. Verify against a real playback session (`medley.log` at debug) once
+  changed — confirm the PUT is accepted and the track then actually appears on spotify.com/the Web
+  API before considering this fixed.
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio
@@ -137,6 +151,17 @@ Design: `docs/collections.md`.
   source, e.g. "Album · 2019 · 12 tracks") and show it on the list window's existing title line, with
   `release_label(track_count)` (single ≤3, EP 4–7, else album) once the list is loaded. Also make the
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
+
+### Performance
+- [ ] Investigate high idle and analysis CPU usage in medley. Step 1 (read-only, can fan out several
+  subagents): find which parts of the code are responsible for CPU use while idle, during playback
+  (including skipping tracks every 30 seconds), and during navigation; inspect the scanner plugins'
+  code too. Look for duplicated work, unused/stale computations, event storms, and frequent
+  updates that could be batched, delayed, or removed. Step 2: measure a clean baseline in each of
+  three states — idle, playback (playing, and skipping tracks every 30 seconds), and scanning —
+  using the same methodology each time. Step 3: apply the fixes the investigation turned up. Step 4:
+  re-measure all three states the same way and compare against the baseline. Report findings as
+  simple markdown lists.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
