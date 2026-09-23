@@ -34,8 +34,10 @@
   blueball) in order and use the first one with no stored credential pair yet (cross-check against
   `load_token_store`'s `TokenStore::accounts` — each `CachedToken` already records the `client_id`
   that minted it), not always the same fixed one; if every embedded id already has a stored pair,
-  fall back to the first one in the list (today's behavior). Write the selection as an ordered list,
-  not a pair of separate constants, so adding a further id later is a one-line change.
+  fall back to the first one in the list (today's behavior). Store the embedded ids as a single bare
+  ordered list of strings (e.g. `const EMBEDDED_WEBAPI_CLIENT_IDS: &[&str]`), not a pair of named
+  constants — the owner will add more ids to it later, unlabeled, so the shape needs to support that
+  without a name per entry.
 - [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
   in the Spotify Web API (`/v1/me/player/currently-playing`, `/v1/me/player/recently-played`), with
   no visible error. Likely cause: `ConnectReporter::build_request`
