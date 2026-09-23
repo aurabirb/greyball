@@ -149,8 +149,8 @@ impl Plugin for SpotifyPlugin {
             word: "spotify".to_string(),
             help: "addlogin [name] [client_id] — (re)authenticate and add a Web API credential \
                    pair alongside any already stored (never replaces one). name is just a label, \
-                   default if omitted. client_id is \"ncspot\" for ncspot's id, any other string \
-                   to use verbatim, or omitted to pick an embedded id not already logged in"
+                   default if omitted. client_id is used verbatim if given, or omitted to pick \
+                   an embedded id not already logged in"
                 .to_string(),
         }]
     }

@@ -98,15 +98,14 @@ fn scopes_match(tok: &CachedToken) -> bool {
     tok.scopes == WEBAPI_SCOPES.join(" ")
 }
 
-/// `addlogin`'s `client_id` argument: `"ncspot"` is a shorthand for
-/// ncspot's id, anything else is used verbatim, and omitted picks whichever
-/// `EMBEDDED_WEBAPI_CLIENT_IDS` entry has no stored credential pair yet in
-/// `cache_dir`'s token store (falling back to the first entry if all are
-/// already logged in) — a fix path to reach for when auth is failing.
+/// `addlogin`'s `client_id` argument: given, it's used verbatim; omitted
+/// picks whichever `EMBEDDED_WEBAPI_CLIENT_IDS` entry has no stored
+/// credential pair yet in `cache_dir`'s token store (falling back to the
+/// first entry if all are already logged in) — a fix path to reach for when
+/// auth is failing.
 fn resolve_client_id(arg: Option<&str>, cache_dir: &Path) -> String {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => pick_unused_embedded_client_id(cache_dir),
-        Some("ncspot") => NCSPOT_CLIENT_ID.to_string(),
         Some(other) => other.to_string(),
     }
 }
