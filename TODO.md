@@ -159,7 +159,7 @@
   `:renameplaylist <old> <new>`, both through `Catalog`'s playlist write path so `playlists_gen`
   bumps; rows in the item table (`ui/src/items.rs`). The owner's database holds scratch playlists
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
-  `zz-scratch*`) waiting for this.
+  `zz-scratch*`, `scantest`, `FilterBugTestXYZ`) waiting for this.
 ### Features
 - [ ] Sparse-fragment waveform decode: `WaveformPlugin::decode`
   (`sources/waveform/src/lib.rs`) currently linearly decodes the entire track to build the
@@ -276,75 +276,25 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Performance
-- [ ] High idle/analysis CPU usage — investigation (Step 1) and baseline measurement (Step 2) done;
-  Step 3 (apply fixes) and Step 4 (re-measure, compare) still to do. Step 2 baseline (debug build,
-  `/proc/<pid>/stat` utime+stime deltas, same methodology per state, ~180-230s windows): idle (scan
-  disabled, nothing playing) **11.6% avg CPU**; playback + skipping every ~30s among already-analyzed
-  local tracks (isolated from scan cost) **49.7% avg CPU**; actively scanning an uncached track (real
-  local files, BPM+waveform decode) **~97% of one core while decoding**. Measured in a sandboxed
-  environment with no working streaming source (Spotify compiled out, `http` source unconfigured) —
-  used real local test files at `/home/user/Desktop/bpm-test-audio/` instead of the owner's actual
-  library; Step 4's re-measurement will need the same workaround, or a real source, in that
-  environment. Idle at 11.6% is higher than Step 1's code reading alone would suggest (everything
-  traced there looked individually cheap) — worth resolving that gap during Step 3/4, not just
-  trusting the code-reading conclusion. The 4Hz `set_fps`
-  timer (`ui::BASELINE_FPS`, `ui/src/lib.rs:49`) and the unmemoized per-tick `StatusLine::assemble`
-  (`ui/src/view/status_line.rs:80`) were both confirmed real but individually cheap — not the
-  fan-noise driver. Ranked findings, most likely cause first:
-  1. **`WaveformPlugin::decode`'s unbounded full-track decode** (`sources/waveform/src/lib.rs:57-107`,
-     `core::audio_decode::decode_blocks` with no frame cap) — matches the owner's exact trigger
-     (uncached waveform). This is inherent to the feature (a full-track envelope needs the full
-     track), not itself a bug. The pacing-gap part investigated separately: `min_interval` is skipped
-     once a track's audio is already locally cached (`gated` is `false` when `has_stream` is `true`,
-     `core/src/scan.rs:619-630`) — **investigated, left unresolved, needs a design decision, not a
-     guess**: this exemption is load-bearing (removing it naively would slow a first-time backfill of
-     an already-cached library to `library_size × min_interval` — hours — and delay "now playing"
-     analysis by up to 15s behind an unrelated walk attempt, since `last_run` is shared per-plugin
-     between the background walk and the priority/now-playing worker). `run_walk` already has an
-     independent, easy-to-miss 1s pass-to-pass throttle (`PASS_SPACING`) that isn't the same thing as
-     `min_interval`. A real fix needs a decision (e.g. a separate, smaller CPU-pacing interval from
-     the network-cooldown `min_interval`, and/or per-worker rather than per-plugin `last_run`) before
-     any code change here.
-  2. **BPM and waveform independently decode the same track from scratch** — no shared PCM/decode
-     cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/`decode_once` job model).
-     Sequential, not simultaneous. **Measured** (8 real MP3 tracks, temporary instrumentation,
-     reverted): BPM's total analyze time splits ~62% decode / ~38% FFT DSP (`onset_envelope`) — the
-     DSP share is real, not negligible, contrary to Step 1's "cost is entirely decode" assumption for
-     this plugin specifically (waveform's own cost genuinely is ~99%+ decode, that part of the
-     assumption held). BPM only decodes the first 60s; waveform decodes the whole track, so full
-     decode-sharing wouldn't let waveform skip anything — but the *first 60s gets decoded twice*
-     today (once per plugin); sharing just that overlapping window would save ~4s/track, ~60% of
-     BPM's total per-track cost — a real, worthwhile saving if this is ever picked up. Also found:
-     `push_frames` (interleaved-buffer materialization into `Vec<[f32;2]>`) is its own real ~8% cost
-     bucket in both plugins, independent of decode and DSP — pure format-conversion/allocation
-     overhead, paid by BPM even though it only needs mono. Demuxing and each plugin's own per-block
-     callback (mono downmix, RMS accumulation) are both genuinely negligible (<1% each). Owner
-     decided (2026-09-23) not to pursue the shared-decode implementation right now — left here as a
-     scoped, numbers-backed future option, not queued.
-  3. **FIXED (`743e137`, reviewed clean)**: `ScanDriver::new` used to hardcode `ScanMode::Active` on
-     every launch instead of the persisted setting, corrected via a fragile call-order-dependent
-     post-hoc `set_mode`; now takes the initial mode as a constructor parameter, read from
-     `state.toml` before the driver is built. Verified true no-op in the deployed configuration
-     before this fix (empty plugin list gated all candidate population regardless of mode) — this
-     was an explicit-contract cleanup, not a live behavior bug in practice, but still correct to fix.
-  4. **FIXED (`6fef344`, `93f1d39`, both reviewed clean)**: `BpmPlugin::analyze` now decodes mono
-     directly (per-block downmix, no full stereo buffer), uses the decoder's real sample rate instead
-     of a hardcoded 44.1kHz assumption, and reuses one cached FFT plan across every track instead of
-     replanning per-track. The real-sample-rate change surfaced a genuine regression risk (a
-     corrupt/zero-rate container could reach an infinite-loop hazard in tempo estimation) — closed by
-     a shared `decode_once` guard (`93f1d39`) that also protects the waveform plugin's same path.
-  5. **FIXED (`9f087c0`, reviewed clean)**: every arrow-key cursor move on the Playlists-top window
-     used to re-read the whole playlist store from scratch (`TrackList::rows()`'s memo key included
-     `cursor`, plus an unconditional `s.playlists()` call in `visible_top()`) — split into a
-     cursor-independent `content` memo plus cheap cursor-dependent extras; measured 26→12 store
-     reads for a 50×Down-press burst, remaining 12 are legitimate scroll-offset changes.
-  6. Confirmed NOT the cause: scan concurrency is tightly bounded (exactly 2 threads, `scan.rs:241-
-     258`) — ruled out "many tracks scanning in parallel"; navigation doesn't bump `Session::revision`
-     so `Chrome`'s memo isn't the problem either.
-  Also minor, not ranked: `AudioTap` (`player/src/tap.rs`) runs unconditionally for every played
-  track (one mutex lock + copy every ~23ms) even when the Vis pane has never been opened — cheap per
-  sample, but a permanent tax on all playback; likely direction is lazy-init behind Vis actually
-  being opened once.
+- [ ] `min_interval`'s network-fetch cooldown is skipped once a track's audio is already locally
+  cached (`gated` is `false` when `has_stream` is `true`, `core/src/scan.rs:619-630`) — it only ever
+  paced fresh fetches, never decode/CPU cost, so a cached backlog gets no pacing beyond the walk's 1s
+  `PASS_SPACING`. Needs a design decision before any code change (not a guess): a naive
+  "always apply min_interval" would slow a first-time backfill of an already-cached library to
+  `library_size × min_interval` (hours) and delay now-playing analysis by up to 15s behind an
+  unrelated walk attempt, since `last_run` is shared per-plugin between the background walk and the
+  priority/now-playing worker. A real fix likely needs a separate, smaller CPU-pacing interval
+  distinct from the network cooldown, and/or per-worker rather than per-plugin `last_run` tracking.
+- [ ] BPM and waveform each independently decode the same track from scratch on a fresh scan — no
+  shared PCM/decode cache between scan plugins (`core/src/scan.rs`'s per-plugin `audio()`/
+  `decode_once` job model). BPM only decodes the first 60s; waveform decodes the whole track, so full
+  decode-sharing wouldn't let waveform skip anything — but that first 60s gets decoded twice today.
+  Measured (8 real MP3 tracks): sharing just the overlapping first-60s decode would save ~4s/track,
+  ~60% of BPM's total per-track cost. Owner decided (2026-09-23) not to pursue implementing this now
+  — left here as a scoped, numbers-backed option for later, not queued.
+- [ ] `AudioTap` (`player/src/tap.rs`) runs unconditionally for every played track (one mutex lock +
+  copy every ~23ms) even when the Vis pane has never been opened — cheap per sample, but a permanent
+  tax on all playback; likely direction is lazy-init behind Vis actually being opened once.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
