@@ -249,21 +249,11 @@ impl TabBar<'_> {
             let eighths = match level {
                 Some(0) => continue, // true silence: no bar
                 Some(v) => v,
-                None => 8, // no data yet: flat bar in white
+                None => 8, // no data yet: flat full bar
             };
             let glyph = bar(eighths as usize);
-            if level.is_none() {
-                // no data yet: stays white (never title_primary, so it can't be mistaken for real loud audio).
-                // Bars here are already max-height, so underline can't show against a full block; dim the
-                // not-yet-played tail instead so played vs. unplayed is still visible while scrubbing.
-                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| {
-                    if x < played {
-                        p.print((start + x, 0), glyph);
-                    } else {
-                        p.with_effect(Effect::Dim, |p| p.print((start + x, 0), glyph));
-                    }
-                });
-            } else if x < played {
+            // Color follows playback position only; height follows data availability only.
+            if x < played {
                 printer.with_color(ColorStyle::title_primary(), |p| {
                     p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
                 });
