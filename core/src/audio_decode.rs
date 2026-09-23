@@ -85,6 +85,9 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
     let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL).ok_or(DecodeError::NoAudio)?;
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+    if sample_rate == 0 {
+        return Err(DecodeError::NoAudio);
+    }
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|_| DecodeError::NoAudio)?;
 
     let mut block: Vec<[f32; 2]> = Vec::new();
