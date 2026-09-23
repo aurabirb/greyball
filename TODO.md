@@ -194,26 +194,6 @@
   medley's (model size, licensing, whether inference needs a GPU). Report findings as a simple list;
   this feeds a possible future extension of the "similar tracks" panel above (comparing tracks by
   attributes beyond BPM), not an immediate implementation task.
-- [ ] The `/` view-filter redesign (per-window ephemeral filter, second layer over Search results)
-  landed, but its review turned up two real bugs to fix before this can be considered done:
-  (1) `/` silently does nothing when the focused/main window is a fullscreen non-list pane (Log,
-  Help, Settings, Files, Vis via e.g. `:log`) — `Action::FocusSearch`
-  (`ui/src/view/input.rs:278-290`) returns `EventResult::Ignored` when `active_list_id()`'s window
-  has no `list()`, where the pre-redesign code used to fall through to opening global search in that
-  case; decide what `/` should do here (open global search again as the fallback, or something else)
-  and implement it, since silently doing nothing is worse than either prior behavior.
-  (2) `relayout`'s auto-widen-to-follow-a-target logic (`ui/src/view/track_list.rs:833-849`) only
-  accounts for the kind filter when deciding whether a newly-created/selected playlist is "hidden",
-  not the `/`-query filter — so creating a playlist while a Playlists-top `/`-filter is active can
-  silently fail to select/follow it (`visible_top` excludes it, the kind-filter widen doesn't help,
-  no cursor movement, no filter clear, no error). Make this widen (or clear) the `/`-filter too when
-  it's the query filter, not the kind filter, hiding the selection target.
-  Minor cleanup while in the area: `track_list.rs:627-629,644-646,674-676` build the identical
-  `"no matches for {query}"` row three times — factor into one helper; and `visible_collections`
-  (`track_list.rs:460`) gates on `self.is_results()` while `search_result_tracks` (`:477`) applies
-  the query unconditionally, relying on match-arm ordering elsewhere to stay safe — make both
-  consistent so it's not a latent trap.
-
 - [ ] The per-row like indicator dot (between BPM and title) looks visually jarring in its current
   glyph pair; use the project's first pair instead. History (`ui/src/view/transport.rs`,
   `LIKED_DOT`/`LIKED_LOCAL_DOT`): introduced in `57f80dd` as `•` (platform like) / `◦` (local-only,
