@@ -130,6 +130,22 @@
   from agent test runs (`alpha`, `beta`, `gamma` twice each, `tmp1`, `tmp2`, `shuffletest`,
   `zz-scratch*`) waiting for this.
 ### Features
+- [ ] Sparse-fragment waveform decode: `WaveformPlugin::decode`
+  (`sources/waveform/src/lib.rs`) currently linearly decodes the entire track to build the
+  400-bucket envelope (`core::waveform::BUCKETS`), and measured decode is ~99%+ of its total cost
+  (see the Performance section's finding #2 numbers). Since the output is only ever 400 coarse
+  buckets, decoding a short window (e.g. 1-2s) every N seconds and using each window's RMS to stand
+  in for its bucket range instead of a full linear decode should cut CPU roughly in proportion to
+  how much of the track is skipped, likely without a visually meaningful difference in the resulting
+  bar chart. The seek infrastructure for this already exists: `core::audio_decode`'s `StreamSource`
+  tracks `seekable`, true once a stream is fully local/cached — which waveform scanning already
+  requires before it decodes at all — so `symphonia`'s `format.seek()` is available for the cached
+  case that actually matters here. Before implementing: check how cheap seeking actually is for this
+  library's real formats in practice, especially MP3 VBR without a seek table (may need some resync
+  scanning per seek, so it's not literally free per-jump, just much cheaper than decoding everything
+  in between) — if seek cost eats too much of the savings for a common format, the fragment
+  size/count needs tuning accordingly. Only applies to the locally-decoded `WaveformPlugin` —
+  SoundCloud's own API-based waveform plugin already avoids decoding entirely and is unaffected.
 - [ ] A "cached music" special playlist/source — a browsable list of every track medley already has
   locally cached (`core::MediaCache`, `core/src/media_cache.rs`), regardless of which real source it
   came from. Owner's framing: build it as a normal plugin, the same shape as `http`/`soundcloud`
