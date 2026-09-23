@@ -154,7 +154,9 @@ impl WaveformPlugin {
         let mut levels: Vec<Option<f32>> = vec![None; n];
         // Each fragment's own bucket range, filled as fragments land, so the live preview grows
         // left-to-right like `decode_linear`'s instead of re-stretching the whole width every publish.
-        let mut partial = vec![0.0_f32; BUCKETS];
+        // Kept as `Option` too (not `f32`) so a failed seek's still-empty range doesn't publish as
+        // fake silence before the final gap-fill runs — see `fill_gaps`.
+        let mut partial: Vec<Option<f32>> = vec![None; BUCKETS];
         let live_chunk = (n / 20).max(1);
         let decoded = core::audio_decode::decode_fragments(stream, &positions, FRAGMENT_WINDOW, |i, block, _rate| {
             let (sum, count) = block.iter().fold((0.0_f32, 0usize), |(s, c), [l, r]| (s + (l * l + r * r) * 0.5, c + 1));
@@ -163,23 +165,27 @@ impl WaveformPlugin {
 
             let start = bucket_of(i, n);
             let end = if i + 1 == n { BUCKETS } else { bucket_of(i + 1, n) };
-            partial[start..end].fill(level);
+            partial[start..end].fill(Some(level));
 
-            if ((i + 1) % live_chunk == 0 || i + 1 == n)
-                && let Some(prefix) = normalise(&partial[..end])
-            {
-                waveform::publish_live(track.id, &prefix);
+            if (i + 1) % live_chunk == 0 || i + 1 == n {
+                // Gap-fill restricted to the reached prefix: the unreached tail must stay `None`/excluded
+                // from `normalise`'s scaling, only a within-prefix gap (a failed seek) gets filled.
+                let filled_prefix = fill_gaps(&partial[..end]);
+                if let Some(prefix) = normalise(&filled_prefix) {
+                    waveform::publish_live(track.id, &prefix);
+                }
             }
             wanted()
         });
-        (fill_gaps(levels), decoded)
+        (fill_gaps(&levels), decoded)
     }
 }
 
 /// Fills seek-failure gaps (`None`, where `on_fragment` was never called for that index) from the
-/// nearest successfully-decoded neighbour, so a failed seek never renders as fake silence (`0.0`) —
-/// indistinguishable from genuinely quiet audio.
-fn fill_gaps(levels: Vec<Option<f32>>) -> Vec<f32> {
+/// nearest successfully-decoded neighbour within the given slice, so a failed seek never renders as
+/// fake silence (`0.0`) — indistinguishable from genuinely quiet audio. Shared by the final persisted
+/// result and each live-preview prefix during the scan.
+fn fill_gaps(levels: &[Option<f32>]) -> Vec<f32> {
     levels
         .iter()
         .enumerate()
