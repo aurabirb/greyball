@@ -253,13 +253,14 @@ impl TabBar<'_> {
             };
             let glyph = bar(eighths as usize);
             if level.is_none() {
-                // no data yet: stays white (never title_primary, so it can't be mistaken for real loud audio),
-                // but underlined once played so it still tracks the scrub position.
+                // no data yet: stays white (never title_primary, so it can't be mistaken for real loud audio).
+                // Bars here are already max-height, so underline can't show against a full block; dim the
+                // not-yet-played tail instead so played vs. unplayed is still visible while scrubbing.
                 printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| {
                     if x < played {
-                        p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
-                    } else {
                         p.print((start + x, 0), glyph);
+                    } else {
+                        p.with_effect(Effect::Dim, |p| p.print((start + x, 0), glyph));
                     }
                 });
             } else if x < played {
