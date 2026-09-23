@@ -19,14 +19,16 @@
   logged in, picked from an embedded list, instead of always the one fixed default — a fix path for
   a user to reach for when Spotify auth is failing. Today `resolve_client_id`
   (`sources/spotify/src/auth.rs:83-89`) always resolves an omitted `client_id` argument to
-  `NCSPOT_CLIENT_ID` (ncspot's published Web API client id). Add a second embedded client id for
-  medley itself alongside `NCSPOT_CLIENT_ID` (the owner referred to it as "blueball/medley" —
-  **needs the owner to supply the actual registered client id value**, this can't be guessed/
-  invented), and when `addlogin` gets no `client_id` argument, pick whichever of the embedded ids
-  has no stored credential pair yet (cross-check against `load_token_store`'s `TokenStore::accounts`
-  — each `CachedToken` already records the `client_id` that minted it) rather than always defaulting
-  to the same one. If every embedded id already has a stored pair, fall back to the current
-  behavior (ncspot).
+  `NCSPOT_CLIENT_ID` (ncspot's published Web API client id) — the only embedded id right now. When
+  `addlogin` gets no `client_id` argument, walk the app's embedded client-id list in order and use
+  the first one with no stored credential pair yet (cross-check against `load_token_store`'s
+  `TokenStore::accounts` — each `CachedToken` already records the `client_id` that minted it), not
+  always the same fixed one; if every embedded id already has a stored pair, fall back to the first
+  one in the list (today's behavior). A second embedded id for medley itself (the owner referred to
+  it as "blueball/medley") still needs the owner to supply the actual registered client id value
+  before it can be added — that part can't be guessed/invented — so until then this only has one id
+  to walk, but the selection logic should still be written generally (an ordered list, not a single
+  constant) so adding that second id later is a one-line change.
 - [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
   in the Spotify Web API (`/v1/me/player/currently-playing`, `/v1/me/player/recently-played`), with
   no visible error. Likely cause: `ConnectReporter::build_request`
