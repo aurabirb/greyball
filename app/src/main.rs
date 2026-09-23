@@ -650,6 +650,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
     let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::CacheOnly } else { ScanMode::Disabled };
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
+    // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
+    // seeds the default when there's no persisted override in `state.toml`.
+    let initial_scan_mode = load_scan_mode(bpm_default_mode);
 
     log_registered_sources(&sources);
 
@@ -665,11 +668,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         media_cache,
         engine,
         data_dir().join("history.m3u8"),
+        initial_scan_mode,
     );
     if let Some(scan) = &session.scan {
-        scan.set_mode(load_scan_mode(bpm_default_mode));
-        // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above
-        // only seeds the initial mode.
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
         for p in extra_scan_plugins {
             scan.register_plugin(p);

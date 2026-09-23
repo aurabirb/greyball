@@ -216,11 +216,11 @@ pub struct ScanDriver {
 }
 
 impl ScanDriver {
-    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>) -> Self {
+    pub fn new(plugins: Vec<Arc<dyn ScanPlugin>>, mode: ScanMode) -> Self {
         Self {
             inner: Arc::new(Inner {
                 plugins: Mutex::new(plugins),
-                mode: AtomicU8::new(ScanMode::Active.to_u8()),
+                mode: AtomicU8::new(mode.to_u8()),
                 priority: Mutex::new(VecDeque::new()),
                 priority_wake: Condvar::new(),
                 walk: Mutex::new(WalkInbox { woken: true, dirty: Vec::new(), rebuild: true }),
