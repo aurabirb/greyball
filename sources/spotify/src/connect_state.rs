@@ -219,17 +219,22 @@ fn extract_connection_id(msg: DealerMessage) -> Result<String, librespot_core::E
         .ok_or_else(|| librespot_core::Error::failed_precondition("dealer hello had no connection id header"))
 }
 
-/// Advertises no remote-control support at all (`command_acks`/`supports_*_command` all false,
-/// `hidden`+`connect_disabled` true) — this device only ever reports its own state, it never
-/// takes commands from other Spotify apps, so it must not claim otherwise.
+/// Advertises no remote-control support at all (`command_acks`/`supports_*_command`/
+/// `is_controllable` all false) — this device only ever reports its own state, it never takes
+/// commands from other Spotify apps, so it must not claim otherwise. `hidden`/`connect_disabled`
+/// were originally `true` too, but Spotify's backend silently refuses to adopt a device that sets
+/// either flag (confirmed against the real backend — see TODO.md), which is exactly why playback
+/// never showed up as currently-playing/recently-played; both are `false` now so the PUT actually
+/// lands. Trade-off (owner signed off): medley now shows up as a selectable-looking device in the
+/// Connect picker on other Spotify clients, but every other flag above keeps it non-controllable.
 fn capabilities() -> Capabilities {
     Capabilities {
         can_be_player: true,
         is_observable: true,
         command_acks: false,
-        hidden: true,
+        hidden: false,
         disable_volume: true,
-        connect_disabled: true,
+        connect_disabled: false,
         is_controllable: false,
         supports_logout: false,
         supports_rename: false,
@@ -276,7 +281,7 @@ fn player_state(session: &Session, uri: &str, state: PlaybackState) -> PlayerSta
         options: MessageField::some(ContextPlayerOptions::new()),
         prev_tracks: Vec::new(),
         next_tracks: Vec::new(),
-        track: MessageField::some(ProvidedTrack { uri: uri.to_string(), ..Default::default() }),
+        track: MessageField::some(ProvidedTrack { uri: uri.to_string(), provider: "context".to_string(), ..Default::default() }),
         position_as_of_timestamp: position_ms as i64,
         duration: duration_ms as i64,
         timestamp: now_ms,
