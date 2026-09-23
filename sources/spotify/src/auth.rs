@@ -6,8 +6,10 @@
 //! * [`MUSIC_CLIENT_ID`] — Spotify's own official client id (the one
 //!   librespot/most third-party clients use for the streaming/Connect
 //!   session). Used only to obtain librespot [`Credentials`].
-//! * [`NCSPOT_CLIENT_ID`] — the default for the bearer token `webapi.rs`
-//!   uses for search/resolve/library calls.
+//! * [`NCSPOT_CLIENT_ID`], [`WEBAPI_CLIENT_ID`] — embedded Web API client
+//!   ids (`EMBEDDED_WEBAPI_CLIENT_IDS`) `webapi.rs` uses for
+//!   search/resolve/library calls; `addlogin` picks whichever isn't already
+//!   logged in when given no explicit `client_id`.
 //!
 //! The Web API side supports several named credential *pairs* at once
 //! (`TokenStore`, `webapi_tokens.json`), each remembering the client id that
@@ -44,9 +46,25 @@ use serde::{Deserialize, Serialize};
 pub(crate) const MUSIC_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 
 /// ncspot's own published Web API client id (`src/authentication.rs`,
-/// https://github.com/hrkfdn/ncspot) — the default for the Web API login.
-/// Redirect matching is loopback-any-port, like `MUSIC_CLIENT_ID`.
+/// https://github.com/hrkfdn/ncspot). Redirect matching is
+/// loopback-any-port, like `MUSIC_CLIENT_ID`.
 const NCSPOT_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
+
+/// The dedicated `blueball`/medley app registered on the Spotify developer
+/// dashboard. Its "APIs used" is Web API only (Development mode, no Web
+/// Playback SDK/streaming grant) — it's only ever meant to mint the bearer
+/// token for `webapi.rs` search/resolve calls, never the librespot session.
+const WEBAPI_CLIENT_ID: &str = "89485716cfd24928b4d7ffc2bee5e07e";
+
+/// Must exactly match a redirect URI registered against `WEBAPI_CLIENT_ID`
+/// on the Spotify developer dashboard — Spotify validates it byte-for-byte
+/// for this app, unlike the other embedded ids' loopback-any-port match.
+const WEBAPI_REDIRECT_URI: &str = "http://127.0.0.1:3121/callback";
+
+/// Embedded Web API client ids `addlogin` picks from when given no explicit
+/// `client_id` argument — tried in order, first one not already logged in
+/// wins (see `resolve_client_id`). More may be added later.
+const EMBEDDED_WEBAPI_CLIENT_IDS: &[&str] = &[NCSPOT_CLIENT_ID, WEBAPI_CLIENT_ID];
 
 /// The pair `Auth::login` (setup) fills and `probe`/`wiring` use unless
 /// something promoted a different one active.
@@ -81,22 +99,46 @@ fn scopes_match(tok: &CachedToken) -> bool {
 }
 
 /// `addlogin`'s `client_id` argument: `"ncspot"` is a shorthand for
-/// ncspot's id, anything else is used verbatim, and omitted defaults to it.
-fn resolve_client_id(arg: Option<&str>) -> String {
+/// ncspot's id, anything else is used verbatim, and omitted picks whichever
+/// `EMBEDDED_WEBAPI_CLIENT_IDS` entry has no stored credential pair yet in
+/// `cache_dir`'s token store (falling back to the first entry if all are
+/// already logged in) — a fix path to reach for when auth is failing.
+fn resolve_client_id(arg: Option<&str>, cache_dir: &Path) -> String {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
-        None | Some("ncspot") => NCSPOT_CLIENT_ID.to_string(),
+        None => pick_unused_embedded_client_id(cache_dir),
+        Some("ncspot") => NCSPOT_CLIENT_ID.to_string(),
         Some(other) => other.to_string(),
     }
 }
 
-/// The OAuth client to mint/refresh a token with, for `client_id`, on a
-/// loopback-any-port redirect.
+fn pick_unused_embedded_client_id(cache_dir: &Path) -> String {
+    let store = load_token_store(cache_dir);
+    let used: std::collections::HashSet<&str> =
+        store.accounts.values().map(|t| t.client_id.as_str()).collect();
+    EMBEDDED_WEBAPI_CLIENT_IDS
+        .iter()
+        .find(|id| !used.contains(**id))
+        .unwrap_or(&EMBEDDED_WEBAPI_CLIENT_IDS[0])
+        .to_string()
+}
+
+/// The OAuth client to mint/refresh a token with, for `client_id`.
+/// `WEBAPI_CLIENT_ID` requires its fixed, exactly-registered
+/// `WEBAPI_REDIRECT_URI`; every other id (ncspot's, or a custom one pasted
+/// via `addlogin`) uses loopback-any-port instead, like `MUSIC_CLIENT_ID`.
 fn oauth_client_for_id(client_id: &str) -> Result<librespot_oauth::OAuthClient, String> {
-    let redirect = format!("http://127.0.0.1:{}/login", free_port()?);
-    OAuthClientBuilder::new(client_id, &redirect, WEBAPI_SCOPES.to_vec())
-        .open_in_browser()
-        .build()
-        .map_err(|e| e.to_string())
+    if client_id == WEBAPI_CLIENT_ID {
+        OAuthClientBuilder::new(client_id, WEBAPI_REDIRECT_URI, WEBAPI_SCOPES.to_vec())
+            .open_in_browser()
+            .build()
+            .map_err(|e| e.to_string())
+    } else {
+        let redirect = format!("http://127.0.0.1:{}/login", free_port()?);
+        OAuthClientBuilder::new(client_id, &redirect, WEBAPI_SCOPES.to_vec())
+            .open_in_browser()
+            .build()
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -342,7 +384,7 @@ impl Auth {
             .filter(|s| !s.is_empty())
             .unwrap_or(DEFAULT_ACCOUNT)
             .to_string();
-        let client_id = resolve_client_id(client_id);
+        let client_id = resolve_client_id(client_id, cache_dir);
         std::fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
         log::info!("spotify: opening browser for Spotify login — web API ({name}, client id {client_id})");
         let tok = oauth_client_for_id(&client_id)?.get_access_token().map_err(|e| e.to_string())?;
@@ -423,8 +465,9 @@ pub fn fallback_webapi_token(cache_dir: &Path) -> Option<String> {
     None
 }
 
-/// A free loopback port for the OAuth redirects — both client ids match any
-/// port on `127.0.0.1`.
+/// A free loopback port for `MUSIC_CLIENT_ID`'s (or `NCSPOT_CLIENT_ID`'s, or
+/// a custom pasted id's) redirect — these match any port on `127.0.0.1`,
+/// unlike `WEBAPI_CLIENT_ID`'s fixed `WEBAPI_REDIRECT_URI`.
 fn free_port() -> Result<u16, String> {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|s| s.local_addr())
