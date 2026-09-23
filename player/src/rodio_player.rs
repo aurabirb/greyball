@@ -213,6 +213,9 @@ impl Player for RodioPlayer {
     }
 
     fn levels(&self) -> [f32; 5] {
+        // Only ever polled while `:vis` is open — first call latches the
+        // tap on, so `Tapped::next` starts actually publishing windows.
+        self.tap.activate();
         let window = self.tap.snapshot();
         crate::spectrum::bands(&window.samples, window.sample_rate)
     }

@@ -6,9 +6,11 @@
 //! unchanged (playback is never affected) while also mixing multi-channel
 //! frames down to mono and, once it's collected a window's worth, handing
 //! that batch to `AudioTap`. The lock is only taken once per window (not per
-//! sample), so it stays cheap on the audio thread's real-time deadline.
+//! sample), so it stays cheap on the audio thread's real-time deadline — and
+//! is skipped entirely until `AudioTap::activate` has been called at least
+//! once, so playback pays nothing when nothing is reading the tap.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,9 +35,20 @@ pub struct AudioWindow {
 pub struct AudioTap {
     latest: Mutex<Vec<f32>>,
     sample_rate: AtomicU32,
+    /// One-way latch: false until something has actually asked for a
+    /// snapshot (i.e. the `:vis` pane has been opened at least once).
+    /// `Tapped::next` checks this before taking the per-window lock, so
+    /// playback pays nothing for the tap until it has a reader.
+    active: AtomicBool,
 }
 
 impl AudioTap {
+    /// Turns the tap on for good — called from [`Player::levels`], which is
+    /// itself only ever polled while the `:vis` pane is open.
+    pub fn activate(&self) {
+        self.active.store(true, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> AudioWindow {
         AudioWindow {
             samples: self.latest.lock().unwrap().clone(),
@@ -91,7 +104,9 @@ impl<S: Source> Iterator for Tapped<S> {
             self.frame.clear();
             self.window.push(mono);
             if self.window.len() >= WINDOW {
-                self.tap.publish(&self.window, self.sample_rate);
+                if self.tap.active.load(Ordering::Relaxed) {
+                    self.tap.publish(&self.window, self.sample_rate);
+                }
                 self.window.clear();
             }
         }
