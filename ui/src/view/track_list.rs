@@ -118,11 +118,12 @@ fn rank_rows<T: Clone>(items: &[T], query: &str, name: impl Fn(&T) -> String) ->
     ranked.into_iter().map(|(it, _)| it).collect()
 }
 
-/// Revision, view generation, scroll offset, cursor, body height, the search text being typed.
-type FrameKey = (u64, u64, usize, usize, usize, Option<String>);
+/// Revision, view generation, scroll offset, body height, the search text being typed — deliberately
+/// not the cursor, so a cursor move alone never re-reads the list's own content (e.g. the playlist store).
+type ContentKey = (u64, u64, usize, usize, Option<String>);
 
-/// One list window's rendered rows plus what the shell's readout shows about it.
-pub(super) struct ListFrame {
+/// The cursor-independent part of a rendered frame — rebuilt only when the list's own content changes.
+pub(super) struct ListContent {
     title: String,
     rows: Vec<Row>,
     total: usize,
@@ -130,20 +131,34 @@ pub(super) struct ListFrame {
     count: usize,
     /// A paginated remote list only knows what it has loaded so far.
     loading: bool,
-    /// A keypress binds the playlist row under the cursor.
-    pub(super) assignable: bool,
-    /// The row under the cursor already has a key.
-    keyed: bool,
     /// Items per kind, parallel to the window's `segments`.
     kind_counts: Option<Vec<usize>>,
     /// The playing track's row, for the scrollbar marker.
     playing: Option<usize>,
+}
+
+/// One list window's rendered rows plus what the shell's readout shows about it. Wraps the
+/// cursor-independent `ListContent` (shared, memoized) with the cheap cursor-dependent fields
+/// rebuilt fresh every call.
+pub(super) struct ListFrame {
+    content: Arc<ListContent>,
+    /// A keypress binds the playlist row under the cursor.
+    pub(super) assignable: bool,
+    /// The row under the cursor already has a key.
+    keyed: bool,
     /// The cursor is on a collection row, which `q` enqueues whole.
     collection: bool,
     /// The cursor is on a track, which `y` shares.
     track: bool,
     /// The selected track row's clickable actions, in draw order; empty off a track.
     actions: Vec<(BuiltinAction, String, &'static str)>,
+}
+
+impl std::ops::Deref for ListFrame {
+    type Target = ListContent;
+    fn deref(&self) -> &ListContent {
+        &self.content
+    }
 }
 
 /// A track-list window of one kind: its cursor, which list it is in, its `/`-filter and its memos.
@@ -173,7 +188,8 @@ pub(super) struct TrackList {
     last_click: Option<(Instant, usize)>,
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
     matches: Memo<(u64, u64), Arc<[TrackId]>>,
-    frame: Memo<FrameKey, Arc<ListFrame>>,
+    /// Cursor-independent; the cursor-dependent rest of `ListFrame` is cheap and built fresh every call.
+    content: Memo<ContentKey, Arc<ListContent>>,
     /// `top_all` narrowed by the kind filter, keyed on the same generations and the view generation.
     top: Memo<(u64, u64, u64, u64), Arc<[TopRow]>>,
     /// The top-level rows in this window's order before the kind filter, keyed on the playlists, remote playlists and hotkeys generations.
@@ -209,7 +225,7 @@ impl TrackList {
             view_gen: 0,
             last_click: None,
             matches: Memo::default(),
-            frame: Memo::default(),
+            content: Memo::default(),
             top_matches: Memo::default(),
             collection_matches: Memo::default(),
             track_matches: Memo::default(),
@@ -465,8 +481,8 @@ impl TrackList {
     fn visible_top(&self, s: &Session) -> Arc<[TopRow]> {
         let top = self.top(s);
         let Some(query) = self.query.as_deref().filter(|_| self.at_playlists_top()) else { return top };
-        let playlists = s.playlists();
         self.top_matches.get_or_build((s.playlists_gen(), s.remote_playlists_gen(), s.hotkeys_gen(), self.view_gen), || {
+            let playlists = s.playlists();
             rank_rows(&top, query, |row| top_row_name(row, &playlists)).into()
         })
     }
@@ -715,35 +731,40 @@ impl TrackList {
         Rect::from_size((rect.left(), rect.top() + top), (rect.width(), rect.height() - top))
     }
 
-    /// This window's rows for a `rect`-sized window, rebuilt only when something they read changed.
+    /// This window's rows for a `rect`-sized window. The cursor-independent part is rebuilt only when
+    /// something it reads changed; the cursor-dependent rest is cheap (memoized reads underneath) and
+    /// built fresh every call, so a cursor move alone never re-reads the list's own content.
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<ListFrame> {
         let (s, view_h) = (ctx.s, Self::body(rect).height());
-        let key = (s.revision(), self.view_gen, self.state.offset, self.state.cursor, view_h, self.input.clone());
-        self.frame.get_or_build(key, || {
+        let key = (s.revision(), self.view_gen, self.state.offset, view_h, self.input.clone());
+        let content = self.content.get_or_build(key, || {
             let total = self.len(s);
             let count = if self.kind == ListKind::Queue && self.filtered_ids(s).is_none() { s.queue_len() } else { total };
-            let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
-            Arc::new(ListFrame {
+            Arc::new(ListContent {
                 title: self.title(s),
                 rows: self.rows(s, self.state.offset, view_h),
                 total,
                 count,
                 loading: self.loading(s),
-                assignable,
                 kind_counts: self.kind_counts(s),
                 playing: self.playing_index(s),
-                collection: self.collection_row(s).is_some(),
-                track: self.selected_track(s).is_some(),
-                actions: if self.selected_track(s).is_some() {
-                    [(BuiltinAction::CopyLink, "share", "↗"), (BuiltinAction::Like, "like", "♥")]
-                        .into_iter()
-                        .filter_map(|(action, name, glyph)| hint(&[s.effective_hotkey(&HotkeyTarget::Builtin(action))], name).map(|label| (action, label, glyph)))
-                        .collect()
-                } else {
-                    vec![]
-                },
-                keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
             })
+        });
+        let assignable = self.at_playlists_top() && self.top_row(s).is_some_and(|row| row.kind() != ItemKind::Album);
+        Arc::new(ListFrame {
+            content,
+            assignable,
+            collection: self.collection_row(s).is_some(),
+            track: self.selected_track(s).is_some(),
+            actions: if self.selected_track(s).is_some() {
+                [(BuiltinAction::CopyLink, "share", "↗"), (BuiltinAction::Like, "like", "♥")]
+                    .into_iter()
+                    .filter_map(|(action, name, glyph)| hint(&[s.effective_hotkey(&HotkeyTarget::Builtin(action))], name).map(|label| (action, label, glyph)))
+                    .collect()
+            } else {
+                vec![]
+            },
+            keyed: assignable && self.top_row(s).is_some_and(|row| s.playlist_hotkey(&row.target()).is_some()),
         })
     }
 
