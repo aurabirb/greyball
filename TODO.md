@@ -215,14 +215,11 @@ Design: `docs/collections.md`.
      downmixes to mono (only needs mono), assumes a hardcoded 44.1kHz sample rate regardless of the
      stream's actual rate, and replans an FFT (`FftPlanner::new()`) fresh per track instead of
      amortizing it.
-  5. **Every arrow-key cursor move on the Playlists-top window re-reads the whole playlist store**:
-     `TrackList::rows()`'s memo key includes `cursor` (`ui/src/view/track_list.rs:719-729`), so every
-     Down/Up press misses the memo and calls `s.playlists()` → `store.all_playlists()`
-     (`core/src/store.rs:432-441`, a full redb read + JSON-deserialize of every playlist including
-     its items) from scratch — cost scales with total playlist count, not visible rows (253
-     playlists on the machine this was checked on). `TrackList::visible_top()` has the same
-     unconditional-`s.playlists()`-call issue when a `/`-filter is active (`track_list.rs:465-472`,
-     called before the memo's `get_or_build`, so it pays even on a cache hit).
+  5. **FIXED (`9f087c0`, reviewed clean)**: every arrow-key cursor move on the Playlists-top window
+     used to re-read the whole playlist store from scratch (`TrackList::rows()`'s memo key included
+     `cursor`, plus an unconditional `s.playlists()` call in `visible_top()`) — split into a
+     cursor-independent `content` memo plus cheap cursor-dependent extras; measured 26→12 store
+     reads for a 50×Down-press burst, remaining 12 are legitimate scroll-offset changes.
   6. Confirmed NOT the cause: scan concurrency is tightly bounded (exactly 2 threads, `scan.rs:241-
      258`) — ruled out "many tracks scanning in parallel"; navigation doesn't bump `Session::revision`
      so `Chrome`'s memo isn't the problem either.
