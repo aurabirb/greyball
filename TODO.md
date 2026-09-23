@@ -38,31 +38,17 @@
   ordered list of strings (e.g. `const EMBEDDED_WEBAPI_CLIENT_IDS: &[&str]`), not a pair of named
   constants — the owner will add more ids to it later, unlabeled, so the shape needs to support that
   without a name per entry.
-- [ ] What medley is playing never shows up as currently-playing/recently-played on spotify.com or
-  in the Spotify Web API. **Root cause confirmed against the real backend** (standalone Python
-  script, `/tmp/spotify-connect-research/{login.py,experiment.py,FINDINGS.txt}`, not part of this
-  repo): `capabilities()` in `sources/spotify/src/connect_state.rs` sets both `hidden: true` and
-  `connect_disabled: true` — with either flag `true`, Spotify accepts the `PutStateRequest` (200 OK)
-  but silently never adopts the device (the Cluster response's `active_device_id`/`device` map stay
-  on whatever was already active), exactly matching the observed symptom. Separately,
-  `player_state()`'s `ProvidedTrack` only sets `uri`, not `provider`; without `provider: "context"`,
-  `/v1/me/player`/`currently-playing` return `item: null` even once the device is adopted. Fix,
-  confirmed end-to-end working against a real account (real track, full metadata, `is_playing: true`,
-  `progress_ms` advancing across `PLAYER_STATE_CHANGED` follow-ups) — no other change to
-  `connect_state.rs` needed, the `NEW_DEVICE`→`PLAYER_STATE_CHANGED` sequencing already in place is
-  correct as-is:
-  - `capabilities()`: `hidden: true` → `false`, `connect_disabled: true` → `false`.
-  - `player_state()`'s `ProvidedTrack { .. }`: add `provider: "context".to_string()`.
-  **Trade-off, owner already signed off on it**: with `hidden`/`connect_disabled` both `false`,
-  medley will show up as a selectable-looking device in the Connect picker on other Spotify clients
-  (phone, desktop, web) — it stays non-remote-controllable in every test (`is_controllable`,
-  `command_acks`, `supports_command_request` all stayed `false`), but tapping it from another client
-  wasn't testable (no second Spotify client available in that research session) — watch for reports
-  of odd behavior if someone actually taps it there.
-  Also found, not yet fixed: the on-disk `webapi_tokens.json` bearer is missing the
-  `user-read-recently-played` scope (403 "Insufficient client scope" on that endpoint specifically);
-  `auth.rs`'s `WEBAPI_SCOPES` already lists it in current source, so this is just a stale grant
-  predating that addition, fixable by one ordinary re-login (`:spotify addlogin`), not a code bug.
+- [ ] Connect-state fix landed (`18aafad`, `sources/spotify/src/connect_state.rs`:
+  `hidden`/`connect_disabled` → `false`, `provider: "context"` added) after the root cause was
+  confirmed end-to-end against the real Spotify backend by a standalone research script — but never
+  exercised through an actual live medley Spotify playback session (the implementer's smoke test
+  couldn't launch a second instance, owner's own instance held the DB lock). Play something through
+  medley's Spotify source and confirm it actually shows up on spotify.com/`/v1/me/player` before
+  closing this out. Separately, not yet fixed: the on-disk `webapi_tokens.json` bearer is missing
+  the `user-read-recently-played` scope (403 "Insufficient client scope" on that endpoint
+  specifically); `auth.rs`'s `WEBAPI_SCOPES` already lists it in current source, so this is just a
+  stale grant predating that addition, fixable by one ordinary re-login (`:spotify addlogin`), not a
+  code bug.
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio
