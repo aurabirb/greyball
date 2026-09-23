@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::units::Time;
 
 use crate::stream::{StreamHandle, StreamReader, StreamState};
 
@@ -102,6 +103,59 @@ fn decode_once(stream: &StreamHandle, seekable: bool, on_block: &mut dyn FnMut(&
         block.clear();
         push_frames(decoded, &mut block);
         if !on_block(&block, sample_rate) {
+            return Ok(sample_rate);
+        }
+    }
+    if stream.stopped() {
+        return Err(DecodeError::Interrupted);
+    }
+    Ok(sample_rate)
+}
+
+/// Seeks to each of `positions` and decodes up to `window` of audio there, calling `on_fragment`
+/// with the fragment's index and decoded stereo block (`false` to stop early). Only usable once the
+/// stream is complete — seeking a partial download isn't worth the wait, so callers gate on
+/// `stream.info().state == StreamState::Done` and fall back to `decode_blocks` otherwise.
+pub fn decode_fragments(
+    stream: &StreamHandle,
+    positions: &[Duration],
+    window: Duration,
+    mut on_fragment: impl FnMut(usize, &[[f32; 2]], u32) -> bool,
+) -> Result<u32, DecodeError> {
+    let source = StreamSource { reader: stream.reader(), len: stream.info().len, seekable: true };
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
+    let probed = symphonia::default::get_probe()
+        .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
+        .map_err(|_| DecodeError::NoAudio)?;
+    let mut format = probed.format;
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL).ok_or(DecodeError::NoAudio)?;
+    let track_id = track.id;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+    if sample_rate == 0 {
+        return Err(DecodeError::NoAudio);
+    }
+    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|_| DecodeError::NoAudio)?;
+
+    let target_frames = (window.as_secs_f32() * sample_rate as f32) as usize;
+    let mut block: Vec<[f32; 2]> = Vec::new();
+    for (i, &pos) in positions.iter().enumerate() {
+        if stream.stopped() {
+            return Err(DecodeError::Interrupted);
+        }
+        if format.seek(SeekMode::Coarse, SeekTo::Time { time: Time::from(pos.as_secs_f64()), track_id: Some(track_id) }).is_err() {
+            continue;
+        }
+        decoder.reset();
+        block.clear();
+        while block.len() < target_frames {
+            let Ok(packet) = format.next_packet() else { break };
+            if packet.track_id() != track_id {
+                continue;
+            }
+            let Ok(decoded) = decoder.decode(&packet) else { continue };
+            push_frames(decoded, &mut block);
+        }
+        if !on_fragment(i, &block, sample_rate) {
             return Ok(sample_rate);
         }
     }
