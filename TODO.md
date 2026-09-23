@@ -164,7 +164,8 @@
 - [ ] Sparse-fragment waveform decode: `WaveformPlugin::decode`
   (`sources/waveform/src/lib.rs`) currently linearly decodes the entire track to build the
   400-bucket envelope (`core::waveform::BUCKETS`), and measured decode is ~99%+ of its total cost
-  (see the Performance section's finding #2 numbers). Since the output is only ever 400 coarse
+  (RMS math itself is negligible — confirmed by direct instrumentation, not just code reading).
+  Since the output is only ever 400 coarse
   buckets, decoding a short window (e.g. 1-2s) every N seconds and using each window's RMS to stand
   in for its bucket range instead of a full linear decode should cut CPU roughly in proportion to
   how much of the track is skipped, likely without a visually meaningful difference in the resulting
