@@ -165,13 +165,6 @@
   medley's (model size, licensing, whether inference needs a GPU). Report findings as a simple list;
   this feeds a possible future extension of the "similar tracks" panel above (comparing tracks by
   attributes beyond BPM), not an immediate implementation task.
-- [ ] The per-row like indicator dot (between BPM and title) looks visually jarring in its current
-  glyph pair; use the project's first pair instead. History (`ui/src/view/transport.rs`,
-  `LIKED_DOT`/`LIKED_LOCAL_DOT`): introduced in `57f80dd` as `•` (platform like) / `◦` (local-only,
-  U+25E6 WHITE BULLET); changed in `5d6ee1a` to `●`/`○` (full/hollow circle); changed again in
-  `3ee258b` to the current `•`/`∘` (U+2218 RING OPERATOR) — that last swap of the local-only glyph
-  from `◦` to `∘` is likely what reads as jarring (RING OPERATOR is a math symbol, not designed to
-  pair visually with a bullet). Revert `LIKED_DOT`/`LIKED_LOCAL_DOT` to the first pair, `•`/`◦`.
 - [ ] Give the Log pane (`ui/src/view/log.rs`) its own view filter — grep-style substring filtering
   over its lines, same `/`-opens/Enter-locks/Esc-clears interaction as a `TrackList` window's view
   filter, but built separately: Log is a raw line buffer, not backed by `TrackList`, so it needs its
