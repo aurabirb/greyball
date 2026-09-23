@@ -153,15 +153,18 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Performance
-- [ ] Investigate high idle and analysis CPU usage in medley. Step 1 (read-only, can fan out several
-  subagents): find which parts of the code are responsible for CPU use while idle, during playback
-  (including skipping tracks every 30 seconds), and during navigation; inspect the scanner plugins'
-  code too. Look for duplicated work, unused/stale computations, event storms, and frequent
-  updates that could be batched, delayed, or removed. Step 2: measure a clean baseline in each of
-  three states — idle, playback (playing, and skipping tracks every 30 seconds), and scanning —
-  using the same methodology each time. Step 3: apply the fixes the investigation turned up. Step 4:
-  re-measure all three states the same way and compare against the baseline. Report findings as
-  simple markdown lists.
+- [ ] Investigate high idle and analysis CPU usage in medley. Known strong lead: analyzing a track
+  that has no cached waveform audibly spins up the fan (owner-observed) — the waveform/BPM scan path
+  (`sources/bpm` and wherever the waveform scan itself lives) is a prime suspect and should be
+  profiled first, alongside idle and navigation. Step 1 (read-only, can fan out several subagents):
+  find which parts of the code are responsible for CPU use while idle, during playback (including
+  skipping tracks every 30 seconds), and during navigation; inspect the scanner plugins' code too.
+  Look for duplicated work, unused/stale computations, event storms, and frequent updates that could
+  be batched, delayed, or removed. Step 2: measure a clean baseline in each of three states — idle,
+  playback (playing, and skipping tracks every 30 seconds), and scanning (a track with no cached
+  waveform analyzed) — using the same methodology each time. Step 3: apply the fixes the
+  investigation turned up. Step 4: re-measure all three states the same way and compare against the
+  baseline. Report findings as simple markdown lists.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
