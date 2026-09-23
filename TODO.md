@@ -72,16 +72,47 @@
     for the PUT-based approach — it would only be relevant to a wholly different feature (embedding
     the actual JS Web Playback SDK in a browser/webview), a much larger undertaking, not something
     `connect_state.rs` touches.
-  - **Unconfirmed hypothesis worth investigating next**: recently-played may be driven by Spotify's
-    actual audio-delivery/CDN telemetry (i.e. a client that streams audio *through* Spotify's own
-    Connect session), not by Cluster/PutStateRequest state at all — which would explain why
-    currently-playing (purely Cluster-derived) works while recently-played never moves, and would
-    mean medley's whole approach (self-decoded audio via its own Spotify source, `connect_state.rs`
-    only ever faking the Connect *state*, never the actual audio delivery) may be fundamentally
-    unable to populate recently-played without a real architecture change (e.g. actually streaming
-    through librespot's own audio path as a real Connect device, not just its own decoder). This
-    needs research into how Spotify's recently-played is actually populated before any further code
-    attempt — don't guess again at another PUT variation without that research first.
+  - **Hypothesis now CONFIRMED with real evidence — owner captured the real `open.spotify.com` web
+    player's actual network traffic on a real track play and found three request types
+    `connect_state.rs` sends none of.** This is a completely different API surface than the
+    `connect-state/v1/devices/<id>` PutStateRequest medley currently emulates, and is very plausibly
+    the actual missing piece for `recently-played`:
+    1. `POST https://<region>-spclient.spotify.com/connect-state/v1/player/command/from/<device_id>/to/<device_id>`
+       — the actual **play command**, not a state PUT. Body: `{"command":{"context":{"uri":
+       "spotify:playlist:...","url":"context://...","metadata":{}},"play_origin":{...},"options":
+       {"license":"tft","skip_to":{"track_uid":...,"track_index":...,"track_uri":...},
+       "player_options_override":{}},"logging_params":{"page_instance_ids":[...],
+       "interaction_ids":[...],"command_id":"..."},"endpoint":"play"}}`. This is spirc/remote-command
+       territory — exactly what `connect_state.rs`'s own doc comment says it deliberately does NOT
+       implement ("no remote-command handling"). Worth checking whether `recently-played` actually
+       needs this specific command to have been the thing that *started* playback (i.e. Spotify's
+       backend only trusts a play session it itself dispatched via this endpoint), which would be a
+       much bigger architectural implication than just adding a missing PUT field.
+    2. `POST https://<region>-spclient.spotify.com/melody/v1/msg/batch` carrying a
+       `track_stream_verification` message: `{"play_track":"spotify:track:...","playback_id":"...",
+       "ms_played":N,"ms_nominal_played":N,"session_id":"...","sequence_id":0,
+       "next_playback_id":"...","playback_service":"track-playback"}` — sent once, early in
+       playback (~15s in, in the captured example) — this looks exactly like "confirm this account
+       actually listened to this track for N ms," which is a very plausible candidate for the real
+       signal behind `recently-played`, distinct from Connect Cluster state entirely. The same batch
+       also carried a `jssdk_playback_stats` message (CDN url, codec, bitrate, latency breakdown,
+       `reason_start`/`reason_end`, etc.) — likely just telemetry, lower priority to replicate.
+    3. A second `melody/v1/msg/batch` call carrying `media_playback_event_v2`: a batch of periodic
+       heartbeat events (`et: 10`, incrementing `sn` sequence numbers, `ct` client timestamps ~30s
+       apart, `ps.pp` = playback position in ms, `ps.vo` = volume, `ps.br` = bitrate, device/os
+       context) — a recurring "still playing, here's the position" heartbeat, again via `melody`, not
+       `connect-state`.
+    **Next step**: extend the standalone research script (same raw-evidence discipline as before —
+    quote real responses, don't narrate success) to also send `melody/v1/msg/batch` calls matching
+    these two message types (`track_stream_verification` + periodic `media_playback_event_v2`)
+    alongside the existing PutStateRequest sequence, and test whether that's what actually makes
+    `recently-played` populate. If it does, `connect_state.rs` needs a second reporting path added
+    for this (a `melody` client, separate from the existing `spclient` connect-state one) — a real
+    but bounded addition, not the wholesale architecture rewrite the earlier
+    audio-delivery-through-Spotify hypothesis implied. Don't implement the `endpoint":"play"` remote
+    command path (lead #1) without first testing whether `recently-played` works without it — that
+    one has much bigger scope implications (accepting/dispatching commands, which `connect_state.rs`
+    currently and deliberately never does) and should only be pursued if leads #2/#3 alone don't work.
   - Not yet fixed, unrelated to the above: the on-disk `webapi_tokens.json` bearer was missing
     `user-read-recently-played` scope — appears to have been fixed already (a re-login happened at
     some point; the redo validation's token had the scope and got clean 200s from `recently-played`,
