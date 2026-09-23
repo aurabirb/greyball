@@ -15,25 +15,41 @@
 ### Owner's list — do these first, in this order
 ### Bugs
 - [ ] Spotify sign-in: the setup dialog cannot show the OAuth URL and Esc cannot release the listener's port, because `librespot-oauth` prints the URL with `println!` and blocks; a custom PKCE flow or a fork is needed so the dialog can show the URL and cancel the wait.
-- [ ] Spotify currently-playing/recently-played STILL doesn't work after the `hidden`/
-  `connect_disabled`/`provider` fix (`18aafad`, `sources/spotify/src/connect_state.rs`) — confirmed
-  by the owner testing it live. A prior research pass (standalone script, not in this repo) claimed
-  this was "confirmed end-to-end working" and that claim was wrong; it was likely checking a
-  transient response state, not the real persisted outcome, and asserted success with unwarranted
-  confidence instead of reporting the gap (see memory: `require-raw-evidence-for-external-validation`
-  — any future validation script MUST quote raw request/response evidence and plainly say what it
-  could NOT confirm, never a narrative "it works" conclusion). Owner has since added the **Web
-  Playback SDK** scope to the `blueball` app's registration on the Spotify developer dashboard as a
-  new thing to test. Next step: redo the standalone-script validation from scratch, properly this
-  time — actually wait for and check the real persisted `recently-played` result (not just an
-  immediate PUT response or a same-session `currently-playing` read), with every claim backed by
-  quoted raw evidence, and explicitly test whether the new Web Playback SDK scope changes anything.
-  Don't touch `connect_state.rs` again until that validation is genuinely solid. Separately, still
-  not fixed: the on-disk `webapi_tokens.json` bearer is missing the `user-read-recently-played`
-  scope (403 "Insufficient client scope" on that endpoint specifically); `auth.rs`'s `WEBAPI_SCOPES`
-  already lists it in current source, so this is just a stale grant predating that addition, fixable
-  by one ordinary re-login (`:spotify addlogin`), not a code bug — needed for the revalidation above
-  too.
+- [ ] Spotify `recently-played` still confirmed not working — this time with real, rigorous evidence
+  (raw HTTP responses quoted, two independent end-to-end runs, up to ~14 minutes elapsed each,
+  against the exact PUT sequence `connect_state.rs` (`18aafad`) actually ships), so this isn't a
+  validation-quality problem anymore, it's a real architectural finding:
+  - `/v1/me/player/currently-playing` **genuinely works** — directly observed, full real track body,
+    `is_playing: true`, `progress_ms` advancing. This part of the fix is confirmed good.
+  - `/v1/me/player/recently-played` **does not update**, confirmed negative — identical response
+    (same 5 pre-existing real tracks, same millisecond timestamps) before and after every test PUT
+    sequence, across two separate runs with different variations (bare `NEW_DEVICE`→
+    `PLAYER_STATE_CHANGED`→`/inactive`, and a track1→track2 transition with `prev_tracks` populated
+    on the second PUT, mimicking real-client track-completion reporting). `active_device_id` matched
+    our device every time; no error/warning field ever appeared; not a silent-adoption failure like
+    the original bug.
+  - **Web Playback SDK scope is a dead end for this approach, confirmed by reading the code**:
+    `device_info()` in `connect_state.rs` hardcodes `client_id: MUSIC_CLIENT_ID` — the connect-state
+    PUT never goes through `WEBAPI_CLIENT_ID` ("blueball") at all, so a scope added to blueball's
+    dashboard registration can't affect it; separately `WEBAPI_SCOPES` doesn't request `streaming`
+    anyway, so no token would carry that grant even if it did matter. Don't pursue this angle further
+    for the PUT-based approach — it would only be relevant to a wholly different feature (embedding
+    the actual JS Web Playback SDK in a browser/webview), a much larger undertaking, not something
+    `connect_state.rs` touches.
+  - **Unconfirmed hypothesis worth investigating next**: recently-played may be driven by Spotify's
+    actual audio-delivery/CDN telemetry (i.e. a client that streams audio *through* Spotify's own
+    Connect session), not by Cluster/PutStateRequest state at all — which would explain why
+    currently-playing (purely Cluster-derived) works while recently-played never moves, and would
+    mean medley's whole approach (self-decoded audio via its own Spotify source, `connect_state.rs`
+    only ever faking the Connect *state*, never the actual audio delivery) may be fundamentally
+    unable to populate recently-played without a real architecture change (e.g. actually streaming
+    through librespot's own audio path as a real Connect device, not just its own decoder). This
+    needs research into how Spotify's recently-played is actually populated before any further code
+    attempt — don't guess again at another PUT variation without that research first.
+  - Not yet fixed, unrelated to the above: the on-disk `webapi_tokens.json` bearer was missing
+    `user-read-recently-played` scope — appears to have been fixed already (a re-login happened at
+    some point; the redo validation's token had the scope and got clean 200s from `recently-played`,
+    not 403s), but confirm this stays true, it's not itself the blocker above.
 - [ ] Rapid skips advance the playlist pointer immediately, but while the newly selected track is
   loading or unavailable, the currently-playing title (and the rest of the now-playing readout) must
   keep reflecting the audio that is actually playing, and switch only when the new track's audio
