@@ -66,7 +66,7 @@ impl Action {
     pub fn is_window_action(&self) -> bool {
         matches!(
             self,
-            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_) | Action::Prompt(_)
+            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_) | Action::Prompt(_) | Action::FocusSearch
         )
     }
 }

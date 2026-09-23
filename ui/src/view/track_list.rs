@@ -474,7 +474,7 @@ impl TrackList {
     /// The search results' tracks, narrowed and ranked by the `/`-filter's second layer when one is active.
     fn search_result_tracks(&self, s: &Session) -> Arc<[core::Track]> {
         let tracks = self.results(s).map_or(&[][..], ResultSet::tracks);
-        let Some(query) = self.query.as_deref() else { return tracks.into() };
+        let Some(query) = self.query.as_deref().filter(|_| self.is_results()) else { return tracks.into() };
         self.track_matches.get_or_build((self.list_gen(s), self.view_gen), || rank_rows(tracks, query, core::Track::main).into())
     }
 
@@ -613,6 +613,11 @@ impl TrackList {
         name.unwrap_or_else(|| heading.to_string())
     }
 
+    /// The placeholder row shown when the `/`-filter matches nothing.
+    fn no_matches_row(&self) -> Row {
+        plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))
+    }
+
     /// Resolves only the visible `offset`/`limit` window — a list can run into the thousands.
     fn rows(&self, s: &Session, offset: usize, limit: usize) -> Vec<Row> {
         let pending = match &self.open {
@@ -625,7 +630,7 @@ impl TrackList {
         let track_rows = |tracks| tracks_to_rows(s, tracks, &pending, offset, playing);
         if let Some(matched) = self.filtered_ids(s) {
             if matched.is_empty() {
-                return vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))];
+                return vec![self.no_matches_row()];
             }
             let window: Vec<TrackId> = matched.iter().skip(offset).take(limit).copied().collect();
             return track_rows(s.tracks_for(&window));
@@ -641,9 +646,7 @@ impl TrackList {
                 Some(r) => vec![plain_row(format!("no results for {:?} — check the Log pane (:log) for source errors", r.query()))],
                 None => vec![],
             },
-            (ListKind::Search, _) if self.query.is_some() && self.len(s) == 0 => {
-                vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))]
-            }
+            (ListKind::Search, _) if self.query.is_some() && self.len(s) == 0 => vec![self.no_matches_row()],
             (ListKind::Search, _) if self.len(s) == 0 => vec![plain_row(format!("no {} in the results", self.kinds.label()))],
             (ListKind::Search, _) => {
                 let tracks = self.search_tracks(s);
@@ -671,9 +674,7 @@ impl TrackList {
             (ListKind::Playlists, Open::TopLevel) if self.kinds != KindFilter::All && self.top(s).is_empty() => {
                 vec![plain_row(format!("no {} yet", self.kinds.label()))]
             }
-            (ListKind::Playlists, Open::TopLevel) if self.query.is_some() && self.visible_top(s).is_empty() => {
-                vec![plain_row(format!("no matches for {:?}", self.query.as_deref().unwrap_or_default()))]
-            }
+            (ListKind::Playlists, Open::TopLevel) if self.query.is_some() && self.visible_top(s).is_empty() => vec![self.no_matches_row()],
             (ListKind::Playlists, Open::TopLevel) => {
                 let playlists = s.playlists();
                 self.visible_top(s)
@@ -833,11 +834,19 @@ impl TrackList {
         let anchored = self.anchor.take().filter(|(generation, at, _)| *generation == self.view_gen && *at == self.state.cursor);
         let explicit = self.select.take();
         if let Some(target) = &explicit {
-            let hidden = self.at_playlists_top()
+            let hidden_by_kind = self.at_playlists_top()
                 && !self.top(s).iter().any(|row| row.target() == *target)
                 && self.top_all(s).iter().any(|row| row.target() == *target);
-            if hidden {
+            if hidden_by_kind {
                 self.kinds = KindFilter::All;
+                self.view_gen += 1;
+            }
+            let hidden_by_query = self.at_playlists_top()
+                && self.query.is_some()
+                && self.top(s).iter().any(|row| row.target() == *target)
+                && !self.visible_top(s).iter().any(|row| row.target() == *target);
+            if hidden_by_query {
+                self.query = None;
                 self.view_gen += 1;
             }
         }

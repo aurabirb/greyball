@@ -278,7 +278,11 @@ impl MedleyView {
             Action::FocusSearch => {
                 let id = self.active_list_id();
                 let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s))) else {
-                    return EventResult::Ignored;
+                    // No list here at all (e.g. fullscreen Log/Help/Settings): fall back to global search.
+                    let Some(search_id) = self.search_window() else { return EventResult::Ignored };
+                    self.show(search_id);
+                    self.edit_search(search_id);
+                    return EventResult::consumed();
                 };
                 if awaiting {
                     self.edit_search(id);
