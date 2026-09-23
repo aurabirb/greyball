@@ -253,7 +253,15 @@ impl TabBar<'_> {
             };
             let glyph = bar(eighths as usize);
             if level.is_none() {
-                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| p.print((start + x, 0), glyph));
+                // no data yet: stays white (never title_primary, so it can't be mistaken for real loud audio),
+                // but underlined once played so it still tracks the scrub position.
+                printer.with_color(ColorStyle::front(Color::Dark(BaseColor::White)), |p| {
+                    if x < played {
+                        p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
+                    } else {
+                        p.print((start + x, 0), glyph);
+                    }
+                });
             } else if x < played {
                 printer.with_color(ColorStyle::title_primary(), |p| {
                     p.with_effect(Effect::Underline, |p| p.print((start + x, 0), glyph));
