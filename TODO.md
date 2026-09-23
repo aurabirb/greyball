@@ -184,9 +184,18 @@ Design: `docs/collections.md`.
   Playlists window's title unit follow the kind filter ("56 albums", not "56 playlists").
 
 ### Performance
-- [ ] High idle/analysis CPU usage — investigation (Step 1) done, read-only, findings below; Step 2
-  (baseline measurement in idle / playback+30s-skips / scanning-an-uncached-track, same methodology
-  each time), Step 3 (apply fixes), Step 4 (re-measure, compare) still to do. The 4Hz `set_fps`
+- [ ] High idle/analysis CPU usage — investigation (Step 1) and baseline measurement (Step 2) done;
+  Step 3 (apply fixes) and Step 4 (re-measure, compare) still to do. Step 2 baseline (debug build,
+  `/proc/<pid>/stat` utime+stime deltas, same methodology per state, ~180-230s windows): idle (scan
+  disabled, nothing playing) **11.6% avg CPU**; playback + skipping every ~30s among already-analyzed
+  local tracks (isolated from scan cost) **49.7% avg CPU**; actively scanning an uncached track (real
+  local files, BPM+waveform decode) **~97% of one core while decoding**. Measured in a sandboxed
+  environment with no working streaming source (Spotify compiled out, `http` source unconfigured) —
+  used real local test files at `/home/user/Desktop/bpm-test-audio/` instead of the owner's actual
+  library; Step 4's re-measurement will need the same workaround, or a real source, in that
+  environment. Idle at 11.6% is higher than Step 1's code reading alone would suggest (everything
+  traced there looked individually cheap) — worth resolving that gap during Step 3/4, not just
+  trusting the code-reading conclusion. The 4Hz `set_fps`
   timer (`ui::BASELINE_FPS`, `ui/src/lib.rs:49`) and the unmemoized per-tick `StatusLine::assemble`
   (`ui/src/view/status_line.rs:80`) were both confirmed real but individually cheap — not the
   fan-noise driver. Ranked findings, most likely cause first:
