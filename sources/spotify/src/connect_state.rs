@@ -50,6 +50,10 @@ impl PlaybackState {
 struct Ready {
     generation: u32,
     ok: bool,
+    /// Whether the first state PUT for this generation has gone out yet — it must be tagged
+    /// `NEW_DEVICE` (not `PLAYER_STATE_CHANGED`) or the device never registers in Spotify's
+    /// connect-state cluster, even though the PUT itself reports success.
+    first_state_put_sent: bool,
 }
 
 enum Job {
@@ -118,7 +122,8 @@ impl ConnectReporter {
                         continue;
                     }
                     let label = state.label();
-                    let request = build_request(&live.session, &uri, state);
+                    let reason = self.state_put_reason(&live).await;
+                    let request = build_request(&live.session, &uri, state, reason);
                     match live.session.spclient().put_connect_state_request(&request).await {
                         Ok(_) => log::debug!("spotify connect: state PUT accepted ({label}, {uri})"),
                         Err(e) => log::debug!("spotify connect: state PUT failed ({label}, {uri}): {e}"),
@@ -154,8 +159,22 @@ impl ConnectReporter {
                 live.generation
             );
         }
-        *guard = Some(Ready { generation: live.generation, ok });
+        *guard = Some(Ready { generation: live.generation, ok, first_state_put_sent: false });
         ok
+    }
+
+    /// `NEW_DEVICE` for the first state PUT of the current generation (registers the device in
+    /// Spotify's connect-state cluster), `PLAYER_STATE_CHANGED` for every one after — see `Ready`.
+    async fn state_put_reason(&self, live: &Live) -> EnumOrUnknown<PutStateReason> {
+        let mut guard = self.ready.lock().await;
+        if let Some(r) = guard.as_mut()
+            && r.generation == live.generation
+            && !r.first_state_put_sent
+        {
+            r.first_state_put_sent = true;
+            return EnumOrUnknown::new(PutStateReason::NEW_DEVICE);
+        }
+        EnumOrUnknown::new(PutStateReason::PLAYER_STATE_CHANGED)
     }
 
     async fn hello(live: &Live) -> bool {
@@ -255,7 +274,7 @@ fn player_state(session: &Session, uri: &str, state: PlaybackState) -> PlayerSta
     }
 }
 
-fn build_request(session: &Session, uri: &str, state: PlaybackState) -> PutStateRequest {
+fn build_request(session: &Session, uri: &str, state: PlaybackState, put_state_reason: EnumOrUnknown<PutStateReason>) -> PutStateRequest {
     let device = Device {
         device_info: MessageField::some(device_info(session)),
         player_state: MessageField::some(player_state(session, uri, state)),
@@ -265,7 +284,7 @@ fn build_request(session: &Session, uri: &str, state: PlaybackState) -> PutState
         device: MessageField::some(device),
         member_type: EnumOrUnknown::new(MemberType::CONNECT_STATE),
         is_active: true,
-        put_state_reason: EnumOrUnknown::new(PutStateReason::PLAYER_STATE_CHANGED),
+        put_state_reason,
         client_side_timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
         ..Default::default()
     }
