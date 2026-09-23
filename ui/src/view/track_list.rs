@@ -778,7 +778,7 @@ impl TrackList {
                     _ => hint(&[c.prev_key], "prev").into_iter().chain(hint(&[c.next_key], "next")).collect::<Vec<_>>(),
                 };
                 let rest = [hint(&[c.help_key], "help")].into_iter().flatten().chain(transport);
-                rest.chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.reveal_key], "show playing")).chain(hint(&[c.like_playing_key], "like")).collect()
+                rest.chain(hint(&[c.enqueue_key, c.wedge_key], "queue")).chain(hint(&[c.reveal_key], "show playing")).chain(hint(&[c.like_playing_key], "like playing")).collect()
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
