@@ -156,6 +156,13 @@
   panels currently do nothing or act on the wrong window before implementing, then fix all of them
   under this one model.
 
+- [ ] The per-row like indicator dot (between BPM and title) looks visually jarring in its current
+  glyph pair; use the project's first pair instead. History (`ui/src/view/transport.rs`,
+  `LIKED_DOT`/`LIKED_LOCAL_DOT`): introduced in `57f80dd` as `•` (platform like) / `◦` (local-only,
+  U+25E6 WHITE BULLET); changed in `5d6ee1a` to `●`/`○` (full/hollow circle); changed again in
+  `3ee258b` to the current `•`/`∘` (U+2218 RING OPERATOR) — that last swap of the local-only glyph
+  from `◦` to `∘` is likely what reads as jarring (RING OPERATOR is a math symbol, not designed to
+  pair visually with a bullet). Revert `LIKED_DOT`/`LIKED_LOCAL_DOT` to the first pair, `•`/`◦`.
 - [ ] Drop the unit word from the status-bar count (`12/64 tracks`, `3/10 playlists`, `5 results`,
   …) — it's obvious from the window what's being counted, so it should just read `12/64`. Built in
   `TrackList::count` (`ui/src/view/track_list.rs:763`, `format!("{}/{}{more} {}", …, frame.unit)`);
