@@ -230,6 +230,19 @@ Design: `docs/collections.md`.
   waveform analyzed) — using the same methodology each time. Step 3: apply the fixes the
   investigation turned up. Step 4: re-measure all three states the same way and compare against the
   baseline. Report findings as simple markdown lists.
+  Architectural lead worth profiling specifically (found while answering an owner question, not yet
+  measured): the whole UI redraws on a real `set_fps` timer, `ui::BASELINE_FPS = 4`
+  (`ui/src/lib.rs:49`, `app/src/main.rs:719`) — every ~250ms, idle or not, cursive fires
+  `Event::Refresh` and the app rebuilds a full `Frame` (`ui/src/view/frame.rs`). Most of that frame
+  is memoized behind `Session::revision()`/`warnings_revision()` (`Chrome::get_or_build`,
+  `frame.rs:44`), so it's cheap when nothing changed — but `StatusLine::assemble`
+  (`ui/src/view/status_line.rs:80`, explicitly commented "Live per-tick data, never memoized") is
+  NOT behind that cache and runs in full on every single one of those ~4/s ticks regardless of
+  whether anything is actually playing or changing, including a `waveform::live(id)` lookup
+  (`core/src/waveform.rs`) and `s.player_status()`/`bpm_status_tag`/`s.liked_mark(id)`. Worth
+  measuring whether this unconditional per-tick work (times every window's own `relayout`/rows
+  rebuild that also runs each frame, per the existing UI-reactivity TODO further down) is a
+  meaningful idle-CPU contributor on its own, separate from the scan-plugin lead above.
 
 ### Audits / cleanup tasks
 - [ ] Find functionality that exists in the codebase but isn't currently bound to a key or command, and wire it up so it's reachable.
