@@ -14,6 +14,36 @@
 
 ### Owner's list — do these first, in this order
 ### Bugs
+- [ ] SoundCloud scrubbing doesn't work — the top-bar waveform stays entirely white the whole time a
+  SoundCloud track plays, even though it's actively playing (per the two-axis waveform model,
+  `draw_waveform`, `ui/src/view/tab_bar.rs:243-262`: color is purely `x < played`, and `played` is
+  `0` for the whole track whenever `self.status.duration_ms` is `0`). Owner's hypothesis: the
+  detected track duration needs to be filled from SoundCloud's API metadata. Already traced, to save
+  the next pass some time — the naive "duration is never set" theory doesn't fully hold, so the real
+  bug is narrower than that and needs live confirmation, not another guess:
+  - `ApiTrack::into_track` (`sources/soundcloud/src/client.rs:1223-1224`) already does read a
+    duration from the API (`full_duration` if present and `> 0`, else `duration` — the latter is
+    *only* the 30s snippet length on snipped tracks, per its own field comment) and builds the
+    track's one `Rendition` with it via `Rendition::fresh(..., full, ...)`.
+  - `Track::fresh` (`core/src/types.rs:150-163`) copies `rendition.duration_ms` straight into
+    `Track.duration_ms` at construction — so a freshly-imported SoundCloud track's catalog record
+    should generally have a real nonzero duration already, contradicting "duration is never set" as
+    a blanket explanation.
+  - `player/src/rodio_player.rs:542`: `duration_ms = if decoded_ms > 0 { decoded_ms } else {
+    r.duration_ms }` — the live player's status falls back to the *catalog* rendition's duration
+    when the decoder can't determine one from the stream itself (plausible for a streamed SoundCloud
+    transcoding). This should also produce a nonzero `status.duration_ms` if the catalog duration is
+    actually present at this point.
+  What's NOT yet confirmed, needed before implementing anything: live-check (via
+  `:log`/`medley.log` at debug, or briefly instrumenting) whether a real SoundCloud track's
+  `Track.duration_ms` in the store is actually nonzero at play time — if it is, the bug is
+  downstream of both fallbacks above (something clearing/never-reaching `r.duration_ms` between
+  catalog and the live `PlayerStatus`/`StatusLine`, or `r` at open-time not being the catalog's own
+  rendition); if it's genuinely `0` in the store, check whether `full_duration` is actually present
+  in SoundCloud's real API responses for the tracks being played (the client only ever requests it
+  as an optional field — maybe it's absent for a class of tracks this wasn't tested against) and
+  whether the `duration` (snippet-only) fallback is silently firing/also `0` for those. Don't guess
+  at a fix without first confirming which of these it actually is.
 - [ ] A `NoAudio`-erroring track (probe failure, missing track, corrupt/zero sample rate) on a
   non-seekable first decode attempt can stall a scan for up to `FINISH_TIMEOUT` (30 min) before
   being skipped — `decode_blocks` (`core/src/audio_decode.rs:57-75`) treats any `NoAudio` there as
