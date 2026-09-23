@@ -122,7 +122,6 @@ pub(super) struct ListFrame {
     count: usize,
     /// A paginated remote list only knows what it has loaded so far.
     loading: bool,
-    unit: &'static str,
     /// A keypress binds the playlist row under the cursor.
     pub(super) assignable: bool,
     /// The row under the cursor already has a key.
@@ -556,16 +555,6 @@ impl TrackList {
         WindowOutcome::Consumed
     }
 
-    fn unit(&self, count: usize) -> &'static str {
-        if self.is_results() {
-            return if count == 1 { "result" } else { "results" };
-        }
-        if self.at_playlists_top() {
-            return self.kinds.unit(count);
-        }
-        if count == 1 { "track" } else { "tracks" }
-    }
-
     fn at_playlists_top(&self) -> bool {
         self.kind == ListKind::Playlists && matches!(self.open, Open::TopLevel)
     }
@@ -695,7 +684,6 @@ impl TrackList {
                 total,
                 count,
                 loading: self.loading(s),
-                unit: self.unit(count),
                 assignable,
                 kind_counts: self.kind_counts(s),
                 playing: self.playing_index(s),
@@ -757,10 +745,10 @@ impl TrackList {
         hints.into_iter().chain(tail).collect::<Vec<_>>().join("   ")
     }
 
-    /// The cursor's place in the list, `cursor/total unit`; `None` when the list is empty.
+    /// The cursor's place in the list, `cursor/total`; `None` when the list is empty.
     pub(super) fn count(&self, frame: &ListFrame) -> Option<String> {
         let more = if frame.loading { "+" } else { "" };
-        (frame.count > 0).then(|| format!("{}/{}{more} {}", self.state.cursor.min(frame.count - 1) + 1, frame.count, frame.unit))
+        (frame.count > 0).then(|| format!("{}/{}{more}", self.state.cursor.min(frame.count - 1) + 1, frame.count))
     }
 
     /// `marked` brackets the title, the focus marker docked windows use.

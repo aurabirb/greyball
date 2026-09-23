@@ -46,16 +46,6 @@ impl KindFilter {
         }
     }
 
-    /// The collection noun a Playlists top level counts under this filter.
-    pub(super) fn unit(self, count: usize) -> &'static str {
-        match (self, count == 1) {
-            (Self::Albums, true) => "album",
-            (Self::Albums, false) => "albums",
-            (_, true) => "playlist",
-            (_, false) => "playlists",
-        }
-    }
-
     fn short(self) -> &'static str {
         match self {
             Self::All => "All",
