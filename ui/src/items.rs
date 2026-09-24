@@ -112,6 +112,12 @@ pub const ITEMS: &[Item] = &[
     action(BuiltinAction::ToggleLog, &["log", "l"], "toggle the log pane", ""),
     action(BuiltinAction::ToggleSettings, &["settings", "set"], "toggle the settings pane", ""),
     action(BuiltinAction::ToggleVis, &["vis", "v"], "toggle the visualizer pane", ""),
+    action(
+        BuiltinAction::ToggleGenreMap,
+        &["genre-map", "gm"],
+        "toggle the genre-map pane",
+        "A scatter plot of the library by genre/style similarity (a 2D PCA projection of each track's genre embedding), colored by BPM. Arrow keys move the selected point.",
+    ),
     action(BuiltinAction::ToggleQueue, &["queue", "qu"], "toggle the queue pane", ""),
     action(BuiltinAction::ToggleHistory, &["history", "hi"], "toggle the history pane", ""),
     action(BuiltinAction::ShowHistory, &["hist", "ht"], "show the History tab window (history-tab)", ""),
@@ -127,7 +133,7 @@ pub const ITEMS: &[Item] = &[
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
-        "The windows: now-playing, playlists, search, history-tab, queue-tab, similar-tab (the startup tabs), log, settings, vis, queue, history, similar (the panes), playlist-keys, help, files.",
+        "The windows: now-playing, playlists, search, history-tab, queue-tab, similar-tab (the startup tabs), log, settings, vis, genre-map, queue, history, similar (the panes), playlist-keys, help, files.",
     ),
     command(
         Cmd::Panes,
@@ -152,6 +158,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::ToggleShuffle, "toggle queue shuffle", ""),
     builtin(Section::Player, BuiltinAction::LikePlaying, "like the playing track, or unlike it (asks first)", ""),
     builtin(Section::Player, BuiltinAction::ToggleVis, "toggle the visualizer pane", ""),
+    builtin(Section::Player, BuiltinAction::ToggleGenreMap, "toggle the genre-map pane", ""),
     builtin(Section::Player, BuiltinAction::RevealPlaying, "show the playing track in its playlist, else Now Playing", ""),
     fixed(
         Section::Hotkeys,

@@ -86,6 +86,7 @@ pub enum BuiltinAction {
     ToggleLog,
     ToggleSettings,
     ToggleVis,
+    ToggleGenreMap,
     ToggleQueue,
     ToggleHistory,
     ShowHistory,
@@ -131,6 +132,7 @@ impl BuiltinAction {
         (BuiltinAction::ToggleLog, None),
         (BuiltinAction::ToggleSettings, None),
         (BuiltinAction::ToggleVis, Some('v')),
+        (BuiltinAction::ToggleGenreMap, Some('g')),
         (BuiltinAction::ToggleQueue, None),
         (BuiltinAction::ToggleHistory, None),
         (BuiltinAction::ShowHistory, None),
@@ -180,6 +182,7 @@ impl BuiltinAction {
             BuiltinAction::ToggleLog => "toggle-log",
             BuiltinAction::ToggleSettings => "toggle-settings",
             BuiltinAction::ToggleVis => "toggle-vis",
+            BuiltinAction::ToggleGenreMap => "toggle-genre-map",
             BuiltinAction::ToggleQueue => "toggle-queue",
             BuiltinAction::ToggleHistory => "toggle-history",
             BuiltinAction::ShowHistory => "show-history",
@@ -2235,6 +2238,20 @@ impl Session {
         // Tie-break on id so equal-distance results have a deterministic order even against MemStore's HashMap iteration.
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
         ranked.into_iter().map(|(_, t)| t).collect()
+    }
+
+    /// Every track with a computed genre embedding — the genre-map pane's source data, sorted
+    /// by id for a stable scatter/navigation order across calls.
+    pub fn tracks_with_embedding(&self) -> Vec<Track> {
+        let mut tracks: Vec<Track> = self
+            .store
+            .all_tracks()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.attrs.contains_key(crate::embedding::GENRE_EMBEDDING_ATTR))
+            .collect();
+        tracks.sort_by_key(|t| t.id);
+        tracks
     }
 
     pub fn player_status(&self) -> PlayerStatus {

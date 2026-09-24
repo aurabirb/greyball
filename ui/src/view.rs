@@ -32,6 +32,7 @@ mod clipboard;
 mod corners;
 mod files;
 mod frame;
+mod genre_map;
 mod help;
 mod hotkeys;
 mod input;

@@ -447,6 +447,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 name = "core"
 version = "0.5.2"
 dependencies = [
+ "base64",
  "chrono",
  "crossbeam-channel",
  "futures",
@@ -1291,7 +1292,6 @@ dependencies = [
 name = "genre-embed"
 version = "0.5.2"
 dependencies = [
- "base64",
  "core",
  "log",
  "reqwest",

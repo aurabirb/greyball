@@ -14,6 +14,7 @@ use crate::vis::Vis;
 
 use super::Chrome;
 use super::files::FilesPane;
+use super::genre_map::{GenreMap, GenreMapFrame};
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
@@ -67,6 +68,7 @@ pub(super) enum WindowFrame {
     List(Arc<ListFrame>),
     Settings(Arc<Vec<SettingsEntry>>),
     Help(Arc<Built>),
+    GenreMap(Arc<GenreMapFrame>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -76,6 +78,7 @@ enum Body {
     Log(LogPane),
     Settings(SettingsPane),
     Vis(Arc<Vis>),
+    GenreMap(GenreMap),
     Help(HelpPane),
     Files(FilesPane),
 }
@@ -208,6 +211,7 @@ impl Window {
             Body::List(list) => WindowFrame::List(list.frame(ctx, self.content())),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
+            Body::GenreMap(gm) => WindowFrame::GenreMap(gm.frame(ctx, self.content())),
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
     }
@@ -224,6 +228,9 @@ impl Window {
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             (Body::Files(files), _) => pane(files.idle()),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame)) => {
+                pane(&gm.selected_track().and_then(|id| frame.track_label(id)).unwrap_or_default())
+            }
             _ => pane(""),
         }
     }
@@ -238,8 +245,9 @@ impl Window {
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame)) => gm.draw(content, focused, frame),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
-            (Body::List(_) | Body::Settings(_) | Body::Help(_), _) => {}
+            (Body::List(_) | Body::Settings(_) | Body::Help(_) | Body::GenreMap(_), _) => {}
         }
         let Some(y) = printer.size.y.checked_sub(1).filter(|&y| y > 0) else { return };
         if !self.shows_status() {
@@ -284,6 +292,15 @@ impl Window {
         }
         if let Body::List(list) = &mut self.body {
             return list.on_event(event, ctx, rect);
+        }
+        // Real spatial navigation (not Vis's no-op-nav): moves the selection to the nearest
+        // plotted point in the pressed direction. Only intercepts the 4 arrow keys — everything
+        // else (mouse included) falls through to the shared handling below, same as Vis.
+        if let Body::GenreMap(gm) = &mut self.body
+            && let Event::Key(dir @ (Key::Up | Key::Down | Key::Left | Key::Right)) = event
+        {
+            gm.nav(&gm.frame(ctx, rect), *dir);
+            return WindowOutcome::Consumed;
         }
         if let Event::Mouse { offset, position, event: mouse } = event {
             let inside = position.checked_sub(*offset).is_some_and(|pos| rect.contains(pos));
@@ -341,6 +358,7 @@ impl Windows {
             Kind::Log => Body::Log(LogPane::new(self.log.clone())),
             Kind::Settings => Body::Settings(SettingsPane::default()),
             Kind::Vis => Body::Vis(self.vis.clone()),
+            Kind::GenreMap => Body::GenreMap(GenreMap::new()),
             Kind::Help => Body::Help(HelpPane::default()),
             Kind::Files => Body::Files(FilesPane::new(std::env::current_dir().unwrap_or_else(|_| ".".into()))),
             Kind::List(list) => Body::List(Box::new(TrackList::new(list, startup.keyed_first))),

@@ -5,6 +5,7 @@ pub enum Kind {
     Log,
     Settings,
     Vis,
+    GenreMap,
     Help,
     Files,
 }
@@ -16,6 +17,7 @@ impl Kind {
             Kind::Log => "Log",
             Kind::Settings => "Settings",
             Kind::Vis => "Vis",
+            Kind::GenreMap => "Genre Map",
             Kind::Help => "Help",
             Kind::Files => "Files",
         }
@@ -160,7 +162,7 @@ pub const HELP: &str = "help";
 pub const FILES: &str = "files";
 
 /// Every window startup builds, tabs first in tab order; each tab has a companion instance.
-pub const WINDOWS: [Startup; 17] = [
+pub const WINDOWS: [Startup; 18] = [
     startup(NOW_PLAYING, Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
@@ -170,6 +172,7 @@ pub const WINDOWS: [Startup; 17] = [
     startup("log", Kind::Log, Home::Pane),
     startup("settings", Kind::Settings, Home::Pane),
     startup("vis", Kind::Vis, Home::Pane),
+    startup("genre-map", Kind::GenreMap, Home::Pane),
     companion("playing", Kind::List(ListKind::NowPlaying), Home::Pane, NOW_PLAYING),
     companion("results", Kind::List(ListKind::Search), Home::Pane, "search"),
     companion("queue", Kind::List(ListKind::Queue), Home::Pane, "queue-tab"),

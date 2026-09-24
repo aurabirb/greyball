@@ -155,7 +155,7 @@ fn tag_color(attr: &str, value: &str) -> Option<Color> {
 }
 
 /// Colors bpm on a blue→green→red gradient clamped to 60-180 bpm.
-fn bpm_color(bpm: &str) -> Option<Color> {
+pub(super) fn bpm_color(bpm: &str) -> Option<Color> {
     const LOW: f64 = 60.0;
     const MID: f64 = 120.0;
     const HIGH: f64 = 180.0;

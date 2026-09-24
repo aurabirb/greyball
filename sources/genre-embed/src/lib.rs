@@ -1,8 +1,8 @@
 //! `GenreEmbedPlugin`: computes a 1280-dim genre/style embedding per track via Essentia's
 //! discogs-effnet model (**CC BY-NC-SA 4.0**, MTG-UPF — see `model` module doc), run with the
 //! pure-Rust `tract-onnx` runtime (no Python/native Essentia dependency, CPU-only inference).
-//! Implements `core::ScanPlugin`, mirroring `sources/bpm/src/lib.rs`'s shape. The embedding is
-//! the foundation for a separate (not-yet-built) 2D PCA-projection visualization pane.
+//! Implements `core::ScanPlugin`, mirroring `sources/bpm/src/lib.rs`'s shape. The embedding
+//! feeds the `ui`'s genre-map pane (`ui/src/view/genre_map.rs`), a 2D PCA-projection scatter plot.
 
 mod mel;
 mod model;
@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::Engine;
 use core::audio_decode::DecodeError;
+use core::embedding::{GENRE_EMBEDDING_ATTR, encode_genre_embedding};
 use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta};
 use mel::MelSpectrogram;
 
@@ -68,7 +68,7 @@ impl ScanPlugin for GenreEmbedPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("embedding:genre")
+        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key(GENRE_EMBEDDING_ATTR)
     }
 
     fn needs_audio(&self) -> bool {
@@ -117,10 +117,9 @@ impl ScanPlugin for GenreEmbedPlugin {
             return Outcome::Skip;
         }
 
-        let bytes: Vec<u8> = embedding.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let encoded = encode_genre_embedding(&embedding);
         log::debug!("genre-embed: \"{}\" — embedding computed ({} dims, {} b64 chars)", track.title, embedding.len(), encoded.len());
-        Outcome::Done(TrackMeta { attrs: [("embedding:genre".to_string(), encoded)].into() })
+        Outcome::Done(TrackMeta { attrs: [(GENRE_EMBEDDING_ATTR.to_string(), encoded)].into() })
     }
 
     fn min_interval(&self) -> Duration {

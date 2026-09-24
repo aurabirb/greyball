@@ -156,6 +156,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collecti
         BuiltinAction::ToggleLog => Action::ToggleWindow("log"),
         BuiltinAction::ToggleSettings => Action::ToggleWindow("settings"),
         BuiltinAction::ToggleVis => Action::ToggleWindow("vis"),
+        BuiltinAction::ToggleGenreMap => Action::ToggleWindow("genre-map"),
         BuiltinAction::ToggleQueue => Action::ToggleWindow("queue"),
         BuiltinAction::ToggleHistory => Action::ToggleWindow("history"),
         BuiltinAction::ShowHistory => Action::ShowWindow("history-tab"),

@@ -14,6 +14,13 @@
 
 ### Owner's list — do these first, in this order
 ### Bugs
+- [ ] Spotify liked-tracks sync across machines: liking a track on Spotify from another machine shows
+  the Liked Tracks list stuck "still loading" here, with no clear signal whether the like actually
+  made it into medley's own liked-tracks state or is lost. Needs investigation: whether this is a
+  Spotify API polling/refresh gap (liked-tracks list not re-fetched on an external change), a stuck
+  loading-state bug independent of the actual sync, or something else — confirm which before
+  proposing a fix, and confirm whether likes made elsewhere are actually preserved once the list
+  eventually loads (data-loss risk) or genuinely dropped.
 - [ ] SoundCloud scrubbing doesn't work — the top-bar waveform stays entirely white the whole time a
   SoundCloud track plays, even though it's actively playing (per the two-axis waveform model,
   `draw_waveform`, `ui/src/view/tab_bar.rs:243-262`: color is purely `x < played`, and `played` is
@@ -257,6 +264,14 @@
   VGGish (permissive license, CPU-cheap, but weaker at music-specific genre/mood), MERT/Music2Vec/
   MusicFM (no viable Rust/ONNX path found), Jukebox/JukeMIR (GPU-mandatory, empirically worse for
   this use case), MusicGen (not packaged as an embedding extractor).
+- [ ] The genre-map pane (`ui/src/view/genre_map.rs`) currently colors points by BPM only. Two
+  deferred color-mode options for a later pass: (1) color by top predicted Discogs parent genre —
+  needs capturing the discogs-effnet model's other output tensor (`PartitionedCall:0`, the 400-way
+  sigmoid classifier head) alongside the embedding, bucketed down to Discogs' ~15 parent genres;
+  (2) color by mood/energy — needs downloading additional small Essentia classifier-head models
+  trained on top of the same discogs-effnet embedding (e.g. `mood_aggressive`, `danceability`), not
+  just the base embedding model already integrated. Both were considered and explicitly deferred in
+  favor of BPM-based coloring for v1.
 - [ ] Give the Log pane (`ui/src/view/log.rs`) its own view filter — grep-style substring filtering
   over its lines, same `/`-opens/Enter-locks/Esc-clears interaction as a `TrackList` window's view
   filter, but built separately: Log is a raw line buffer, not backed by `TrackList`, so it needs its

@@ -5,6 +5,7 @@ pub mod audio;
 pub mod audio_decode;
 pub mod catalog;
 pub mod config;
+pub mod embedding;
 pub mod event;
 mod hotkeys;
 mod revised;
