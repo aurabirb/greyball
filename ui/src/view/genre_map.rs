@@ -82,6 +82,14 @@ impl GenreMap {
         *self.selected.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Selects `track`, if it's one of `frame`'s plotted points; a no-op (selection left as-is) when
+    /// it has no embedding yet and so nothing to highlight.
+    pub(super) fn select(&self, frame: &GenreMapFrame, track: TrackId) {
+        if frame.points.iter().any(|p| p.track_id == track) {
+            *self.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(track);
+        }
+    }
+
     /// Moves the selection to the nearest plotted point in `dir` from the current one. A no-op
     /// when nothing is plotted in that direction (the edge of the cluster) or at all.
     pub(super) fn nav(&self, frame: &GenreMapFrame, dir: Key) {

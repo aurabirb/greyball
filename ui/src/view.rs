@@ -9,7 +9,7 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use core::{LastPlayed, Layout, LogBuf, PaneLayoutConfig, Session};
+use core::{LastPlayed, Layout, LogBuf, PaneLayoutConfig, Session, TrackId};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
@@ -304,6 +304,13 @@ impl MedleyView {
         let session = self.session.clone();
         let guard = session.lock().unwrap();
         self.windows.send(ids, event, (&guard, self.pane_cfg))
+    }
+
+    /// Selects `track` on the Genre Map window `id`, under one session lock.
+    fn select_genre_map(&mut self, id: WindowId, track: TrackId) {
+        let session = self.session.clone();
+        let guard = session.lock().unwrap();
+        self.windows.select_genre_map(id, &guard, self.pane_cfg, track);
     }
 
     fn apply(&mut self, outcome: WindowOutcome) -> EventResult {

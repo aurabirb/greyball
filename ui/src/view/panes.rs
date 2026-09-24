@@ -214,6 +214,19 @@ impl MedleyView {
         }
     }
 
+    /// The shared "focus in place, else bring into view" shape `ShowSimilar` and `ShowInGenreMap`
+    /// both want: `id` keeps the active tab as-is if it's already visible, else it's opened/shown
+    /// as `show` does. Returns whether it was already visible.
+    pub(super) fn focus_or_show(&mut self, id: WindowId) -> bool {
+        let visible = self.visible().contains(&id);
+        if visible {
+            self.focus_window(id);
+        } else {
+            self.show(id);
+        }
+        visible
+    }
+
     /// `:window <name>` and its short forms: a tab is switched to, any other window opened or closed.
     pub(super) fn toggle_window(&mut self, id: WindowId) {
         if self.windows.named(HELP) == Some(id) {

@@ -55,6 +55,8 @@ pub enum Action {
     ShowWindow(&'static str),
     /// UI-local: point the Similar window(s) at this track (else keep following the playing track), and bring it into view.
     ShowSimilar(Option<TrackId>),
+    /// UI-local: select this track on the Genre Map (a no-op if it has no embedding yet), and bring it into view.
+    ShowInGenreMap(Option<TrackId>),
     /// UI-local: put the cursor on the playing track in the active list.
     RevealPlaying,
     /// UI-local: like or unlike the playing track.
@@ -76,6 +78,7 @@ impl Action {
                 | Action::ToggleWindow(_)
                 | Action::ShowWindow(_)
                 | Action::ShowSimilar(_)
+                | Action::ShowInGenreMap(_)
                 | Action::Prompt(_)
                 | Action::FocusSearch
         )
@@ -156,7 +159,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collecti
         BuiltinAction::ToggleLog => Action::ToggleWindow("log"),
         BuiltinAction::ToggleSettings => Action::ToggleWindow("settings"),
         BuiltinAction::ToggleVis => Action::ToggleWindow("vis"),
-        BuiltinAction::ToggleGenreMap => Action::ToggleWindow("genre-map"),
+        BuiltinAction::ToggleGenreMap => Action::ShowInGenreMap(selected),
         BuiltinAction::ToggleQueue => Action::ToggleWindow("queue"),
         BuiltinAction::ToggleHistory => Action::ToggleWindow("history"),
         BuiltinAction::ShowHistory => Action::ShowWindow("history-tab"),

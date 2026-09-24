@@ -313,6 +313,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::ShowSimilar(track) => {
+                let mut visible_id = None;
                 for name in ["similar-tab", "similar"] {
                     if let Some(id) = self.windows.named(name)
                         && let Some(list) = self.windows[id].list_mut()
@@ -321,10 +322,33 @@ impl MedleyView {
                             Some(track) => list.pin_similar(track),
                             None => list.unpin_similar(),
                         }
+                        if self.visible().contains(&id) {
+                            visible_id = Some(id);
+                        }
                     }
                 }
-                let Some(id) = self.windows.named("similar-tab") else { return EventResult::Ignored };
-                self.show(id);
+                let id = if let Some(id) = visible_id {
+                    self.focus_window(id);
+                    id
+                } else {
+                    let Some(id) = self.windows.named("similar-tab") else { return EventResult::Ignored };
+                    self.show(id);
+                    id
+                };
+                self.edit_search(id);
+                EventResult::consumed()
+            }
+            Action::ShowInGenreMap(track) => {
+                let Some(id) = self.windows.named("genre-map") else { return EventResult::Ignored };
+                // A window just brought into view has no laid-out rect yet (that happens after
+                // this event returns) — force it now, or `select_genre_map` would compute the
+                // frame at its stale/zero size and silently fail to find the track's point.
+                if !self.focus_or_show(id) {
+                    self.layout();
+                }
+                if let Some(track) = track {
+                    self.select_genre_map(id, track);
+                }
                 self.edit_search(id);
                 EventResult::consumed()
             }
