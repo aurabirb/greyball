@@ -98,6 +98,13 @@ impl Matcher {
     }
 }
 
+/// Case-insensitive whitespace-tokenized "all tokens present" match, used by
+/// source `search()` implementations against a free-text query.
+pub fn matches_all_tokens(query_text: &str, haystack: &str) -> bool {
+    let haystack = haystack.to_lowercase();
+    query_text.to_lowercase().split_whitespace().all(|t| haystack.contains(t))
+}
+
 fn is_combining_mark(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
 }

@@ -178,15 +178,6 @@
   in between) — if seek cost eats too much of the savings for a common format, the fragment
   size/count needs tuning accordingly. Only applies to the locally-decoded `WaveformPlugin` —
   SoundCloud's own API-based waveform plugin already avoids decoding entirely and is unaffected.
-- [ ] A "cached music" special playlist/source — a browsable list of every track medley already has
-  locally cached (`core::MediaCache`, `core/src/media_cache.rs`), regardless of which real source it
-  came from. Owner's framing: build it as a normal plugin, the same shape as `http`/`soundcloud`
-  (implementing `core::Source`, `core/src/traits.rs:81`; see `TOGGLABLE_SOURCES`,
-  `core/src/config.rs:50`, for how a source gets a Settings on/off toggle) rather than a special-cased
-  UI feature — `search`/`resolve`/etc. over the cache instead of a network. Figure out what
-  `MediaCache` already exposes to enumerate cached files by source+uri (`cached_path`, and whatever
-  backs `prune_orphans`'s own enumeration) vs. what's missing to map a cached file back to its
-  original `Track`/catalog entry for display.
 - [ ] Make the `:vis` pane draw a beat indicator from the beats anticipated by the BPM analyzer
   (`BpmPlugin`, `sources/bpm/src/lib.rs`; the pane is `ui/src/vis.rs`). Today the analyzer only stores a
   tempo (`attrs["bpm"]`); a beat indicator also needs the beat phase (the time of a beat, so the grid

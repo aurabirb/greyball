@@ -607,6 +607,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             media_cache.log_file_stats();
         });
     }
+    if cfg.cached.enabled {
+        let cached_source = Arc::new(sources_cached::CachedSource::new(media_cache.clone(), store.clone()));
+        sources.insert(SourceId::from("cached"), cached_source);
+    }
     let engine = medley_core::StreamEngine::new(media.clone(), media_cache.clone(), bus.clone());
     let rodio = Arc::new(RodioPlayer::new(engine.clone(), bus.clone()));
     let mut players: HashMap<SourceId, Arc<dyn Player>> = HashMap::new();

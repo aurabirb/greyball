@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use core::{
     BrowseNode, BrowsePage, Error, Media, MediaProvider, Quality, Rendition, Result, Track,
-    SearchQuery, Source, SourceId,
+    SearchQuery, Source, SourceId, matches_all_tokens,
 };
 use regex::Regex;
 use url::Url;
@@ -193,7 +193,6 @@ impl Source for HttpDirSource {
                 message: "no roots configured".to_string(),
             });
         }
-        let tokens: Vec<String> = q.text.to_lowercase().split_whitespace().map(String::from).collect();
         let limit = if q.limit == 0 { usize::MAX } else { q.limit };
 
         // queue entries: (url, depth, root_prefix)
@@ -233,8 +232,8 @@ impl Source for HttpDirSource {
                     continue;
                 }
                 let rel = link.as_str().strip_prefix(root_prefix.as_str()).unwrap_or(link.path());
-                let hay = percent_decode(rel).to_lowercase();
-                if !tokens.iter().all(|t| hay.contains(t.as_str())) {
+                let hay = percent_decode(rel);
+                if !matches_all_tokens(&q.text, &hay) {
                     continue;
                 }
                 sink(track_from_url(&link));

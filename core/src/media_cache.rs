@@ -331,6 +331,20 @@ impl MediaCache {
         );
     }
 
+    /// Every `(source, uri)` currently indexed, regardless of which source it came from — the
+    /// enumeration a "cached music" browsable source needs (see `sources/cached`).
+    pub fn cached_entries(&self) -> Vec<(SourceId, String)> {
+        self.index_cache
+            .read()
+            .unwrap()
+            .keys()
+            .filter_map(|key| {
+                let (source, uri) = key.split_once('\0')?;
+                Some((SourceId::from(source), uri.to_string()))
+            })
+            .collect()
+    }
+
     /// Drops index entries whose cache file no longer exists; never deletes files.
     pub fn prune_orphans(&self) {
         let entries: Vec<(String, String)> =

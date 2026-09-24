@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub http: HttpConfig,
+    /// "Cached music" source plugin — browses whatever's already in `media_cache_dir`.
+    pub cached: CachedConfig,
     /// Spotify source plugin. Only consulted when `app` is built with the
     /// `spotify` cargo feature; otherwise inert.
     pub spotify: SpotifyConfig,
@@ -47,7 +49,7 @@ pub struct Config {
 }
 
 /// Sources the Settings pane / `state.toml` can toggle by name.
-pub const TOGGLABLE_SOURCES: [&str; 4] = ["http", "spotify", "soundcloud", "soulseek"];
+pub const TOGGLABLE_SOURCES: [&str; 5] = ["http", "spotify", "soundcloud", "soulseek", "cached"];
 
 /// `~` and `~/x` expanded against `$HOME`.
 pub fn expand_home(text: &str) -> PathBuf {
@@ -76,6 +78,7 @@ impl Config {
             "spotify" => Some(self.spotify.enabled),
             "soundcloud" => Some(self.soundcloud.enabled),
             "soulseek" => Some(self.soulseek.enabled),
+            "cached" => Some(self.cached.enabled),
             _ => None,
         }
     }
@@ -87,6 +90,7 @@ impl Config {
             "spotify" => self.spotify.enabled = enabled,
             "soundcloud" => self.soundcloud.enabled = enabled,
             "soulseek" => self.soulseek.enabled = enabled,
+            "cached" => self.cached.enabled = enabled,
             _ => {}
         }
     }
@@ -122,6 +126,20 @@ pub struct HttpConfig {
     pub enabled: bool,
     pub roots: Vec<String>,
     pub recurse_depth: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CachedConfig {
+    /// Register the "cached music" source at startup. On by default; it never touches the
+    /// network, only browses whatever `media_cache_dir` already has.
+    pub enabled: bool,
+}
+
+impl Default for CachedConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -281,6 +299,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             http: HttpConfig::default(),
+            cached: CachedConfig::default(),
             spotify: SpotifyConfig::default(),
             soundcloud: SoundcloudConfig::default(),
             soulseek: SoulseekConfig::default(),
