@@ -120,17 +120,24 @@ impl GenreMap {
             return; // not yet rebuilt for this size
         }
         let selected = self.selected_track();
+        // Multiple tracks can land on the same cell (small pane, large library); track counts per
+        // cell so a cluster gets a distinct glyph instead of silently drawing as one track.
+        let mut cell_counts: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        for point in &frame.points {
+            *cell_counts.entry((point.x, point.y)).or_insert(0) += 1;
+        }
         for point in &frame.points {
             let is_selected = Some(point.track_id) == selected;
             let is_playing = now_playing == Some(point.track_id);
+            let clustered = cell_counts[&(point.x, point.y)] > 1;
             let white = Color::Dark(cursive::theme::BaseColor::White);
             let (style, glyph) = match (is_selected, is_playing) {
                 (true, true) => (ColorStyle::new(white, point.color), "*"),
                 (true, false) => (ColorStyle::new(white, point.color), "@"),
                 (false, true) => (ColorStyle::new(point.color, Color::TerminalDefault), "*"),
-                (false, false) => (ColorStyle::new(point.color, Color::TerminalDefault), "o"),
+                (false, false) => (ColorStyle::new(point.color, Color::TerminalDefault), if clustered { "+" } else { "o" }),
             };
-            let effect = if is_playing { Effect::Bold } else { Effect::Simple };
+            let effect = if is_playing || clustered { Effect::Bold } else { Effect::Simple };
             printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), glyph)));
         }
     }
@@ -186,14 +193,14 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
     let (pc1, pc2) = pca_top2(&centered, dim);
     let proj: Vec<(f32, f32)> = centered.iter().map(|v| (dot(v, &pc1), dot(v, &pc2))).collect();
 
-    let (xmin, xmax) = min_max(proj.iter().map(|p| p.0));
-    let (ymin, ymax) = min_max(proj.iter().map(|p| p.1));
+    let (xlo, xhi) = axis_range(proj.iter().map(|p| p.0));
+    let (ylo, yhi) = axis_range(proj.iter().map(|p| p.1));
     let points = decoded
         .iter()
         .zip(&proj)
         .map(|((track, _), &(px, py))| {
-            let nx = if xmax > xmin { (px - xmin) / (xmax - xmin) } else { 0.5 };
-            let ny = if ymax > ymin { (py - ymin) / (ymax - ymin) } else { 0.5 };
+            let nx = if xhi > xlo { ((px - xlo) / (xhi - xlo)).clamp(0.0, 1.0) } else { 0.5 };
+            let ny = if yhi > ylo { ((py - ylo) / (yhi - ylo)).clamp(0.0, 1.0) } else { 0.5 };
             let x = (nx * (w.saturating_sub(1)) as f32).round() as usize;
             let y = (ny * (h.saturating_sub(1)) as f32).round() as usize;
             let color = track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
@@ -201,6 +208,32 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
         })
         .collect();
     GenreMapFrame { w, h, points }
+}
+
+// 5/95 absorbs a single far outlier without collapsing the rest of the library into a cluster.
+const AXIS_LOW_PERCENTILE: f32 = 5.0;
+const AXIS_HIGH_PERCENTILE: f32 = 95.0;
+// Below this many points, percentile bounds are too coarse to be meaningful — fall back to min/max.
+const AXIS_PERCENTILE_MIN_N: usize = 10;
+
+/// Rescale range for one axis: percentile-based bounds once there are enough points to make them
+/// meaningful, true min/max otherwise (so 2-4 point cases still spread out like today).
+fn axis_range(vals: impl Iterator<Item = f32>) -> (f32, f32) {
+    let mut sorted: Vec<f32> = vals.collect();
+    if sorted.len() < AXIS_PERCENTILE_MIN_N {
+        return min_max(sorted.into_iter());
+    }
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    (percentile(&sorted, AXIS_LOW_PERCENTILE), percentile(&sorted, AXIS_HIGH_PERCENTILE))
+}
+
+/// Linear-interpolated percentile of an already-sorted, non-empty slice (`p` in `0..=100`).
+fn percentile(sorted: &[f32], p: f32) -> f32 {
+    let rank = (p / 100.0) * (sorted.len() - 1) as f32;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    let frac = rank - lo as f32;
+    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
 }
 
 fn min_max(vals: impl Iterator<Item = f32>) -> (f32, f32) {
