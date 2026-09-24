@@ -134,7 +134,7 @@ impl BuiltinAction {
         (BuiltinAction::ToggleQueue, None),
         (BuiltinAction::ToggleHistory, None),
         (BuiltinAction::ShowHistory, None),
-        (BuiltinAction::ShowSimilar, None),
+        (BuiltinAction::ShowSimilar, Some('r')),
         (BuiltinAction::Link, None),
         (BuiltinAction::Unlink, None),
         (BuiltinAction::PlayPause, Some(' ')),
