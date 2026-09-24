@@ -115,3 +115,7 @@ Logs always go to `$XDG_STATE_HOME/medley/medley.log` (fallback
 `~/.local/state/medley/medley.log`), truncated on each start; pass
 `--log-level debug` (or set `RUST_LOG`) for more detail. If it crashes, the
 panic and backtrace are appended to `medley.panic` next to the log.
+
+## Credits
+
+Online BPM lookups use the [GetSongBPM.com](https://getsongbpm.com) API.
