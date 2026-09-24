@@ -9,6 +9,7 @@ members = [
     "sources/bpm",
     "sources/bpm-deezer",
     "sources/bpm-getsongbpm",
+    "sources/genre-embed",
     "sources/cached",
     "sources/waveform",
     "player",

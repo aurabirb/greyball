@@ -211,6 +211,7 @@ pub struct ScanConfig {
     pub waveform: WaveformScanConfig,
     pub bpm_deezer: BpmDeezerScanConfig,
     pub bpm_getsongbpm: BpmGetSongBpmScanConfig,
+    pub genre_embed: GenreEmbedScanConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -292,6 +293,26 @@ pub struct BpmGetSongBpmScanConfig {
 impl Default for BpmGetSongBpmScanConfig {
     fn default() -> Self {
         Self { enabled: true, api_key: None, min_interval_secs: 2, live_enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GenreEmbedScanConfig {
+    /// Whether the plugin is registered at all — restart-only, like a `TOGGLABLE_SOURCES` entry.
+    /// Unrelated to `BpmScanConfig::enabled`'s meaning despite the shared field name.
+    pub enabled: bool,
+    /// Minimum spacing between this plugin's own background fetches. Higher than the BPM
+    /// plugins' default: CNN inference is a real CPU cost, not free DSP.
+    pub min_interval_secs: u64,
+    /// Whether a *registered* plugin actually runs — live-toggled from Settings
+    /// (`Session::set_scan_plugin_enabled`), independent of `enabled` above.
+    pub live_enabled: bool,
+}
+
+impl Default for GenreEmbedScanConfig {
+    fn default() -> Self {
+        Self { enabled: true, min_interval_secs: 30, live_enabled: true }
     }
 }
 

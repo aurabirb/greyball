@@ -107,6 +107,10 @@ fn load_bpm_getsongbpm_enabled() -> Option<bool> {
     load_state_value("bpm_getsongbpm_enabled")?.as_bool()
 }
 
+fn load_genre_embed_enabled() -> Option<bool> {
+    load_state_value("genre_embed_enabled")?.as_bool()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -272,6 +276,7 @@ fn save_state(
     bpm_dsp_enabled: Option<bool>,
     bpm_deezer_enabled: Option<bool>,
     bpm_getsongbpm_enabled: Option<bool>,
+    genre_embed_enabled: Option<bool>,
     liked_playlist: Option<&str>,
     media_cache_dir: Option<&std::path::Path>,
     media_cache_move_from: Option<&std::path::Path>,
@@ -305,6 +310,9 @@ fn save_state(
     }
     if let Some(on) = bpm_getsongbpm_enabled {
         text.push_str(&format!("bpm_getsongbpm_enabled = {on}\n"));
+    }
+    if let Some(on) = genre_embed_enabled {
+        text.push_str(&format!("genre_embed_enabled = {on}\n"));
     }
     if let Some(name) = liked_playlist {
         text.push_str(&format!("liked_playlist = {}\n", toml::Value::String(name.to_string())));
@@ -537,6 +545,10 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(on) = load_bpm_getsongbpm_enabled() {
         cfg.scan.bpm_getsongbpm.live_enabled = on;
     }
+    let config_genre_embed_enabled = cfg.scan.genre_embed.live_enabled;
+    if let Some(on) = load_genre_embed_enabled() {
+        cfg.scan.genre_embed.live_enabled = on;
+    }
     let config_liked_playlist = cfg.liked_playlist.clone();
     if let Some(name) = load_state_string("liked_playlist") {
         cfg.liked_playlist = name;
@@ -703,6 +715,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(|| Some(DEFAULT_GETSONGBPM_API_KEY.to_string()));
     let bpm_getsongbpm_min_interval_secs = cfg.scan.bpm_getsongbpm.min_interval_secs;
+    let genre_embed_enabled = cfg.scan.genre_embed.enabled;
+    let genre_embed_min_interval_secs = cfg.scan.genre_embed.min_interval_secs;
     // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
     // seeds the default when there's no persisted override in `state.toml`.
     let initial_scan_mode = load_scan_mode(bpm_default_mode);
@@ -743,6 +757,13 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
                 key,
                 bpm_getsongbpm_min_interval_secs,
                 session.scan_plugin_flag("bpm-getsongbpm"),
+            )));
+        }
+        if genre_embed_enabled {
+            scan.register_plugin(Arc::new(genre_embed::GenreEmbedPlugin::new(
+                data_dir(),
+                genre_embed_min_interval_secs,
+                session.scan_plugin_flag("genre-embed"),
             )));
         }
     }
@@ -906,6 +927,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let bpm_dsp_live_enabled = Some(s.cfg.scan.bpm.live_enabled).filter(|&on| on != config_bpm_dsp_enabled);
     let bpm_deezer_live_enabled = Some(s.cfg.scan.bpm_deezer.live_enabled).filter(|&on| on != config_bpm_deezer_enabled);
     let bpm_getsongbpm_live_enabled = Some(s.cfg.scan.bpm_getsongbpm.live_enabled).filter(|&on| on != config_bpm_getsongbpm_enabled);
+    let genre_embed_live_enabled = Some(s.cfg.scan.genre_embed.live_enabled).filter(|&on| on != config_genre_embed_enabled);
     let liked_playlist = Some(s.cfg.liked_playlist.as_str()).filter(|&name| name != config_liked_playlist);
     let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
     let media_cache_move_from = Some(running_media_cache_dir.as_path()).filter(|&dir| dir != s.cfg.media_cache_dir);
@@ -920,6 +942,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         bpm_dsp_live_enabled,
         bpm_deezer_live_enabled,
         bpm_getsongbpm_live_enabled,
+        genre_embed_live_enabled,
         liked_playlist,
         media_cache_dir,
         media_cache_move_from,

@@ -119,3 +119,6 @@ panic and backtrace are appended to `medley.panic` next to the log.
 ## Credits
 
 Online BPM lookups use the [GetSongBPM.com](https://getsongbpm.com) API.
+
+Genre/style embeddings use the [discogs-effnet](https://essentia.upf.edu/models.html) model
+(Music Technology Group, Universitat Pompeu Fabra), licensed CC BY-NC-SA 4.0.

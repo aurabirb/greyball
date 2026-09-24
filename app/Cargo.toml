@@ -43,6 +43,9 @@ waveform = { path = "../sources/waveform" }
 # dependency, so not feature-gated/optional.
 bpm-deezer = { path = "../sources/bpm-deezer" }
 bpm-getsongbpm = { path = "../sources/bpm-getsongbpm" }
+# Same "always available" reasoning as `bpm` above: CNN inference is CPU-only via pure-Rust
+# `tract-onnx`, no platform-specific native dependency, so not feature-gated/optional.
+genre-embed = { path = "../sources/genre-embed" }
 sources-soundcloud = { path = "../sources/soundcloud", optional = true }
 sources-soulseek = { path = "../sources/soulseek", optional = true }
 player = { path = "../player" }

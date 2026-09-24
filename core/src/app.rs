@@ -693,6 +693,11 @@ impl Session {
                 "GetSongBPM",
                 Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.bpm_getsongbpm.live_enabled)),
             ),
+            (
+                "genre-embed",
+                "Genre Embedding",
+                Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.genre_embed.live_enabled)),
+            ),
         ];
         let mut session = Self {
             bus,
@@ -2198,6 +2203,7 @@ impl Session {
             "bpm" => cfg.scan.bpm.live_enabled = enabled,
             "bpm-deezer" => cfg.scan.bpm_deezer.live_enabled = enabled,
             "bpm-getsongbpm" => cfg.scan.bpm_getsongbpm.live_enabled = enabled,
+            "genre-embed" => cfg.scan.genre_embed.live_enabled = enabled,
             _ => {}
         }
         if let Some(scan) = &self.scan {

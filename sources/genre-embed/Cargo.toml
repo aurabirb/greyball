@@ -1,0 +1,22 @@
+[package]
+name = "genre-embed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "genre_embed"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+core = { path = "../../core" }
+tract-onnx = "0.23"
+rustfft = "6"
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
+base64 = "0.22"

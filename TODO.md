@@ -241,14 +241,11 @@
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
 - [ ] Extend track similarity beyond BPM/key (`core/src/similarity.rs`'s `similarity()`, which already
-  has a comment anticipating a vector-embedding signal replacing its body) with a genre/mood/"vibe"
-  embedding, following the same `ScanPlugin` pattern as `sources/bpm/src/lib.rs` (a new
-  `sources/embed/` crate writing e.g. `attrs["vibe_embedding"]`). Prototype first with Essentia's
-  discogs-effnet model run via the pure-Rust `tract` ONNX runtime (precedent: the Rust project
-  `crate-digger` runs discogs-effnet/musicnn this way, including its own Rust reimplementation of
-  Essentia's mel-spectrogram preprocessing) — small, CPU-fast, genre-native; license is CC BY-NC-SA
-  (fine for personal non-commercial use, flag if medley is ever redistributed with bundled weights).
-  Once that plumbing exists, consider adding CLAP (ONNX export + `ort`) as a second signal for
+  has a comment anticipating a vector-embedding signal replacing its body) to also use the
+  1280-dim genre/style embedding `sources/genre-embed` now writes to `attrs["embedding:genre"]`
+  (base64-encoded f32 LE, via Essentia's discogs-effnet model run on `tract-onnx`). A separate
+  visualization pane that PCA-projects these embeddings into a 2D scatter plot is still unbuilt.
+  Next, consider adding CLAP (ONNX export + `ort`) as a second signal for
   text-driven "vibe" queries (typed mood prompt → cosine similarity against track embeddings) — the
   one capability the pure classifiers don't give. Checked for newer alternatives (2025-2026): plain
   LAION-CLAP (Apache-2.0) is still the best pick — permissive license, most mature ecosystem, no
