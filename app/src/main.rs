@@ -656,8 +656,16 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
     let bpm_deezer_enabled = cfg.scan.bpm_deezer.enabled;
     let bpm_deezer_min_interval_secs = cfg.scan.bpm_deezer.min_interval_secs;
+    // Maintainer's own free-tier GetSongBPM key, rate-limited, tied to this repo's
+    // README backlink per GetSongBPM's terms; a user's own config.toml key overrides it.
+    const DEFAULT_GETSONGBPM_API_KEY: &str = "8bf297c63320f80e8bcb3410acd68984";
     let bpm_getsongbpm_enabled = cfg.scan.bpm_getsongbpm.enabled;
-    let bpm_getsongbpm_api_key = cfg.scan.bpm_getsongbpm.api_key.clone();
+    let bpm_getsongbpm_api_key = cfg
+        .scan
+        .bpm_getsongbpm
+        .api_key
+        .clone()
+        .or_else(|| Some(DEFAULT_GETSONGBPM_API_KEY.to_string()));
     let bpm_getsongbpm_min_interval_secs = cfg.scan.bpm_getsongbpm.min_interval_secs;
     // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
     // seeds the default when there's no persisted override in `state.toml`.
