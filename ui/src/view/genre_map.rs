@@ -8,11 +8,11 @@
 use std::sync::{Arc, Mutex};
 
 use cursive::event::Key;
-use cursive::theme::{Color, ColorStyle};
+use cursive::theme::{Color, ColorStyle, Effect};
 use cursive::{Printer, Rect};
 
 use core::embedding::{GENRE_EMBEDDING_ATTR, decode_genre_embedding};
-use core::{Track, TrackId};
+use core::{Command, Track, TrackId};
 
 use super::memo::Memo;
 use super::rows::bpm_color;
@@ -41,6 +41,16 @@ impl GenreMapFrame {
     /// (see `window_title_track_text`).
     pub(super) fn track_label(&self, id: TrackId) -> Option<String> {
         self.points.iter().find(|p| p.track_id == id).map(|p| format!("{} - {}", p.artist, p.title))
+    }
+
+    /// `Command::PlayContext` for pressing Enter on `id`: the same "play this, and let playback
+    /// carry on through the rest of the list" shape a `TrackList` row's Enter uses
+    /// (`TrackList::activate`), with the plotted points (in their plotted order) standing in for
+    /// the list. `None` when `id` isn't actually one of the plotted points.
+    pub(super) fn play_context(&self, id: TrackId) -> Option<Command> {
+        let index = self.points.iter().position(|p| p.track_id == id)?;
+        let tracks = self.points.iter().map(|p| p.track_id).collect();
+        Some(Command::PlayContext { tracks, index, remote: None, local: None, name: Some("Genre Map".to_string()) })
     }
 }
 
@@ -90,7 +100,10 @@ impl GenreMap {
         }
     }
 
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &GenreMapFrame) {
+    /// `now_playing` is a live overlay, not baked into the memoized `frame` — it's read fresh
+    /// (`Session::now_playing_id`) on every draw so a track change highlights immediately without
+    /// forcing a PCA recompute, which is only keyed on the embedded-track set and pane size.
+    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &GenreMapFrame, now_playing: Option<TrackId>) {
         let title = if focused { "[Genre Map]" } else { "Genre Map" };
         printer.with_color(ColorStyle::title_secondary(), |p| {
             p.print((0, 0), &crate::view::pad(title, p.size.x));
@@ -100,13 +113,17 @@ impl GenreMap {
         }
         let selected = self.selected_track();
         for point in &frame.points {
-            let marked = Some(point.track_id) == selected;
-            let (style, glyph) = if marked {
-                (ColorStyle::new(Color::Dark(cursive::theme::BaseColor::White), point.color), "@")
-            } else {
-                (ColorStyle::new(point.color, Color::TerminalDefault), "o")
+            let is_selected = Some(point.track_id) == selected;
+            let is_playing = now_playing == Some(point.track_id);
+            let white = Color::Dark(cursive::theme::BaseColor::White);
+            let (style, glyph) = match (is_selected, is_playing) {
+                (true, true) => (ColorStyle::new(white, point.color), "*"),
+                (true, false) => (ColorStyle::new(white, point.color), "@"),
+                (false, true) => (ColorStyle::new(point.color, Color::TerminalDefault), "*"),
+                (false, false) => (ColorStyle::new(point.color, Color::TerminalDefault), "o"),
             };
-            printer.with_color(style, |p| p.print((point.x, point.y + 1), glyph));
+            let effect = if is_playing { Effect::Bold } else { Effect::Simple };
+            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), glyph)));
         }
     }
 }

@@ -7,7 +7,7 @@ use cursive::theme::{BaseColor, Color, ColorStyle};
 
 use unicode_width::UnicodeWidthStr;
 
-use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session};
+use core::{Command, HotkeyTarget, LogBuf, PaneLayoutConfig, Session, TrackId};
 
 use crate::screen::{Corners, Home, Kind, Placement, Startup, WINDOWS};
 use crate::vis::Vis;
@@ -68,7 +68,9 @@ pub(super) enum WindowFrame {
     List(Arc<ListFrame>),
     Settings(Arc<Vec<SettingsEntry>>),
     Help(Arc<Built>),
-    GenreMap(Arc<GenreMapFrame>),
+    /// The memoized scatter plot, plus the live now-playing track id (not part of the memo key —
+    /// it's redrawn as an overlay so a track change doesn't force a PCA recompute).
+    GenreMap(Arc<GenreMapFrame>, Option<TrackId>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -211,7 +213,7 @@ impl Window {
             Body::List(list) => WindowFrame::List(list.frame(ctx, self.content())),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
-            Body::GenreMap(gm) => WindowFrame::GenreMap(gm.frame(ctx, self.content())),
+            Body::GenreMap(gm) => WindowFrame::GenreMap(gm.frame(ctx, self.content()), ctx.s.now_playing_id()),
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
     }
@@ -228,7 +230,7 @@ impl Window {
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             (Body::Files(files), _) => pane(files.idle()),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame)) => {
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, _)) => {
                 pane(&gm.selected_track().and_then(|id| frame.track_label(id)).unwrap_or_default())
             }
             _ => pane(""),
@@ -245,7 +247,7 @@ impl Window {
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame)) => gm.draw(content, focused, frame),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing)) => gm.draw(content, focused, frame, *now_playing),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_) | Body::GenreMap(_), _) => {}
         }
@@ -301,6 +303,18 @@ impl Window {
         {
             gm.nav(&gm.frame(ctx, rect), *dir);
             return WindowOutcome::Consumed;
+        }
+        // Enter plays the selected point, same "play this and carry on through the rest of the
+        // list" shape as a TrackList row's Enter. A no-op with nothing selected (e.g. the pane
+        // has no plotted points at all).
+        if let Body::GenreMap(gm) = &mut self.body
+            && matches!(event, Event::Key(Key::Enter))
+        {
+            let frame = gm.frame(ctx, rect);
+            return match gm.selected_track().and_then(|id| frame.play_context(id)) {
+                Some(cmd) => WindowOutcome::Run(cmd),
+                None => WindowOutcome::Consumed,
+            };
         }
         if let Event::Mouse { offset, position, event: mouse } = event {
             let inside = position.checked_sub(*offset).is_some_and(|pos| rect.contains(pos));
