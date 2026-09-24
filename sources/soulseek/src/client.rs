@@ -20,6 +20,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use core::http::describe;
 use serde::{Deserialize, Serialize};
 
 /// Ordinary calls (login, poll, cancel) — cheap, shouldn't ever hang long.
@@ -46,21 +47,6 @@ const SEARCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SEARCH_POLL_GRACE: Duration = Duration::from_secs(5);
 
 pub type ClientResult<T> = Result<T, String>;
-
-/// `reqwest::Error`'s own `Display` only prints its top-level message (e.g.
-/// "error sending request for url (...)") and drops the actual cause (DNS
-/// failure, connection refused, timeout, ...), which lives in `source()` —
-/// walk the chain so error messages are actually actionable.
-fn describe(e: &reqwest::Error) -> String {
-    let mut out = e.to_string();
-    let mut cause = std::error::Error::source(e);
-    while let Some(c) = cause {
-        out.push_str(": ");
-        out.push_str(&c.to_string());
-        cause = c.source();
-    }
-    out
-}
 
 #[derive(Clone)]
 pub struct SlskdConfig {

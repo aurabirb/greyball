@@ -7,6 +7,8 @@ members = [
     "sources/soundcloud",
     "sources/soulseek",
     "sources/bpm",
+    "sources/bpm-deezer",
+    "sources/bpm-getsongbpm",
     "sources/cached",
     "sources/waveform",
     "player",

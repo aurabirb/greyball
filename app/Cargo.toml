@@ -39,6 +39,10 @@ sources-spotify = { path = "../sources/spotify", optional = true }
 # dependency (see sources/bpm's doc), so it's always available.
 bpm = { path = "../sources/bpm" }
 waveform = { path = "../sources/waveform" }
+# Same "always available" reasoning as `bpm` above: pure HTTP lookups, no source-specific
+# dependency, so not feature-gated/optional.
+bpm-deezer = { path = "../sources/bpm-deezer" }
+bpm-getsongbpm = { path = "../sources/bpm-getsongbpm" }
 sources-soundcloud = { path = "../sources/soundcloud", optional = true }
 sources-soulseek = { path = "../sources/soulseek", optional = true }
 player = { path = "../player" }

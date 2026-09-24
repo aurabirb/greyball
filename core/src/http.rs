@@ -47,6 +47,20 @@ pub fn fetch_url_bytes(url: &str) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Full error chain of a `reqwest::Error` (message plus every `source()`), for a log line that
+/// doesn't lose the underlying cause (e.g. a TLS or DNS error buried under a generic "error sending
+/// request").
+pub fn describe(e: &reqwest::Error) -> String {
+    let mut out = e.to_string();
+    let mut cause = std::error::Error::source(e);
+    while let Some(c) = cause {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cause = c.source();
+    }
+    out
+}
+
 #[derive(Clone, Default)]
 pub struct HttpOptions {
     /// Replaces the shared client (proxies, cookies, a source's own timeouts).

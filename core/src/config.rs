@@ -209,6 +209,8 @@ pub struct SoulseekConfig {
 pub struct ScanConfig {
     pub bpm: BpmScanConfig,
     pub waveform: WaveformScanConfig,
+    pub bpm_deezer: BpmDeezerScanConfig,
+    pub bpm_getsongbpm: BpmGetSongBpmScanConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -242,6 +244,37 @@ pub struct WaveformScanConfig {
 impl Default for WaveformScanConfig {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BpmDeezerScanConfig {
+    pub enabled: bool,
+    /// Minimum spacing between this plugin's own background fetches.
+    pub min_interval_secs: u64,
+}
+
+impl Default for BpmDeezerScanConfig {
+    fn default() -> Self {
+        Self { enabled: true, min_interval_secs: 5 }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BpmGetSongBpmScanConfig {
+    pub enabled: bool,
+    /// No default key shipped (GetSongBPM keys are per-registrant and tied to a mandatory
+    /// backlink — see README's Credits section). Unset: plugin isn't registered at all.
+    pub api_key: Option<String>,
+    /// Minimum spacing between this plugin's own background fetches.
+    pub min_interval_secs: u64,
+}
+
+impl Default for BpmGetSongBpmScanConfig {
+    fn default() -> Self {
+        Self { enabled: true, api_key: None, min_interval_secs: 2 }
     }
 }
 

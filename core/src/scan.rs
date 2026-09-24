@@ -606,15 +606,16 @@ impl Worker {
                 }
             }
             let gated = plugin.needs_audio() && !*has_stream.get_or_insert_with(|| self.has_stream(track));
-            if gated {
-                if access == Access::Peek {
-                    block(Verdict::Waiting);
-                    continue;
-                }
-                if let Err(v) = self.fetchable(track) {
-                    block(v);
-                    continue;
-                }
+            // CacheOnly (Access::Peek) must never originate a fetch — for an audio-gated plugin
+            // that's a download; for an HTTP-only plugin (`needs_audio() == false`) its own
+            // lookup *is* the fetch, so it's gated the same way rather than getting a free pass.
+            if (gated || !plugin.needs_audio()) && access == Access::Peek {
+                block(Verdict::Waiting);
+                continue;
+            }
+            if gated && let Err(v) = self.fetchable(track) {
+                block(v);
+                continue;
             }
             // `min_interval` spaces real downloads and API calls; a cached or running stream costs the source nothing.
             let mut last_run: Option<MutexGuard<HashMap<&'static str, Instant>>> = None;
@@ -650,7 +651,20 @@ impl Worker {
                 Outcome::Done(meta) => {
                     log::debug!("scan[{}]: done with \"{}\" ({:?}): {:?}", plugin.id(), track.title, track.id, meta.attrs.keys().collect::<Vec<_>>());
                     // `patch` re-reads the track under `Catalog`'s lock and merges into whatever's current.
-                    let _ = self.catalog.patch(track.id, |t| t.attrs.extend(meta.attrs));
+                    // Backfill the canonical "bpm" from any namespaced "bpm:<source>" the first time
+                    // it's missing — the single choke point every plugin's `Done` passes through, so a
+                    // new namespaced BPM (or future namespaced attr) source doesn't need the driver to
+                    // know about it specifically. First reporter (by key's alphabetical order, since
+                    // `BTreeMap` iteration is sorted) wins and canonical `bpm` stays stable afterward,
+                    // purely so existing UI/similarity code that reads `attrs["bpm"]` keeps working.
+                    let _ = self.catalog.patch(track.id, |t| {
+                        t.attrs.extend(meta.attrs);
+                        if !t.attrs.contains_key("bpm")
+                            && let Some(v) = t.attrs.iter().find(|(k, _)| k.starts_with("bpm:")).map(|(_, v)| v.clone())
+                        {
+                            t.attrs.insert("bpm".to_string(), v);
+                        }
+                    });
                     self.inner.status.lock().unwrap().remove(&key);
                     self.inner.failures.lock().unwrap().remove(&key);
                     if let Some(source) = &source {

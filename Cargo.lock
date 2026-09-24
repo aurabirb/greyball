@@ -90,6 +90,8 @@ version = "0.5.0"
 dependencies = [
  "block2",
  "bpm",
+ "bpm-deezer",
+ "bpm-getsongbpm",
  "chrono",
  "core",
  "cursive",
@@ -232,6 +234,28 @@ dependencies = [
  "core",
  "log",
  "rustfft",
+]
+
+[[package]]
+name = "bpm-deezer"
+version = "0.5.0"
+dependencies = [
+ "core",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bpm-getsongbpm"
+version = "0.5.0"
+dependencies = [
+ "core",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

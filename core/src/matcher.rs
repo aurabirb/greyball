@@ -105,6 +105,17 @@ pub fn matches_all_tokens(query_text: &str, haystack: &str) -> bool {
     query_text.to_lowercase().split_whitespace().all(|t| haystack.contains(t))
 }
 
+/// Diacritic-insensitive "one contains the other" fuzzy match between an external source's artist
+/// name and any of `artists` — real but simple, not a full identity match (see `Matcher::matches`
+/// for that); used by online BPM lookups to accept a search result without requiring an exact hit.
+pub fn artist_fuzzy_matches(candidate: &str, artists: &[String]) -> bool {
+    let candidate = Matcher::norm(candidate);
+    artists.iter().any(|a| {
+        let a = Matcher::norm(a);
+        candidate.contains(&a) || a.contains(&candidate)
+    })
+}
+
 fn is_combining_mark(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
 }

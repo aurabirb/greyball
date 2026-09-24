@@ -76,7 +76,7 @@ impl ScanPlugin for BpmPlugin {
 
     fn needs(&self, track: &Track) -> bool {
         // Source-agnostic: the DSP only needs decoded PCM, so every track is scanned.
-        !track.attrs.contains_key("bpm")
+        !track.attrs.contains_key("bpm:dsp")
     }
 
     fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
@@ -97,7 +97,7 @@ impl ScanPlugin for BpmPlugin {
         match estimate_tempo(&onset_envelope(&mono, sample_rate, &self.fft), onset_rate) {
             Some(bpm) => {
                 log::debug!("bpm: \"{}\" — estimated {bpm:.0} bpm", track.title);
-                Outcome::Done(TrackMeta { attrs: [("bpm".to_string(), format!("{bpm:.0}"))].into() })
+                Outcome::Done(TrackMeta { attrs: [("bpm:dsp".to_string(), format!("{bpm:.0}"))].into() })
             }
             None => {
                 log::debug!("bpm: \"{}\" — no confident tempo estimate, skipping", track.title);

@@ -654,6 +654,11 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
     let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::CacheOnly } else { ScanMode::Disabled };
     let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
+    let bpm_deezer_enabled = cfg.scan.bpm_deezer.enabled;
+    let bpm_deezer_min_interval_secs = cfg.scan.bpm_deezer.min_interval_secs;
+    let bpm_getsongbpm_enabled = cfg.scan.bpm_getsongbpm.enabled;
+    let bpm_getsongbpm_api_key = cfg.scan.bpm_getsongbpm.api_key.clone();
+    let bpm_getsongbpm_min_interval_secs = cfg.scan.bpm_getsongbpm.min_interval_secs;
     // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
     // seeds the default when there's no persisted override in `state.toml`.
     let initial_scan_mode = load_scan_mode(bpm_default_mode);
@@ -683,6 +688,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             bpm_min_interval_secs,
             session.waveform_enabled.clone(),
         )));
+        if bpm_deezer_enabled {
+            scan.register_plugin(Arc::new(bpm_deezer::DeezerBpmPlugin::new(bpm_deezer_min_interval_secs)));
+        }
+        if bpm_getsongbpm_enabled && let Some(key) = bpm_getsongbpm_api_key {
+            scan.register_plugin(Arc::new(bpm_getsongbpm::GetSongBpmPlugin::new(key, bpm_getsongbpm_min_interval_secs)));
+        }
     }
     for problem in &config_problems {
         session.warn("config", problem);
