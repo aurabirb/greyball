@@ -240,13 +240,26 @@
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
-- [ ] Research task (read-only, no code): survey the current state of the art for audio genre/"vibe"
-  detection and audio embeddings, beyond CLAP (the owner's only current reference point) — what
-  models/approaches exist for classifying or comparing tracks by genre, mood, or general "vibe"
-  similarity, and which are practical to run locally against an already-cached personal library like
-  medley's (model size, licensing, whether inference needs a GPU). Report findings as a simple list;
-  this feeds a possible future extension of the "similar tracks" panel above (comparing tracks by
-  attributes beyond BPM), not an immediate implementation task.
+- [ ] Extend track similarity beyond BPM/key (`core/src/similarity.rs`'s `similarity()`, which already
+  has a comment anticipating a vector-embedding signal replacing its body) with a genre/mood/"vibe"
+  embedding, following the same `ScanPlugin` pattern as `sources/bpm/src/lib.rs` (a new
+  `sources/embed/` crate writing e.g. `attrs["vibe_embedding"]`). Prototype first with Essentia's
+  discogs-effnet model run via the pure-Rust `tract` ONNX runtime (precedent: the Rust project
+  `crate-digger` runs discogs-effnet/musicnn this way, including its own Rust reimplementation of
+  Essentia's mel-spectrogram preprocessing) — small, CPU-fast, genre-native; license is CC BY-NC-SA
+  (fine for personal non-commercial use, flag if medley is ever redistributed with bundled weights).
+  Once that plumbing exists, consider adding CLAP (ONNX export + `ort`) as a second signal for
+  text-driven "vibe" queries (typed mood prompt → cosine similarity against track embeddings) — the
+  one capability the pure classifiers don't give. Checked for newer alternatives (2025-2026): plain
+  LAION-CLAP (Apache-2.0) is still the best pick — permissive license, most mature ecosystem, no
+  Rust/ONNX precedent exists for any option so this needs its own PyTorch→ONNX export regardless.
+  If CLAP's genre/mood judgment proves too generic in practice, revisit MuQ-MuLan (Tencent, 2025,
+  music-native training, CC-BY-NC — same license tier already accepted for discogs-effnet) as the
+  one concrete upgrade candidate; GLAP and other audio-text variants found were immature/not
+  music-vibe-focused and aren't worth adopting over CLAP. Other candidates surveyed and deprioritized: PANNs/
+  VGGish (permissive license, CPU-cheap, but weaker at music-specific genre/mood), MERT/Music2Vec/
+  MusicFM (no viable Rust/ONNX path found), Jukebox/JukeMIR (GPU-mandatory, empirically worse for
+  this use case), MusicGen (not packaged as an embedding extractor).
 - [ ] Give the Log pane (`ui/src/view/log.rs`) its own view filter — grep-style substring filtering
   over its lines, same `/`-opens/Enter-locks/Esc-clears interaction as a `TrackList` window's view
   filter, but built separately: Log is a raw line buffer, not backed by `TrackList`, so it needs its
