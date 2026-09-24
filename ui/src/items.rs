@@ -115,13 +115,19 @@ pub const ITEMS: &[Item] = &[
     action(BuiltinAction::ToggleQueue, &["queue", "qu"], "toggle the queue pane", ""),
     action(BuiltinAction::ToggleHistory, &["history", "hi"], "toggle the history pane", ""),
     action(BuiltinAction::ShowHistory, &["hist", "ht"], "show the History tab window (history-tab)", ""),
+    action(
+        BuiltinAction::ShowSimilar,
+        &["similar", "sim"],
+        "show tracks similar to the selected track (else the playing track)",
+        "Similarity is BPM, refined by musical key when both tracks have one. Dock it next to Now Playing to have it follow along as you play.",
+    ),
     command(
         Cmd::Window,
         BuiltinAction::PromptWindow,
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
-        "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, queue, history (the panes), playlist-keys, help, files.",
+        "The windows: now-playing, playlists, search, history-tab, queue-tab, similar-tab (the startup tabs), log, settings, vis, queue, history, similar (the panes), playlist-keys, help, files.",
     ),
     command(
         Cmd::Panes,

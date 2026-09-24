@@ -188,6 +188,10 @@ pub(super) struct TrackList {
     last_click: Option<(Instant, usize)>,
     /// Ranked ids, not `Track`s, so an attrs patch can't go stale in it.
     matches: Memo<(u64, u64), Arc<[TrackId]>>,
+    /// Similar only: the track this window is pinned to; falls back to the playing track when unset.
+    similar_pin: Option<TrackId>,
+    /// Similar only: `Session::similar_tracks` for the current reference, keyed on the revision and the reference.
+    similar: Memo<(u64, Option<TrackId>), Arc<[core::Track]>>,
     /// Cursor-independent; the cursor-dependent rest of `ListFrame` is cheap and built fresh every call.
     content: Memo<ContentKey, Arc<ListContent>>,
     /// `top_all` narrowed by the kind filter, keyed on the same generations and the view generation.
@@ -225,6 +229,8 @@ impl TrackList {
             view_gen: 0,
             last_click: None,
             matches: Memo::default(),
+            similar_pin: None,
+            similar: Memo::default(),
             content: Memo::default(),
             top_matches: Memo::default(),
             collection_matches: Memo::default(),
@@ -341,6 +347,7 @@ impl TrackList {
             (ListKind::Search, _) => self.results(s).map_or(0, ResultSet::generation),
             (ListKind::Queue, _) => s.queue.queue_gen(),
             (ListKind::History, _) => s.queue.history_gen(),
+            (ListKind::Similar, _) => s.revision(),
             (ListKind::Playlists, Open::Local(_)) => s.playlists_gen(),
             (ListKind::Playlists, Open::TopLevel) => 0,
         }
@@ -353,9 +360,35 @@ impl TrackList {
             (ListKind::NowPlaying, _) => s.playing_context_window(0, s.playing_context_len()),
             (ListKind::Queue, _) => s.queue_window(0, s.queue_len()),
             (ListKind::History, _) => s.history_window(0, s.queue.history_len()),
+            (ListKind::Similar, _) => self.similar_tracks(s).to_vec(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_window(*id, 0, s.playlist_len(*id)),
             (ListKind::Playlists, Open::TopLevel) | (ListKind::Search, _) => vec![],
         }
+    }
+
+    /// Similar only: the track this window compares against — an explicit pin, else the playing track.
+    fn similar_reference(&self, s: &Session) -> Option<TrackId> {
+        self.similar_pin.or_else(|| s.now_playing_id())
+    }
+
+    /// Similar only: cached tracks close to `similar_reference`, nearest first — memoized against
+    /// `Session::revision`, which is coarser than ideal: it bumps on nearly every dispatched command,
+    /// not just ones that affect this list's data, so this recomputes more often than strictly necessary.
+    fn similar_tracks(&self, s: &Session) -> Arc<[core::Track]> {
+        let reference = self.similar_reference(s);
+        self.similar.get_or_build((s.revision(), reference), || reference.map(|id| s.similar_tracks(id)).unwrap_or_default().into())
+    }
+
+    /// Points a Similar window at `track` instead of following the playing track.
+    pub(super) fn pin_similar(&mut self, track: TrackId) {
+        self.similar_pin = Some(track);
+        self.reset_for_new_list(Open::TopLevel);
+    }
+
+    /// Clears an explicit pin, going back to following the playing track.
+    pub(super) fn unpin_similar(&mut self) {
+        self.similar_pin = None;
+        self.reset_for_new_list(Open::TopLevel);
     }
 
     /// Playlists and Search top levels mix track and collection rows and filter over `visible_top`/`search_result_tracks` instead.
@@ -383,6 +416,7 @@ impl TrackList {
             (ListKind::Search, _) => vec![],
             (ListKind::Queue, _) => s.queue_ids(),
             (ListKind::History, _) => s.history_ids(),
+            (ListKind::Similar, _) => self.similar_tracks(s).iter().map(|t| t.id).collect(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_track_ids(*id),
             (ListKind::Playlists, Open::TopLevel) => vec![],
         }
@@ -569,6 +603,7 @@ impl TrackList {
             (ListKind::Search, _) => self.search_tracks(s) + self.visible_collections(s).len(),
             (ListKind::Queue, _) => s.queue_len() + s.queue_info_len(),
             (ListKind::History, _) => s.queue.history_len(),
+            (ListKind::Similar, _) => self.similar_tracks(s).len(),
             (ListKind::Playlists, Open::Local(id)) => s.playlist_len(*id),
             (ListKind::Playlists, Open::TopLevel) => self.visible_top(s).len(),
         }
@@ -582,8 +617,19 @@ impl TrackList {
             (ListKind::Search, _) => Some("Search results".to_string()),
             (ListKind::Queue, _) => Some("Queue".to_string()),
             (ListKind::History, _) => Some("History".to_string()),
+            (ListKind::Similar, _) => Some(self.similar_title(s)),
             (ListKind::Playlists, Open::Local(id)) => s.playlists().into_iter().find(|p| p.id == *id).map(|p| p.name),
             (ListKind::Playlists, Open::TopLevel) => None,
+        }
+    }
+
+    /// Similar only: "Similar to <reference>", or a nothing-to-compare-against placeholder —
+    /// distinguishing a pin that no longer resolves from genuinely nothing playing and nothing pinned.
+    fn similar_title(&self, s: &Session) -> String {
+        match self.similar_reference(s).and_then(|id| s.tracks_for(&[id]).into_iter().next()) {
+            Some(t) => format!("Similar to {}", t.main()),
+            None if self.similar_pin.is_some() => "Similar (pinned track no longer available)".to_string(),
+            None => "Similar (nothing playing)".to_string(),
         }
     }
 
@@ -622,6 +668,7 @@ impl TrackList {
             (ListKind::NowPlaying, _) => s.playing_context_name(),
             (_, Open::Remote(sid, name, _)) => Some(format!("[{sid}] {name}")),
             (ListKind::Search, _) => self.results(s).map(|r| r.query().to_string()),
+            (ListKind::Similar, _) => Some(self.similar_title(s)),
             (ListKind::Playlists, Open::Local(_)) => self.context_name(s),
             _ => None,
         };
@@ -686,6 +733,13 @@ impl TrackList {
                 rows
             }
             (ListKind::History, _) => track_rows(s.history_window(offset, limit)),
+            (ListKind::Similar, _) if self.similar_reference(s).is_none() => {
+                vec![plain_row("nothing playing — play a track to see similar cached tracks")]
+            }
+            (ListKind::Similar, _) if self.similar_tracks(s).is_empty() => {
+                vec![plain_row("no similar cached tracks found (needs a bpm scan on cached tracks)")]
+            }
+            (ListKind::Similar, _) => track_rows(self.similar_tracks(s).iter().skip(offset).take(limit).cloned().collect()),
             (ListKind::Playlists, Open::Local(id)) => track_rows(s.playlist_window(*id, offset, limit)),
             (ListKind::Playlists, Open::TopLevel) if self.kinds != KindFilter::All && self.top(s).is_empty() => {
                 vec![plain_row(format!("no {} yet", self.kinds.label()))]
@@ -803,6 +857,7 @@ impl TrackList {
             }
             (ListKind::Queue, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), hint(&[c.clear_queue_key], "clear queue")].into_iter().flatten().collect(),
             (ListKind::History, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into())].into_iter().flatten().collect(),
+            (ListKind::Similar, _) => [hint(&[c.help_key], "help"), Some("[/] filter".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key, c.wedge_key], "queue")].into_iter().flatten().collect(),
             (ListKind::Search, _) => [hint(&[c.help_key], "help"), Some("[/] search".into()), Some("[Enter] play".into()), hint(&[c.enqueue_key], "enqueue").filter(|_| frame.collection), hint(&[c.copy_link_key], "share").filter(|_| frame.track)]
                 .into_iter()
                 .flatten()

@@ -312,6 +312,22 @@ impl MedleyView {
                 self.edit_search(id);
                 EventResult::consumed()
             }
+            Action::ShowSimilar(track) => {
+                for name in ["similar-tab", "similar"] {
+                    if let Some(id) = self.windows.named(name)
+                        && let Some(list) = self.windows[id].list_mut()
+                    {
+                        match track {
+                            Some(track) => list.pin_similar(track),
+                            None => list.unpin_similar(),
+                        }
+                    }
+                }
+                let Some(id) = self.windows.named("similar-tab") else { return EventResult::Ignored };
+                self.show(id);
+                self.edit_search(id);
+                EventResult::consumed()
+            }
             Action::CommandLine => {
                 self.set_filter(None);
                 self.editing = Editing::CommandLine;

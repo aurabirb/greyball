@@ -53,6 +53,8 @@ pub enum Action {
     ToggleWindow(&'static str),
     /// UI-local: bring that window into view.
     ShowWindow(&'static str),
+    /// UI-local: point the Similar window(s) at this track (else keep following the playing track), and bring it into view.
+    ShowSimilar(Option<TrackId>),
     /// UI-local: put the cursor on the playing track in the active list.
     RevealPlaying,
     /// UI-local: like or unlike the playing track.
@@ -66,7 +68,16 @@ impl Action {
     pub fn is_window_action(&self) -> bool {
         matches!(
             self,
-            Action::Tab(_) | Action::CommandLine | Action::SwitchPlaylists | Action::CyclePlacement | Action::OpenHelp | Action::ToggleWindow(_) | Action::ShowWindow(_) | Action::Prompt(_) | Action::FocusSearch
+            Action::Tab(_)
+                | Action::CommandLine
+                | Action::SwitchPlaylists
+                | Action::CyclePlacement
+                | Action::OpenHelp
+                | Action::ToggleWindow(_)
+                | Action::ShowWindow(_)
+                | Action::ShowSimilar(_)
+                | Action::Prompt(_)
+                | Action::FocusSearch
         )
     }
 }
@@ -148,6 +159,7 @@ pub fn builtin_action(action: BuiltinAction, selected: Option<TrackId>, collecti
         BuiltinAction::ToggleQueue => Action::ToggleWindow("queue"),
         BuiltinAction::ToggleHistory => Action::ToggleWindow("history"),
         BuiltinAction::ShowHistory => Action::ShowWindow("history-tab"),
+        BuiltinAction::ShowSimilar => Action::ShowSimilar(selected),
         BuiltinAction::Link => selected.map_or(Action::None, |id| Action::Command(Command::LinkPick(id))),
         BuiltinAction::Unlink => selected.map_or(Action::None, |id| Action::Command(Command::Unlink(id))),
         BuiltinAction::PlayPause => Action::Command(Command::PlayPause),

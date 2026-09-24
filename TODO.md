@@ -240,14 +240,6 @@
   progress, for cases like opening a playlist that first tries a request, gets a 403, then tries a
   bunch of fallbacks before succeeding or failing — right now there's no visual indication anything
   is happening during that stretch.
-- [ ] A "similar tracks" panel that filters the already-cached library for tracks similar to a
-  chosen one (default: the playing track / the cursor row). For now similarity is just BPM — tracks
-  whose `bpm` attr is within a tolerance of the reference (the BPM scan's values live in the track
-  attrs, `t.attrs["bpm"]`) — but keep the comparison behind one function so other attributes can be
-  added later. Only tracks that are cached count; results sort by distance and open as a normal
-  track list window (same paths as Search results). It must work in any placement — docked next to
-  the playing track's list is the main use: keep playing, watch the similar tracks follow the
-  playing track, and queue the ones you like with the normal queue keys.
 - [ ] Research task (read-only, no code): survey the current state of the art for audio genre/"vibe"
   detection and audio embeddings, beyond CLAP (the owner's only current reference point) — what
   models/approaches exist for classifying or comparing tracks by genre, mood, or general "vibe"

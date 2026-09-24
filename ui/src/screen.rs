@@ -31,6 +31,7 @@ pub enum ListKind {
     Search,
     History,
     Queue,
+    Similar,
 }
 
 impl ListKind {
@@ -41,6 +42,7 @@ impl ListKind {
             ListKind::Search => "Search",
             ListKind::History => "History",
             ListKind::Queue => "Queue",
+            ListKind::Similar => "Similar",
         }
     }
 }
@@ -158,12 +160,13 @@ pub const HELP: &str = "help";
 pub const FILES: &str = "files";
 
 /// Every window startup builds, tabs first in tab order; each tab has a companion instance.
-pub const WINDOWS: [Startup; 15] = [
+pub const WINDOWS: [Startup; 17] = [
     startup(NOW_PLAYING, Kind::List(ListKind::NowPlaying), Home::Tab),
     startup("playlists", Kind::List(ListKind::Playlists), Home::Tab),
     startup("search", Kind::List(ListKind::Search), Home::Tab),
     startup("history-tab", Kind::List(ListKind::History), Home::Tab),
     startup("queue-tab", Kind::List(ListKind::Queue), Home::Tab),
+    startup("similar-tab", Kind::List(ListKind::Similar), Home::Tab),
     startup("log", Kind::Log, Home::Pane),
     startup("settings", Kind::Settings, Home::Pane),
     startup("vis", Kind::Vis, Home::Pane),
@@ -171,6 +174,7 @@ pub const WINDOWS: [Startup; 15] = [
     companion("results", Kind::List(ListKind::Search), Home::Pane, "search"),
     companion("queue", Kind::List(ListKind::Queue), Home::Pane, "queue-tab"),
     companion("history", Kind::List(ListKind::History), Home::Pane, "history-tab"),
+    companion("similar", Kind::List(ListKind::Similar), Home::Pane, "similar-tab"),
     Startup { keyed_first: true, ..companion("playlist-keys", Kind::List(ListKind::Playlists), Home::Float, "playlists") },
     startup(HELP, Kind::Help, Home::Float),
     startup(FILES, Kind::Files, Home::Float),

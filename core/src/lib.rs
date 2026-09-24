@@ -20,6 +20,7 @@ pub mod rate_limit;
 pub mod resolver;
 pub mod scan;
 pub mod search;
+pub mod similarity;
 pub mod store;
 pub mod stream;
 pub mod traits;
@@ -53,6 +54,7 @@ pub use rate_limit::{RateGate, RateLimiter};
 pub use resolver::{Resolution, Resolver, Target, is_local_source, local_path_from_uri};
 pub use scan::{Outcome, ScanDriver, ScanMode, ScanPlugin, ScanStatus, TrackMeta};
 pub use search::Search;
+pub use similarity::similarity;
 pub use store::{MemStore, RedbStore};
 pub use stream::{Claim, Intent, Key as StreamKey, StreamEngine, StreamHandle, StreamInfo, StreamReader, StreamState, StreamWriter, Stopped, fill_from_seekable, retry as stream_retry};
 pub use traits::{

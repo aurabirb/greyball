@@ -89,6 +89,7 @@ pub enum BuiltinAction {
     ToggleQueue,
     ToggleHistory,
     ShowHistory,
+    ShowSimilar,
     Link,
     Unlink,
     PlayPause,
@@ -133,6 +134,7 @@ impl BuiltinAction {
         (BuiltinAction::ToggleQueue, None),
         (BuiltinAction::ToggleHistory, None),
         (BuiltinAction::ShowHistory, None),
+        (BuiltinAction::ShowSimilar, None),
         (BuiltinAction::Link, None),
         (BuiltinAction::Unlink, None),
         (BuiltinAction::PlayPause, Some(' ')),
@@ -181,6 +183,7 @@ impl BuiltinAction {
             BuiltinAction::ToggleQueue => "toggle-queue",
             BuiltinAction::ToggleHistory => "toggle-history",
             BuiltinAction::ShowHistory => "show-history",
+            BuiltinAction::ShowSimilar => "show-similar",
             BuiltinAction::Link => "link",
             BuiltinAction::Unlink => "unlink",
             BuiltinAction::PlayPause => "play-pause",
@@ -2156,6 +2159,24 @@ impl Session {
     /// what playback can actually use.
     pub fn is_track_cached(&self, track: &Track) -> bool {
         track.renditions.iter().any(|r| self.media_cache.cached_path(&r.source, &r.uri).is_some())
+    }
+
+    /// Cached tracks similar to `reference` (BPM, refined by `key` when both have one — see
+    /// `crate::similarity::similarity`), nearest first. Excludes `reference` itself and any track
+    /// not cached or not comparable to it.
+    pub fn similar_tracks(&self, reference: TrackId) -> Vec<Track> {
+        let Ok(Some(reference)) = self.store.get_track(reference) else { return Vec::new() };
+        let mut ranked: Vec<(f32, Track)> = self
+            .store
+            .all_tracks()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.id != reference.id && self.is_track_cached(t))
+            .filter_map(|t| crate::similarity::similarity(&reference, &t).map(|d| (d, t)))
+            .collect();
+        // Tie-break on id so equal-distance results have a deterministic order even against MemStore's HashMap iteration.
+        ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        ranked.into_iter().map(|(_, t)| t).collect()
     }
 
     pub fn player_status(&self) -> PlayerStatus {
