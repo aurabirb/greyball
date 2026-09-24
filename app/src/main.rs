@@ -95,6 +95,18 @@ fn load_waveform_enabled() -> Option<bool> {
     load_state_value("waveform_enabled")?.as_bool()
 }
 
+fn load_bpm_dsp_enabled() -> Option<bool> {
+    load_state_value("bpm_dsp_enabled")?.as_bool()
+}
+
+fn load_bpm_deezer_enabled() -> Option<bool> {
+    load_state_value("bpm_deezer_enabled")?.as_bool()
+}
+
+fn load_bpm_getsongbpm_enabled() -> Option<bool> {
+    load_state_value("bpm_getsongbpm_enabled")?.as_bool()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -257,6 +269,9 @@ fn save_state(
     show_hints: Option<bool>,
     auto_update: Option<bool>,
     waveform_enabled: Option<bool>,
+    bpm_dsp_enabled: Option<bool>,
+    bpm_deezer_enabled: Option<bool>,
+    bpm_getsongbpm_enabled: Option<bool>,
     liked_playlist: Option<&str>,
     media_cache_dir: Option<&std::path::Path>,
     media_cache_move_from: Option<&std::path::Path>,
@@ -281,6 +296,15 @@ fn save_state(
     }
     if let Some(on) = waveform_enabled {
         text.push_str(&format!("waveform_enabled = {on}\n"));
+    }
+    if let Some(on) = bpm_dsp_enabled {
+        text.push_str(&format!("bpm_dsp_enabled = {on}\n"));
+    }
+    if let Some(on) = bpm_deezer_enabled {
+        text.push_str(&format!("bpm_deezer_enabled = {on}\n"));
+    }
+    if let Some(on) = bpm_getsongbpm_enabled {
+        text.push_str(&format!("bpm_getsongbpm_enabled = {on}\n"));
     }
     if let Some(name) = liked_playlist {
         text.push_str(&format!("liked_playlist = {}\n", toml::Value::String(name.to_string())));
@@ -501,6 +525,18 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(on) = load_waveform_enabled() {
         cfg.scan.waveform.enabled = on;
     }
+    let config_bpm_dsp_enabled = cfg.scan.bpm.live_enabled;
+    if let Some(on) = load_bpm_dsp_enabled() {
+        cfg.scan.bpm.live_enabled = on;
+    }
+    let config_bpm_deezer_enabled = cfg.scan.bpm_deezer.live_enabled;
+    if let Some(on) = load_bpm_deezer_enabled() {
+        cfg.scan.bpm_deezer.live_enabled = on;
+    }
+    let config_bpm_getsongbpm_enabled = cfg.scan.bpm_getsongbpm.live_enabled;
+    if let Some(on) = load_bpm_getsongbpm_enabled() {
+        cfg.scan.bpm_getsongbpm.live_enabled = on;
+    }
     let config_liked_playlist = cfg.liked_playlist.clone();
     if let Some(name) = load_state_string("liked_playlist") {
         cfg.liked_playlist = name;
@@ -688,7 +724,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         initial_scan_mode,
     );
     if let Some(scan) = &session.scan {
-        scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs)));
+        scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs, session.scan_plugin_flag("bpm"))));
         for p in extra_scan_plugins {
             scan.register_plugin(p);
         }
@@ -697,10 +733,17 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             session.waveform_enabled.clone(),
         )));
         if bpm_deezer_enabled {
-            scan.register_plugin(Arc::new(bpm_deezer::DeezerBpmPlugin::new(bpm_deezer_min_interval_secs)));
+            scan.register_plugin(Arc::new(bpm_deezer::DeezerBpmPlugin::new(
+                bpm_deezer_min_interval_secs,
+                session.scan_plugin_flag("bpm-deezer"),
+            )));
         }
         if bpm_getsongbpm_enabled && let Some(key) = bpm_getsongbpm_api_key {
-            scan.register_plugin(Arc::new(bpm_getsongbpm::GetSongBpmPlugin::new(key, bpm_getsongbpm_min_interval_secs)));
+            scan.register_plugin(Arc::new(bpm_getsongbpm::GetSongBpmPlugin::new(
+                key,
+                bpm_getsongbpm_min_interval_secs,
+                session.scan_plugin_flag("bpm-getsongbpm"),
+            )));
         }
     }
     for problem in &config_problems {
@@ -860,6 +903,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let show_hints = Some(s.cfg.show_hints).filter(|&shown| shown != config_show_hints);
     let auto_update = Some(s.cfg.auto_update).filter(|&on| on != config_auto_update);
     let waveform_enabled = Some(s.cfg.scan.waveform.enabled).filter(|&on| on != config_waveform_enabled);
+    let bpm_dsp_live_enabled = Some(s.cfg.scan.bpm.live_enabled).filter(|&on| on != config_bpm_dsp_enabled);
+    let bpm_deezer_live_enabled = Some(s.cfg.scan.bpm_deezer.live_enabled).filter(|&on| on != config_bpm_deezer_enabled);
+    let bpm_getsongbpm_live_enabled = Some(s.cfg.scan.bpm_getsongbpm.live_enabled).filter(|&on| on != config_bpm_getsongbpm_enabled);
     let liked_playlist = Some(s.cfg.liked_playlist.as_str()).filter(|&name| name != config_liked_playlist);
     let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
     let media_cache_move_from = Some(running_media_cache_dir.as_path()).filter(|&dir| dir != s.cfg.media_cache_dir);
@@ -871,6 +917,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         show_hints,
         auto_update,
         waveform_enabled,
+        bpm_dsp_live_enabled,
+        bpm_deezer_live_enabled,
+        bpm_getsongbpm_live_enabled,
         liked_playlist,
         media_cache_dir,
         media_cache_move_from,

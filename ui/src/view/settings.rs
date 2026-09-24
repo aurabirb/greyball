@@ -21,11 +21,15 @@ pub(super) enum SettingsEntry {
     Info(String),
     /// One of `TOGGLABLE_SOURCES` — config-only, takes effect next restart.
     Source { name: &'static str, enabled: bool },
-    /// Background scan on/off — live via `ScanDriver::set_mode`, unlike `Source`.
+    /// Global background-analysis on/off (pauses every scan plugin at once) — live via
+    /// `ScanDriver::set_mode`, unlike `Source`.
     Scan { enabled: bool, available: bool },
     /// Decode-based waveform generation on/off — live, settings-only (no hotkey).
     /// SoundCloud's own API-provided waveforms are unaffected.
     WaveformGen(bool),
+    /// One plugin from `Session::scan_plugin_toggles` on/off — live, on top of `Scan`'s global mode:
+    /// turning `Scan` off still stops everything regardless of these.
+    ScanPlugin { id: &'static str, name: &'static str, enabled: bool, available: bool },
     /// Vis frame-rate limit — live; Enter steps through `VIS_FPS_STEPS`.
     VisFps(u32),
     /// The bottom scrubber row shown or hidden — live.
@@ -47,9 +51,13 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::Info(s) => s.clone(),
         SettingsEntry::Source { name, enabled } => format!("[{}] {name}", if *enabled { "x" } else { " " }),
         SettingsEntry::Scan { enabled, available: true } => {
-            format!("[{}] bpm scan", if *enabled { "x" } else { " " })
+            format!("[{}] background analysis", if *enabled { "x" } else { " " })
         }
         SettingsEntry::WaveformGen(on) => format!("[{}] waveform scan (decode)", if *on { "x" } else { " " }),
+        SettingsEntry::ScanPlugin { name, enabled, available: true, .. } => {
+            format!("[{}] {name} scan", if *enabled { "x" } else { " " })
+        }
+        SettingsEntry::ScanPlugin { name, available: false, .. } => format!("[ ] {name} scan (unavailable)"),
         SettingsEntry::StatusLine(shown) => format!("[{}] status line", if *shown { "x" } else { " " }),
         SettingsEntry::ShowHints(shown) => format!("[{}] hints", if *shown { "x" } else { " " }),
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
@@ -57,7 +65,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
         SettingsEntry::LikedPlaylist(name) => format!("likes.playlist:   {name}"),
         SettingsEntry::Setup(id) => format!("    [Enter] set up {id}"),
         SettingsEntry::VisFps(fps) => format!("vis.fps:          {fps}"),
-        SettingsEntry::Scan { available: false, .. } => "[ ] bpm scan (unavailable)".to_string(),
+        SettingsEntry::Scan { available: false, .. } => "[ ] background analysis (unavailable)".to_string(),
     }
 }
 
@@ -85,6 +93,14 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
         available: s.scan.is_some(),
     });
     v.push(SettingsEntry::WaveformGen(cfg.scan.waveform.enabled));
+    for &(id, name, _) in &s.scan_plugin_toggles {
+        v.push(SettingsEntry::ScanPlugin {
+            id,
+            name,
+            enabled: s.scan_plugin_enabled(id),
+            available: s.scan.as_ref().is_some_and(|d| d.has_plugin(id)),
+        });
+    }
     v.push(SettingsEntry::VisFps(cfg.vis.limit()));
     v.push(SettingsEntry::StatusLine(cfg.status_line));
     v.push(SettingsEntry::ShowHints(cfg.show_hints));
@@ -158,6 +174,9 @@ impl MedleyView {
             SettingsEntry::WaveformGen(on) => {
                 self.with_session_mut(|s| s.set_waveform_gen_enabled(!on));
             }
+            SettingsEntry::ScanPlugin { id, enabled, available: true, .. } => {
+                self.with_session_mut(|s| s.set_scan_plugin_enabled(id, !enabled));
+            }
             SettingsEntry::VisFps(fps) => {
                 let next = VIS_FPS_STEPS.into_iter().find(|&step| step > fps).unwrap_or(VIS_FPS_STEPS[0]);
                 self.with_session_mut(|s| s.set_vis_fps(next));
@@ -181,7 +200,9 @@ impl MedleyView {
                 self.buffer = name;
             }
             SettingsEntry::Setup(id) => self.open_setup(&id),
-            SettingsEntry::Scan { available: false, .. } | SettingsEntry::Info(_) => {}
+            SettingsEntry::Scan { available: false, .. }
+            | SettingsEntry::ScanPlugin { available: false, .. }
+            | SettingsEntry::Info(_) => {}
         }
     }
 }

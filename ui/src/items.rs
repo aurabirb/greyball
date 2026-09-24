@@ -137,7 +137,7 @@ pub const ITEMS: &[Item] = &[
         "move a window to the tab bar, the dock, fullscreen or a box over the view",
         "Names as for :window; none moves every non-tab window. Naming a startup tab moves its companion window.",
     ),
-    action(BuiltinAction::ToggleScan, &["togglescan", "ts"], "pause or resume the background scan (bpm, ...)", ""),
+    action(BuiltinAction::ToggleScan, &["togglescan", "ts"], "pause or resume all background analysis (bpm, waveform, ...)", ""),
     action(BuiltinAction::Update, &["update"], "install the latest release into ~/.local/bin/medley (restart after)", ""),
     action(BuiltinAction::ToggleShuffle, &["toggleshuffle", "sh"], "toggle queue shuffle", ""),
     action(BuiltinAction::Link, &["link", "ln"], "merge two rows as one track (run it on each row)", ""),

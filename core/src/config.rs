@@ -224,9 +224,16 @@ pub struct BpmScanConfig {
     /// `state.toml`) wins. On by default: `CacheOnly` never originates a
     /// fetch, only reads audio that is already cached or downloading, so
     /// there's no network cost to leaving it on.
+    ///
+    /// Unrelated to `live_enabled` below despite the field name matching this struct's siblings'
+    /// `enabled` — each of the three means something different (see each struct's own doc).
     pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
+    /// Whether this specific plugin runs at all, independent of `enabled` above and of the
+    /// global scan mode. Live-toggled from Settings (`Session::set_scan_plugin_enabled`), same
+    /// mechanism as `WaveformScanConfig::enabled`.
+    pub live_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -250,31 +257,41 @@ impl Default for WaveformScanConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BpmDeezerScanConfig {
+    /// Whether the plugin is registered at all — restart-only, like a `TOGGLABLE_SOURCES` entry.
+    /// Unrelated to `BpmScanConfig::enabled`'s meaning despite the shared field name.
     pub enabled: bool,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
+    /// Whether a *registered* plugin actually runs — live-toggled from Settings
+    /// (`Session::set_scan_plugin_enabled`), independent of `enabled` above.
+    pub live_enabled: bool,
 }
 
 impl Default for BpmDeezerScanConfig {
     fn default() -> Self {
-        Self { enabled: true, min_interval_secs: 5 }
+        Self { enabled: true, min_interval_secs: 5, live_enabled: true }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BpmGetSongBpmScanConfig {
+    /// Whether the plugin is registered at all — restart-only, like a `TOGGLABLE_SOURCES` entry.
+    /// Unrelated to `BpmScanConfig::enabled`'s meaning despite the shared field name.
     pub enabled: bool,
     /// No default key shipped (GetSongBPM keys are per-registrant and tied to a mandatory
     /// backlink — see README's Credits section). Unset: plugin isn't registered at all.
     pub api_key: Option<String>,
     /// Minimum spacing between this plugin's own background fetches.
     pub min_interval_secs: u64,
+    /// Whether a *registered* plugin actually runs — live-toggled from Settings
+    /// (`Session::set_scan_plugin_enabled`), independent of `enabled` above.
+    pub live_enabled: bool,
 }
 
 impl Default for BpmGetSongBpmScanConfig {
     fn default() -> Self {
-        Self { enabled: true, api_key: None, min_interval_secs: 2 }
+        Self { enabled: true, api_key: None, min_interval_secs: 2, live_enabled: true }
     }
 }
 
@@ -356,6 +373,7 @@ impl Default for BpmScanConfig {
         Self {
             enabled: true,
             min_interval_secs: 15,
+            live_enabled: true,
         }
     }
 }

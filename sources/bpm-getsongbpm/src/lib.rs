@@ -1,6 +1,8 @@
 //! `GetSongBpmPlugin`: looks up BPM from GetSongBPM.com's API (needs an API key).
 //! Implements `core::ScanPlugin`, mirroring `sources/bpm-deezer`'s shape.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use core::http::describe;
@@ -26,14 +28,17 @@ pub struct GetSongBpmPlugin {
     api_key: String,
     min_interval: Duration,
     client: reqwest::blocking::Client,
+    /// Settings-toggled: gates this plugin only, independent of the global scan mode.
+    enabled: Arc<AtomicBool>,
 }
 
 impl GetSongBpmPlugin {
-    pub fn new(api_key: String, min_interval_secs: u64) -> Self {
+    pub fn new(api_key: String, min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
         Self {
             api_key,
             min_interval: Duration::from_secs(min_interval_secs),
             client: reqwest::blocking::Client::new(),
+            enabled,
         }
     }
 }
@@ -48,7 +53,7 @@ impl ScanPlugin for GetSongBpmPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        !track.attrs.contains_key("bpm:getsongbpm")
+        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:getsongbpm")
     }
 
     fn needs_audio(&self) -> bool {

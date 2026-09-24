@@ -553,6 +553,11 @@ pub struct Session {
     /// Seeded from `cfg.scan.waveform.enabled`; SoundCloud's own
     /// (API-provided, no decode) waveform plugin never consults this.
     pub waveform_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Same mechanism as `waveform_enabled`, generalized: (plugin id, display name, live flag)
+    /// triples for every other scan plugin with its own Settings toggle, built once here so
+    /// `app::main`'s plugin wiring and Settings' generic per-plugin row (`scan_plugin_enabled`/
+    /// `set_scan_plugin_enabled`) share one list of ids instead of each repeating it.
+    pub scan_plugin_toggles: Vec<(&'static str, &'static str, Arc<std::sync::atomic::AtomicBool>)>,
     /// Same cache the player and scan driver decode audio into
     /// (`session_builder::build_session` hands all three the same `Arc`) —
     /// held here too so the UI can ask "is this track's audio already on
@@ -680,6 +685,15 @@ impl Session {
             }
         }
         let waveform_enabled = Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.waveform.enabled));
+        let scan_plugin_toggles = vec![
+            ("bpm", "BPM", Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.bpm.live_enabled))),
+            ("bpm-deezer", "Deezer BPM", Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.bpm_deezer.live_enabled))),
+            (
+                "bpm-getsongbpm",
+                "GetSongBPM",
+                Arc::new(std::sync::atomic::AtomicBool::new(cfg.scan.bpm_getsongbpm.live_enabled)),
+            ),
+        ];
         let mut session = Self {
             bus,
             store,
@@ -695,6 +709,7 @@ impl Session {
             cfg: Arc::new(cfg),
             scan: None,
             waveform_enabled,
+            scan_plugin_toggles,
             media_cache,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
@@ -2150,8 +2165,45 @@ impl Session {
         self.touch();
         Arc::make_mut(&mut self.cfg).scan.waveform.enabled = enabled;
         self.waveform_enabled.store(enabled, Ordering::Relaxed);
+        if let Some(scan) = &self.scan {
+            scan.request_rebuild();
+        }
     }
 
+    /// The live flag for one of `scan_plugin_toggles`'s known ids — used by `app::main` to wire
+    /// each `ScanPlugin` constructor to its own toggle without repeating the id/flag pairing.
+    pub fn scan_plugin_flag(&self, id: &str) -> Arc<std::sync::atomic::AtomicBool> {
+        self.scan_plugin_toggles
+            .iter()
+            .find(|(pid, ..)| *pid == id)
+            .map(|(_, _, flag)| flag.clone())
+            .expect("known scan plugin id")
+    }
+
+    /// Current live flag for one of `scan_plugin_toggles`'s ids, `false` for an unknown id.
+    pub fn scan_plugin_enabled(&self, id: &str) -> bool {
+        self.scan_plugin_toggles.iter().find(|(pid, ..)| *pid == id).is_some_and(|(_, _, flag)| flag.load(Ordering::Relaxed))
+    }
+
+    /// Toggles one of `scan_plugin_toggles`'s live flags and persists it to `cfg`; a no-op for an
+    /// unknown id. Independent of the global scan mode — see `set_scan_enabled`.
+    pub fn set_scan_plugin_enabled(&mut self, id: &str, enabled: bool) {
+        let Some(flag) = self.scan_plugin_toggles.iter().find(|(pid, ..)| *pid == id).map(|(_, _, flag)| flag.clone()) else {
+            return;
+        };
+        flag.store(enabled, Ordering::Relaxed);
+        self.touch();
+        let cfg = Arc::make_mut(&mut self.cfg);
+        match id {
+            "bpm" => cfg.scan.bpm.live_enabled = enabled,
+            "bpm-deezer" => cfg.scan.bpm_deezer.live_enabled = enabled,
+            "bpm-getsongbpm" => cfg.scan.bpm_getsongbpm.live_enabled = enabled,
+            _ => {}
+        }
+        if let Some(scan) = &self.scan {
+            scan.request_rebuild();
+        }
+    }
 
     /// Whether pressing play on `track` right now would be instant — any of
     /// its renditions already has a `MediaCache` entry (the same lookup

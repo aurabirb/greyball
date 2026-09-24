@@ -1,6 +1,8 @@
 //! `DeezerBpmPlugin`: looks up BPM from Deezer's public catalog API (no auth needed).
 //! Implements `core::ScanPlugin`, mirroring `sources/bpm`'s local DSP plugin's shape but over HTTP.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use core::http::describe;
@@ -35,15 +37,18 @@ struct TrackDetail {
 pub struct DeezerBpmPlugin {
     min_interval: Duration,
     client: reqwest::blocking::Client,
+    /// Settings-toggled: gates this plugin only, independent of the global scan mode.
+    enabled: Arc<AtomicBool>,
 }
 
 impl DeezerBpmPlugin {
     /// `min_interval_secs`: Deezer's public API has no documented rate limit but is known to
     /// soft-throttle; the caller's default (5s) is a conservative guess, not a verified number.
-    pub fn new(min_interval_secs: u64) -> Self {
+    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
         Self {
             min_interval: Duration::from_secs(min_interval_secs),
             client: reqwest::blocking::Client::new(),
+            enabled,
         }
     }
 
@@ -102,7 +107,7 @@ impl ScanPlugin for DeezerBpmPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        !track.attrs.contains_key("bpm:deezer")
+        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:deezer")
     }
 
     fn needs_audio(&self) -> bool {

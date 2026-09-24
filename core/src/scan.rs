@@ -262,8 +262,22 @@ impl ScanDriver {
     /// construction time.
     pub fn register_plugin(&self, plugin: Arc<dyn ScanPlugin>) {
         self.inner.plugins.lock().unwrap().push(plugin);
+        self.request_rebuild();
+    }
+
+    /// Forces the next walk pass to re-evaluate the whole library instead of just `dirty` tracks —
+    /// needed after a plugin was registered, or a live per-plugin toggle (`Session::set_scan_plugin_enabled`,
+    /// `set_waveform_gen_enabled`) turned back on, so tracks the walk had already dropped as
+    /// "nothing needed" get reconsidered instead of staying dropped for the rest of the session.
+    pub fn request_rebuild(&self) {
         self.inner.walk.lock().unwrap().rebuild = true;
         self.inner.wake_walk();
+    }
+
+    /// Whether a plugin with this id is currently registered — e.g. so Settings can hide a
+    /// per-plugin toggle for a plugin that never registered (no API key, feature disabled, ...).
+    pub fn has_plugin(&self, id: &str) -> bool {
+        self.inner.plugins.lock().unwrap().iter().any(|p| p.id() == id)
     }
 
     /// The currently-playing track goes to the now-playing worker for every plugin that still

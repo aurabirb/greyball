@@ -16,6 +16,7 @@
 //!    whole track off.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use core::audio_decode::DecodeError;
@@ -50,18 +51,20 @@ const ANALYSIS_SECONDS: f32 = 60.0;
 /// How many harmonics of a candidate period the comb filter sums over.
 const COMB_HARMONICS: usize = 4;
 
-/// `ScanPlugin` for local BPM detection. Toggled at runtime via `B` /
-/// `:togglescan`, not by whether it's registered — see `ScanDriver::register_plugin`.
+/// `ScanPlugin` for local BPM detection. Always registered — gated live by the global `B` /
+/// `:togglescan` mode and, independently, by its own Settings toggle (`enabled` below).
 pub struct BpmPlugin {
     min_interval: Duration,
     /// FFT_SIZE is fixed, so the plan is built once and reused across every track this plugin
     /// analyzes instead of replanning per call.
     fft: Arc<dyn Fft<f32>>,
+    /// Settings-toggled: gates this plugin only, independent of the global scan mode.
+    enabled: Arc<AtomicBool>,
 }
 
 impl BpmPlugin {
-    pub fn new(min_interval_secs: u64) -> Self {
-        Self { min_interval: Duration::from_secs(min_interval_secs), fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE) }
+    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
+        Self { min_interval: Duration::from_secs(min_interval_secs), fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE), enabled }
     }
 }
 
@@ -76,7 +79,7 @@ impl ScanPlugin for BpmPlugin {
 
     fn needs(&self, track: &Track) -> bool {
         // Source-agnostic: the DSP only needs decoded PCM, so every track is scanned.
-        !track.attrs.contains_key("bpm:dsp")
+        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:dsp")
     }
 
     fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {
