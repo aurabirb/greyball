@@ -14,6 +14,16 @@
 
 ### Owner's list — do these first, in this order
 ### Bugs
+- [ ] A `medley` process whose controlling terminal disappears out from under it (e.g. the tmux pane
+  it was running in gets killed while it's still up) can end up busy-looping at ~100% CPU
+  indefinitely instead of exiting — found as an orphaned (PPID 1) process pinned at 99%+ CPU for 20+
+  minutes, holding the media-cache sqlite lock. `medley.log`/`medley.panic` from a separate later run
+  against the same dead pty show `fatal: No such device or address (os error 6)` at startup and a
+  panic trying to restore terminal state (`Can not disable mouse capture or show cursor: Input/output
+  error`, `cursive-0.21.1/src/backends/crossterm.rs:322`) — consistent with the terminal I/O layer
+  hitting a persistent read/write error and retrying in a tight loop rather than backing off or
+  exiting. Investigate `cursive`'s crossterm backend's event-read loop for this failure mode and make
+  a persistent terminal I/O error trigger a clean exit instead of a CPU-pinning spin.
 - [ ] Spotify liked-tracks sync across machines: liking a track on Spotify from another machine shows
   the Liked Tracks list stuck "still loading" here, with no clear signal whether the like actually
   made it into medley's own liked-tracks state or is lost. Needs investigation: whether this is a
