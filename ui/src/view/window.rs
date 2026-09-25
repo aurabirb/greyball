@@ -2,7 +2,7 @@ use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 
 use cursive::{Printer, Rect};
-use cursive::event::{Event, Key, MouseEvent};
+use cursive::event::{Event, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 
 use unicode_width::UnicodeWidthStr;
@@ -323,6 +323,24 @@ impl Window {
             let frame = gm.frame(ctx, rect);
             return match gm.selected_track().and_then(|id| frame.play_context(id)) {
                 Some(cmd) => WindowOutcome::Run(cmd),
+                None => WindowOutcome::Consumed,
+            };
+        }
+        // A left click selects the nearest plotted point — the mouse's equivalent of arrow-nav
+        // landing on it — and a second click within the double-click window on that same point
+        // plays it, same timing pattern as `TrackList`'s own click detection
+        // (`track_list.rs`'s `last_click`/`DOUBLE_CLICK_WINDOW`).
+        if let Body::GenreMap(gm) = &mut self.body
+            && let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
+            && let Some(pos) = position.checked_sub(*offset)
+            && rect.contains(pos)
+        {
+            let local = pos - rect.top_left();
+            let frame = gm.frame(ctx, rect);
+            // Row 0 is the title row `draw` prints before its `y + 1`-offset points; a click there
+            // hits no point.
+            return match local.y.checked_sub(1).and_then(|y| gm.click(&frame, local.x, y)) {
+                Some(id) => frame.play_context(id).map_or(WindowOutcome::Consumed, WindowOutcome::Run),
                 None => WindowOutcome::Consumed,
             };
         }

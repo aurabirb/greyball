@@ -6,7 +6,7 @@
 //! memoized rather than driven by a background thread.
 
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cursive::event::Key;
 use cursive::theme::{Color, ColorStyle, Effect};
@@ -55,14 +55,18 @@ impl GenreMapFrame {
     }
 }
 
+/// Same click-timing window `TrackList` uses for its own double-click detection.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
 pub(super) struct GenreMap {
     cache: Memo<(u64, usize, usize), Arc<GenreMapFrame>>,
     selected: Mutex<Option<TrackId>>,
+    last_click: Mutex<Option<(Instant, TrackId)>>,
 }
 
 impl GenreMap {
     pub(super) fn new() -> Self {
-        Self { cache: Memo::default(), selected: Mutex::new(None) }
+        Self { cache: Memo::default(), selected: Mutex::new(None), last_click: Mutex::new(None) }
     }
 
     /// The plot for `rect`'s width and one title row less of height, rebuilt only when the
@@ -107,6 +111,29 @@ impl GenreMap {
         if let Some(p) = next {
             *selected = Some(p.track_id);
         }
+    }
+
+    /// Selects the plotted point nearest `(x, y)` (pane-content coordinates, i.e. before the `+1`
+    /// title-row offset `draw` places points at) and returns it; `None` when nothing is plotted.
+    fn select_at(&self, frame: &GenreMapFrame, x: usize, y: usize) -> Option<TrackId> {
+        let nearest = frame.points.iter().min_by_key(|p| {
+            let (dx, dy) = (p.x as isize - x as isize, p.y as isize - y as isize);
+            dx * dx + dy * dy
+        })?;
+        *self.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(nearest.track_id);
+        Some(nearest.track_id)
+    }
+
+    /// A mouse click at `(x, y)`: selects the nearest point like `select_at`, and returns it again
+    /// when this click completes a double-click (same point, within `DOUBLE_CLICK_WINDOW`) so the
+    /// caller can play it — the mouse's equivalent of arrow-nav-then-Enter.
+    pub(super) fn click(&self, frame: &GenreMapFrame, x: usize, y: usize) -> Option<TrackId> {
+        let id = self.select_at(frame, x, y)?;
+        let now = Instant::now();
+        let mut last_click = self.last_click.lock().unwrap_or_else(|e| e.into_inner());
+        let double = last_click.is_some_and(|(t, last_id)| last_id == id && now.duration_since(t) <= DOUBLE_CLICK_WINDOW);
+        *last_click = (!double).then_some((now, id));
+        double.then_some(id)
     }
 
     /// `now_playing` is a live overlay, not baked into the memoized `frame` — it's read fresh
