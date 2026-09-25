@@ -68,9 +68,10 @@ pub(super) enum WindowFrame {
     List(Arc<ListFrame>),
     Settings(Arc<Vec<SettingsEntry>>),
     Help(Arc<Built>),
-    /// The memoized scatter plot, plus the live now-playing track id (not part of the memo key —
-    /// it's redrawn as an overlay so a track change doesn't force a PCA recompute).
-    GenreMap(Arc<GenreMapFrame>, Option<TrackId>),
+    /// The memoized scatter plot, plus the live now-playing track id and liked-track set (neither
+    /// part of the memo key — both are redrawn as overlays so a track/like change doesn't force a
+    /// PCA recompute).
+    GenreMap(Arc<GenreMapFrame>, Option<TrackId>, std::collections::HashSet<TrackId>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -223,7 +224,11 @@ impl Window {
             Body::List(list) => WindowFrame::List(list.frame(ctx, self.content())),
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
-            Body::GenreMap(gm) => WindowFrame::GenreMap(gm.frame(ctx, self.content()), ctx.s.now_playing_id()),
+            Body::GenreMap(gm) => {
+                let frame = gm.frame(ctx, self.content());
+                let liked = gm.liked_ids(ctx, &frame);
+                WindowFrame::GenreMap(frame, ctx.s.now_playing_id(), liked)
+            }
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
     }
@@ -240,7 +245,7 @@ impl Window {
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             (Body::Files(files), _) => pane(files.idle()),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, _)) => {
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, ..)) => {
                 pane(&gm.selected_track().and_then(|id| frame.track_label(id)).unwrap_or_default())
             }
             _ => pane(""),
@@ -257,7 +262,7 @@ impl Window {
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing)) => gm.draw(content, focused, frame, *now_playing),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing, liked)) => gm.draw(content, focused, frame, *now_playing, liked),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_) | Body::GenreMap(_), _) => {}
         }

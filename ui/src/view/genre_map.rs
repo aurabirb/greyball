@@ -87,6 +87,14 @@ impl GenreMap {
         *self.selected.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Which of `frame`'s plotted tracks are currently liked, read fresh from `Session::liked_mark`
+    /// (already-resolved local/cached state, no network round-trip) each call rather than baked into
+    /// the memoized `frame` — like `now_playing`, liked status can change without the embedded-track
+    /// set or pane size changing, so it's overlaid live instead of forcing a PCA recompute.
+    pub(super) fn liked_ids(&self, ctx: &Ctx, frame: &GenreMapFrame) -> std::collections::HashSet<TrackId> {
+        frame.points.iter().filter(|p| ctx.s.liked_mark(p.track_id).is_some()).map(|p| p.track_id).collect()
+    }
+
     /// Selects `track`, if it's one of `frame`'s plotted points; a no-op (selection left as-is) when
     /// it has no embedding yet and so nothing to highlight.
     pub(super) fn select(&self, frame: &GenreMapFrame, track: TrackId) {
@@ -139,7 +147,14 @@ impl GenreMap {
     /// `now_playing` is a live overlay, not baked into the memoized `frame` — it's read fresh
     /// (`Session::now_playing_id`) on every draw so a track change highlights immediately without
     /// forcing a PCA recompute, which is only keyed on the embedded-track set and pane size.
-    pub(super) fn draw(&self, printer: &Printer, focused: bool, frame: &GenreMapFrame, now_playing: Option<TrackId>) {
+    pub(super) fn draw(
+        &self,
+        printer: &Printer,
+        focused: bool,
+        frame: &GenreMapFrame,
+        now_playing: Option<TrackId>,
+        liked: &std::collections::HashSet<TrackId>,
+    ) {
         let title = if focused { "[Genre Map]" } else { "Genre Map" };
         printer.with_color(ColorStyle::title_secondary(), |p| {
             p.print((0, 0), &crate::view::pad(title, p.size.x));
@@ -148,23 +163,33 @@ impl GenreMap {
             return; // not yet rebuilt for this size
         }
         let selected = self.selected_track();
-        // Multiple tracks can land on the same cell (small pane, large library); track counts per
-        // cell so a cluster gets a distinct glyph instead of silently drawing as one track.
-        let mut cell_counts: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        // Multiple tracks can land on the same cell (small pane, large library, or the anisotropic
+        // stretch in `fit_to_pane` compressing an axis); group by cell so only one point's style is
+        // actually drawn per cell, picked by priority rather than "whichever came last in
+        // `frame.points`" — otherwise a plain point iterating after the selected/now-playing one in
+        // the same cell would silently paint over and hide its highlight. The winner's own
+        // liked-status still decides dot vs. star; a crowded cell is signaled by bold only (below),
+        // not by overriding the glyph shape.
+        let mut cells: std::collections::HashMap<(usize, usize), Vec<&Point>> = std::collections::HashMap::new();
         for point in &frame.points {
-            *cell_counts.entry((point.x, point.y)).or_insert(0) += 1;
+            cells.entry((point.x, point.y)).or_default().push(point);
         }
         // Now-playing's pulsing reticle: sampled fresh from wall-clock time each draw, no stored
         // animation-phase field, so it's purely a function of "now" rather than app state.
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let ring = PLAYING_RING[(millis / 400) as usize % PLAYING_RING.len()];
-        for point in &frame.points {
-            let is_selected = Some(point.track_id) == selected;
-            let is_playing = now_playing == Some(point.track_id);
-            let clustered = cell_counts[&(point.x, point.y)] > 1;
+        for (&(x, y), points) in &cells {
+            let clustered = points.len() > 1;
+            let winner = points
+                .iter()
+                .max_by_key(|p| cell_priority(Some(p.track_id) == selected, now_playing == Some(p.track_id)))
+                .expect("cell has at least one point");
+            let is_selected = Some(winner.track_id) == selected;
+            let is_playing = now_playing == Some(winner.track_id);
+            let is_liked = liked.contains(&winner.track_id);
             let white = Color::Dark(cursive::theme::BaseColor::White);
-            let style = if is_selected { ColorStyle::new(white, point.color) } else { ColorStyle::new(point.color, Color::TerminalDefault) };
-            let base = if is_selected { SELECTED_GLYPH } else if clustered { CLUSTERED_GLYPH } else { NORMAL_GLYPH };
+            let style = if is_selected { ColorStyle::new(white, winner.color) } else { ColorStyle::new(winner.color, Color::TerminalDefault) };
+            let base = if is_selected { SELECTED_GLYPH } else if is_liked { LIKED_GLYPH } else { UNLIKED_GLYPH };
             let mut glyph = base.to_string();
             let effect = if is_playing || clustered { Effect::Bold } else { Effect::Simple };
             if is_playing {
@@ -172,17 +197,30 @@ impl GenreMap {
                 // advance the cursor) and cycles shape for the animation — no effect/color flashing.
                 glyph.push(ring);
             }
-            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), &glyph)));
+            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((x, y + 1), &glyph)));
         }
     }
 }
 
-/// Unselected, un-clustered point.
-const NORMAL_GLYPH: &str = "•";
-/// A cell holding more than one track — a different silhouette (star) from a dot, not just a fuller circle.
-const CLUSTERED_GLYPH: &str = "★";
+/// Draw priority for a point when several share a cell, highest first: selected-and-playing beats
+/// selected, which beats playing, which beats a plain point — so a highlight can't be silently
+/// overwritten by an unrelated point that happens to land in the same cell.
+fn cell_priority(is_selected: bool, is_playing: bool) -> u8 {
+    match (is_selected, is_playing) {
+        (true, true) => 3,
+        (true, false) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+
+/// An unselected point for a track the user has liked.
+const LIKED_GLYPH: &str = "•";
+/// An unselected point for a track that isn't liked — a different silhouette (star) from the liked
+/// dot, not just a fuller circle.
+const UNLIKED_GLYPH: &str = "★";
 /// The selected point — a square, distinguishable from the dot/star at a glance even without its
-/// white-on-background styling.
+/// white-on-background styling, regardless of the track's liked status.
 const SELECTED_GLYPH: &str = "■";
 /// Combining marks cycled to give the now-playing point a pulsing reticle ring.
 const PLAYING_RING: [char; 3] = ['\u{20DD}', '\u{20DF}', '\u{20DE}']; // enclosing circle, diamond, square
@@ -249,14 +287,18 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
     GenreMapFrame { w, h, points }
 }
 
-/// Rotates `proj` to the orientation that best fills a `w`×`h` pane, scales uniformly (both axes by
-/// the same factor, so relative distances/angles between points are preserved — a similarity
-/// transform, not a stretch) and centers the result, returning each point's pane cell.
+/// Rotates `proj` to the orientation that best suits a `w`×`h` pane, then stretches x and y
+/// *independently* to fill `0..w-1`/`0..h-1`, and returns each point's pane cell.
 ///
-/// Rotation angle comes from rotating calipers over the point cloud's convex hull: for each hull
-/// edge direction, the best axis-aligned fit (`min(pane axis / point-cloud extent)` over x and y) is
-/// a candidate, and the edge whose fit needs the least shrinking wins. No point is ever discarded —
-/// the final bounding box is the true extent of every rotated point, so nothing needs clipping.
+/// This is no longer a similarity transform: independent per-axis scaling is shear-like and does
+/// not preserve relative distances/angles between points. That's an intentional trade-off (product
+/// decision, not an oversight) — the PCA projection is already an approximation, and using the full
+/// pane area for spread matters more than staying geometrically faithful to it. The rotation step
+/// still matters despite the final stretch always filling the pane exactly regardless of angle: it
+/// orients the cloud's natural spread sensibly relative to the pane's aspect ratio before that
+/// stretch is applied, rather than stretching an arbitrarily-oriented cloud. No point is ever
+/// discarded or clipped — the true min/max of every rotated point always lands exactly on the pane's
+/// edges.
 fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
     let (w1, h1) = ((w.saturating_sub(1)) as f32, (h.saturating_sub(1)) as f32);
     if proj.is_empty() {
@@ -272,19 +314,20 @@ fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
     let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
     let (ylo, yhi) = min_max(rotated.iter().map(|p| p.1));
     let (dx, dy) = (xhi - xlo, yhi - ylo);
-    // Both extents near-0 means every point is within `fit_scale`'s 1e-6 threshold of the centroid
-    // (e.g. duplicate embeddings): `fit_scale` would be infinite, and `0.0 * infinity` is NaN, so pin
-    // it to a finite value — the multiplied term is negligible either way.
-    let scale = fit_scale(dx, dy, w1, h1);
-    let scale = if scale.is_finite() { scale } else { 1.0 };
+    // Independent per-axis scale: each axis stretches (or shrinks) on its own to exactly fill the
+    // pane, rather than sharing one factor. A near-0 extent (e.g. duplicate embeddings collapsing an
+    // axis) would otherwise divide by ~0; pin that axis's scale to 1.0 instead — every point is
+    // already at (or near) that axis's center, so the factor doesn't matter.
+    let sx = if dx > 1e-6 { w1 / dx } else { 1.0 };
+    let sy = if dy > 1e-6 { h1 / dy } else { 1.0 };
     // Center: place the scaled cloud's midpoint at the pane's midpoint.
     let (cx, cy) = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0);
     let (pcx, pcy) = (w1 / 2.0, h1 / 2.0);
     rotated
         .iter()
         .map(|&(x, y)| {
-            let px = (pcx + (x - cx) * scale).round().clamp(0.0, w1);
-            let py = (pcy + (y - cy) * scale).round().clamp(0.0, h1);
+            let px = (pcx + (x - cx) * sx).round().clamp(0.0, w1);
+            let py = (pcy + (y - cy) * sy).round().clamp(0.0, h1);
             (px as usize, py as usize)
         })
         .collect()
@@ -305,90 +348,75 @@ fn fit_scale(dx: f32, dy: f32, w1: f32, h1: f32) -> f32 {
     sx.min(sy)
 }
 
-/// The rotation angle (radians) that best fits `points` into a `w1`×`h1` box, via rotating calipers
-/// over the convex hull: candidate angles are each hull edge's direction, and the best one
-/// maximizes `fit_scale` of the rotated point cloud's bounding box against the target box — the most
-/// of the pane usable without overflowing either axis. This is deliberately the pane-aspect-fit
-/// objective, not the classic minimum-area rotating-calipers problem (which optimizes `dx*dy`
-/// regardless of the target's shape and would pick a worse angle for a non-square pane).
-fn best_angle(points: &[(f32, f32)], w1: f32, h1: f32) -> f32 {
-    let hull = convex_hull(points);
-    let edges: Vec<(f32, f32)> = match hull.len() {
-        0 | 1 => return 0.0,
-        2 => vec![(hull[1].0 - hull[0].0, hull[1].1 - hull[0].1)],
-        _ => (0..hull.len())
-            .map(|i| {
-                let a = hull[i];
-                let b = hull[(i + 1) % hull.len()];
-                (b.0 - a.0, b.1 - a.1)
-            })
-            .collect(),
-    };
+/// Number of evenly-spaced angles sampled across the half-turn `0..π` (rotating by `θ` and `θ+π`
+/// give the same bounding box, so a half-turn is the full period) — roughly a 0.5° step.
+const ANGLE_SAMPLES: usize = 360;
 
+/// The rotation angle (radians) that best fits `points` into a `w1`×`h1` box: a dense sweep over
+/// `0..π` evaluating `fit_scale` of the rotated bounding box directly against every point, refined
+/// by a golden-section search around the best sample.
+///
+/// A convex-hull/rotating-calipers candidate set (each hull edge's direction and its perpendicular)
+/// was tried first, but our objective is `min(w-1/dx(θ), h-1/dy(θ))` — a maximization against a
+/// *fixed target aspect ratio*, not the classic minimum-area bounding rectangle. That objective's
+/// true maximum can fall at a crossover angle mid-sweep, where the two ratio terms intersect, which
+/// isn't necessarily flush with any hull edge or its perpendicular — the calipers approach could
+/// land on a visibly worse angle than a dense search. A dense sweep directly against all points is
+/// simple, robust, and O(samples × n), trivial for realistic library sizes; it also drops the
+/// convex-hull computation, which had no other use in this file.
+fn best_angle(points: &[(f32, f32)], w1: f32, h1: f32) -> f32 {
+    let step = std::f32::consts::PI / ANGLE_SAMPLES as f32;
     let mut best = 0.0f32;
     let mut best_fit = f32::NEG_INFINITY;
-    for (ex, ey) in edges {
-        let len = (ex * ex + ey * ey).sqrt();
-        if len < 1e-9 {
-            continue; // duplicate consecutive hull points: no direction to test
-        }
-        let theta = ey.atan2(ex);
-        // `fit_scale` isn't symmetric in dx/dy unless w1 == h1, so an edge's own direction and its
-        // perpendicular generally score differently (unlike the classic minimum-area calipers
-        // problem, where dx*dy is symmetric and only the edge direction itself needs testing) —
-        // both must be candidates, or a hull with no edge near the long axis's true best angle gets
-        // missed entirely.
-        for candidate in [theta, theta + std::f32::consts::FRAC_PI_2] {
-            let (cos_t, sin_t) = (candidate.cos(), candidate.sin());
-            let rotated: Vec<(f32, f32)> = points.iter().map(|&(x, y)| rotate(x, y, cos_t, sin_t)).collect();
-            let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
-            let (ylo, yhi) = min_max(rotated.iter().map(|p| p.1));
-            let fit = fit_scale(xhi - xlo, yhi - ylo, w1, h1);
-            if fit > best_fit {
-                best_fit = fit;
-                best = candidate;
-            }
+    for i in 0..ANGLE_SAMPLES {
+        let theta = i as f32 * step;
+        let fit = fit_at_angle(points, theta, w1, h1);
+        if fit > best_fit {
+            best_fit = fit;
+            best = theta;
         }
     }
-    best
+    // Refine over a window wider than one sample step: the objective is a piecewise min of two
+    // ratios, and its true peak (a crossover between the two pieces) could otherwise straddle the
+    // edge of a ±1-step window centered on the coarse sample.
+    golden_section_refine(points, best - 2.0 * step, best + 2.0 * step, w1, h1)
+}
+
+/// `fit_scale` of `points` rotated by `theta`.
+fn fit_at_angle(points: &[(f32, f32)], theta: f32, w1: f32, h1: f32) -> f32 {
+    let (cos_t, sin_t) = (theta.cos(), theta.sin());
+    let rotated = points.iter().map(|&(x, y)| rotate(x, y, cos_t, sin_t));
+    let (mut xlo, mut xhi) = (f32::INFINITY, f32::NEG_INFINITY);
+    let (mut ylo, mut yhi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for (x, y) in rotated {
+        xlo = xlo.min(x);
+        xhi = xhi.max(x);
+        ylo = ylo.min(y);
+        yhi = yhi.max(y);
+    }
+    fit_scale(xhi - xlo, yhi - ylo, w1, h1)
+}
+
+/// Golden-section search maximizing `fit_at_angle` over `[lo, hi]`, for sharpening the coarse
+/// dense-sweep sample in `best_angle` to sub-sample precision.
+fn golden_section_refine(points: &[(f32, f32)], mut lo: f32, mut hi: f32, w1: f32, h1: f32) -> f32 {
+    let gr = (5f32.sqrt() - 1.0) / 2.0;
+    let mut c = hi - gr * (hi - lo);
+    let mut d = lo + gr * (hi - lo);
+    for _ in 0..20 {
+        if fit_at_angle(points, c, w1, h1) < fit_at_angle(points, d, w1, h1) {
+            lo = c;
+        } else {
+            hi = d;
+        }
+        c = hi - gr * (hi - lo);
+        d = lo + gr * (hi - lo);
+    }
+    (lo + hi) / 2.0
 }
 
 fn min_max(vals: impl Iterator<Item = f32>) -> (f32, f32) {
     vals.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
-}
-
-/// 2D convex hull via Andrew's monotone chain, in counter-clockwise order with no repeated closing
-/// point. Duplicate points collapse away naturally (a repeated point never survives the turn test).
-/// Callers handle 0/1/2-point inputs themselves; this still degrades gracefully on them (returns the
-/// input as-is) rather than panicking.
-fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let mut sorted: Vec<(f32, f32)> = points.to_vec();
-    sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-    sorted.dedup();
-    if sorted.len() < 3 {
-        return sorted;
-    }
-    // Cross product of OA x OB; > 0 means a counter-clockwise (left) turn.
-    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
-
-    let mut lower: Vec<(f32, f32)> = Vec::new();
-    for &p in &sorted {
-        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
-            lower.pop();
-        }
-        lower.push(p);
-    }
-    let mut upper: Vec<(f32, f32)> = Vec::new();
-    for &p in sorted.iter().rev() {
-        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
-            upper.pop();
-        }
-        upper.push(p);
-    }
-    lower.pop();
-    upper.pop();
-    lower.extend(upper);
-    lower
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
