@@ -263,8 +263,10 @@ on `revision` — it is read fresh or kept in its own small cache.
   `cb_sink`. `deliver` is the only push into the view (the root is a `NamedView`, reached by
   `on_root`, which dialog buttons also use to `run` a command); everything else is re-read from the
   session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
-  (clock, marquee, title flush); `sync_vis_fps`, run after every event, raises it to the Vis fps limit (`Vis::fps`, mirroring `cfg.vis.fps`) while
-  a Vis window is shown, and to `SPINNER_FPS` while the tab bar spinner shows; it never goes below the floor. `Event::Refresh` only runs that sync.
+  (clock, marquee, title flush); `sync_fast_fps`, run after every event, raises it to the Vis fps limit (`Vis::fps`, mirroring `cfg.vis.fps`) while
+  a Vis window is shown, to `SPINNER_FPS` while the tab bar spinner shows, and to `GENRE_MAP_FPS`
+  while a Genre Map window is shown with something playing (its now-playing reticle animation); it
+  never goes below the floor. `Event::Refresh` only runs that sync.
 
 ## Routing in `MedleyView::route`
 

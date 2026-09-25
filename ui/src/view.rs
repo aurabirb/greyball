@@ -530,7 +530,7 @@ impl View for MedleyView {
     fn on_event(&mut self, event: Event) -> EventResult {
         // Synthetic periodic wakeup.
         if event == Event::Refresh {
-            return self.sync_vis_fps();
+            return self.sync_fast_fps();
         }
         let nav = scroll::Nav::of(&event);
         if nav.is_some() {
@@ -548,7 +548,7 @@ impl View for MedleyView {
         if !matches!(event, Event::Mouse { .. }) {
             self.clamp_scroll();
         }
-        result.and(self.sync_vis_fps())
+        result.and(self.sync_fast_fps())
     }
 }
 

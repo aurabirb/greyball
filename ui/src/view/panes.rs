@@ -14,6 +14,10 @@ use super::window::WindowId;
 /// Rows reserved at the very top of the terminal and bottom.
 const TAB_BAR_ROWS: usize = 1;
 
+/// Redraw rate while a Genre Map window is shown and something is playing, just fast enough for its
+/// now-playing reticle to visibly pulse — far below Vis's own audio-reactive rate.
+const GENRE_MAP_FPS: u32 = 4;
+
 
 /// `Action::CyclePaneLayout`'s rotation, one `(side, stack)` step per press.
 pub(crate) const PANE_LAYOUT_CYCLE: [(Side, Axis); 4] = [
@@ -391,16 +395,27 @@ impl MedleyView {
         }
     }
 
-    /// Syncs cursive's redraw rate to whether a Vis window is shown or the tab bar spins; a callback only when that changed.
-    pub(super) fn sync_vis_fps(&mut self) -> EventResult {
-        let shown = self.visible().into_iter().any(|id| self.windows[id].kind == Kind::Vis);
-        let spinning = self.with_session(|s| s.player_status().spinning());
-        let want = [shown.then(|| self.vis.fps()), spinning.then_some(SPINNER_FPS)].into_iter().flatten().max();
+    /// Syncs cursive's redraw rate to whichever of: a Vis window shown, the tab bar spinning, or a
+    /// Genre Map window shown with something playing (its now-playing reticle needs to animate) asks
+    /// for the fastest fps; a callback only when that changed.
+    pub(super) fn sync_fast_fps(&mut self) -> EventResult {
+        let visible = self.visible();
+        let vis_shown = visible.iter().any(|&id| self.windows[id].kind == Kind::Vis);
+        let genre_map_shown = visible.iter().any(|&id| self.windows[id].kind == Kind::GenreMap);
+        let (spinning, playing) = self.with_session(|s| (s.player_status().spinning(), s.now_playing_id().is_some()));
+        let want = [
+            vis_shown.then(|| self.vis.fps()),
+            spinning.then_some(SPINNER_FPS),
+            (genre_map_shown && playing).then_some(GENRE_MAP_FPS),
+        ]
+        .into_iter()
+        .flatten()
+        .max();
         if want == self.fast_fps {
             return EventResult::Ignored;
         }
         self.fast_fps = want;
-        self.vis.set_enabled(shown);
+        self.vis.set_enabled(vis_shown);
         let fps = want.unwrap_or(crate::BASELINE_FPS);
         EventResult::with_cb(move |siv| siv.set_fps(fps))
     }

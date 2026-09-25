@@ -6,6 +6,7 @@
 //! memoized rather than driven by a background thread.
 
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use cursive::event::Key;
 use cursive::theme::{Color, ColorStyle, Effect};
@@ -126,22 +127,40 @@ impl GenreMap {
         for point in &frame.points {
             *cell_counts.entry((point.x, point.y)).or_insert(0) += 1;
         }
+        // Now-playing's pulsing reticle: sampled fresh from wall-clock time each draw, no stored
+        // animation-phase field, so it's purely a function of "now" rather than app state.
+        let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+        let ring = PLAYING_RING[(millis / 400) as usize % PLAYING_RING.len()];
+        let pulse = (millis / 400).is_multiple_of(2);
         for point in &frame.points {
             let is_selected = Some(point.track_id) == selected;
             let is_playing = now_playing == Some(point.track_id);
             let clustered = cell_counts[&(point.x, point.y)] > 1;
             let white = Color::Dark(cursive::theme::BaseColor::White);
-            let (style, glyph) = match (is_selected, is_playing) {
-                (true, true) => (ColorStyle::new(white, point.color), "*"),
-                (true, false) => (ColorStyle::new(white, point.color), "@"),
-                (false, true) => (ColorStyle::new(point.color, Color::TerminalDefault), "*"),
-                (false, false) => (ColorStyle::new(point.color, Color::TerminalDefault), if clustered { "+" } else { "o" }),
-            };
-            let effect = if is_playing || clustered { Effect::Bold } else { Effect::Simple };
-            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), glyph)));
+            let style = if is_selected { ColorStyle::new(white, point.color) } else { ColorStyle::new(point.color, Color::TerminalDefault) };
+            let base = if is_selected { SELECTED_GLYPH } else if clustered { CLUSTERED_GLYPH } else { NORMAL_GLYPH };
+            let mut glyph = base.to_string();
+            let mut effect = if clustered { Effect::Bold } else { Effect::Simple };
+            if is_playing {
+                // A combining ring stacks onto the base glyph in the same cell (zero-width, doesn't
+                // advance the cursor) and cycles shape; the effect also alternates for a light pulse.
+                glyph.push(ring);
+                effect = if pulse { Effect::Reverse } else { Effect::Bold };
+            }
+            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), &glyph)));
         }
     }
 }
+
+/// Unselected, un-clustered point.
+const NORMAL_GLYPH: &str = "•";
+/// A cell holding more than one track — a different silhouette (star) from a dot, not just a fuller circle.
+const CLUSTERED_GLYPH: &str = "★";
+/// The selected point — a square, distinguishable from the dot/star at a glance even without its
+/// white-on-background styling.
+const SELECTED_GLYPH: &str = "■";
+/// Combining marks cycled to give the now-playing point a pulsing reticle ring.
+const PLAYING_RING: [char; 3] = ['\u{20DD}', '\u{20DF}', '\u{20DE}']; // enclosing circle, diamond, square
 
 /// Whether `(x, y)` lies on the `dir` side of `(cx, cy)`.
 fn in_direction(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> bool {
