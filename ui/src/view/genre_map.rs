@@ -158,7 +158,6 @@ impl GenreMap {
         // animation-phase field, so it's purely a function of "now" rather than app state.
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let ring = PLAYING_RING[(millis / 400) as usize % PLAYING_RING.len()];
-        let pulse = (millis / 400).is_multiple_of(2);
         for point in &frame.points {
             let is_selected = Some(point.track_id) == selected;
             let is_playing = now_playing == Some(point.track_id);
@@ -167,12 +166,11 @@ impl GenreMap {
             let style = if is_selected { ColorStyle::new(white, point.color) } else { ColorStyle::new(point.color, Color::TerminalDefault) };
             let base = if is_selected { SELECTED_GLYPH } else if clustered { CLUSTERED_GLYPH } else { NORMAL_GLYPH };
             let mut glyph = base.to_string();
-            let mut effect = if clustered { Effect::Bold } else { Effect::Simple };
+            let effect = if is_playing || clustered { Effect::Bold } else { Effect::Simple };
             if is_playing {
                 // A combining ring stacks onto the base glyph in the same cell (zero-width, doesn't
-                // advance the cursor) and cycles shape; the effect also alternates for a light pulse.
+                // advance the cursor) and cycles shape for the animation — no effect/color flashing.
                 glyph.push(ring);
-                effect = if pulse { Effect::Reverse } else { Effect::Bold };
             }
             printer.with_effect(effect, |p| p.with_color(style, |p| p.print((point.x, point.y + 1), &glyph)));
         }
