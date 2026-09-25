@@ -60,11 +60,18 @@ pub struct BpmPlugin {
     fft: Arc<dyn Fft<f32>>,
     /// Settings-toggled: gates this plugin only, independent of the global scan mode.
     enabled: Arc<AtomicBool>,
+    /// Debug toggle: when set, `needs()` returns true even for a track that already has `bpm:dsp`.
+    force_reanalysis: Arc<AtomicBool>,
 }
 
 impl BpmPlugin {
-    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
-        Self { min_interval: Duration::from_secs(min_interval_secs), fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE), enabled }
+    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
+        Self {
+            min_interval: Duration::from_secs(min_interval_secs),
+            fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE),
+            enabled,
+            force_reanalysis,
+        }
     }
 }
 
@@ -79,7 +86,8 @@ impl ScanPlugin for BpmPlugin {
 
     fn needs(&self, track: &Track) -> bool {
         // Source-agnostic: the DSP only needs decoded PCM, so every track is scanned.
-        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:dsp")
+        self.enabled.load(Ordering::Relaxed)
+            && (self.force_reanalysis.load(Ordering::Relaxed) || !track.attrs.contains_key("bpm:dsp"))
     }
 
     fn analyze(&self, track: &Track, audio: &dyn Fn() -> Result<StreamHandle, Outcome>, wanted: &dyn Fn() -> bool) -> Outcome {

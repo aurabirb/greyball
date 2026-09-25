@@ -111,6 +111,11 @@ fn load_genre_embed_enabled() -> Option<bool> {
     load_state_value("genre_embed_enabled")?.as_bool()
 }
 
+/// Debug toggle, session-only: never seeded from `config.toml`, so absence here just means off.
+fn load_force_bpm_reanalysis() -> Option<bool> {
+    load_state_value("force_bpm_reanalysis")?.as_bool()
+}
+
 fn scan_mode_to_str(mode: ScanMode) -> &'static str {
     match mode {
         ScanMode::Active => "active",
@@ -277,6 +282,7 @@ fn save_state(
     bpm_deezer_enabled: Option<bool>,
     bpm_getsongbpm_enabled: Option<bool>,
     genre_embed_enabled: Option<bool>,
+    force_bpm_reanalysis: Option<bool>,
     liked_playlist: Option<&str>,
     media_cache_dir: Option<&std::path::Path>,
     media_cache_move_from: Option<&std::path::Path>,
@@ -313,6 +319,9 @@ fn save_state(
     }
     if let Some(on) = genre_embed_enabled {
         text.push_str(&format!("genre_embed_enabled = {on}\n"));
+    }
+    if let Some(on) = force_bpm_reanalysis {
+        text.push_str(&format!("force_bpm_reanalysis = {on}\n"));
     }
     if let Some(name) = liked_playlist {
         text.push_str(&format!("liked_playlist = {}\n", toml::Value::String(name.to_string())));
@@ -549,6 +558,8 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(on) = load_genre_embed_enabled() {
         cfg.scan.genre_embed.live_enabled = on;
     }
+    // No config.toml field for this one — always off unless state.toml says otherwise.
+    let force_bpm_reanalysis = load_force_bpm_reanalysis().unwrap_or(false);
     let config_liked_playlist = cfg.liked_playlist.clone();
     if let Some(name) = load_state_string("liked_playlist") {
         cfg.liked_playlist = name;
@@ -736,9 +747,14 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         engine,
         data_dir().join("history.m3u8"),
         initial_scan_mode,
+        force_bpm_reanalysis,
     );
     if let Some(scan) = &session.scan {
-        scan.register_plugin(Arc::new(bpm::BpmPlugin::new(bpm_min_interval_secs, session.scan_plugin_flag("bpm"))));
+        scan.register_plugin(Arc::new(bpm::BpmPlugin::new(
+            bpm_min_interval_secs,
+            session.scan_plugin_flag("bpm"),
+            session.force_bpm_reanalysis.clone(),
+        )));
         for p in extra_scan_plugins {
             scan.register_plugin(p);
         }
@@ -750,6 +766,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             scan.register_plugin(Arc::new(bpm_deezer::DeezerBpmPlugin::new(
                 bpm_deezer_min_interval_secs,
                 session.scan_plugin_flag("bpm-deezer"),
+                session.force_bpm_reanalysis.clone(),
             )));
         }
         if bpm_getsongbpm_enabled && let Some(key) = bpm_getsongbpm_api_key {
@@ -757,6 +774,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
                 key,
                 bpm_getsongbpm_min_interval_secs,
                 session.scan_plugin_flag("bpm-getsongbpm"),
+                session.force_bpm_reanalysis.clone(),
             )));
         }
         if genre_embed_enabled {
@@ -928,6 +946,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let bpm_deezer_live_enabled = Some(s.cfg.scan.bpm_deezer.live_enabled).filter(|&on| on != config_bpm_deezer_enabled);
     let bpm_getsongbpm_live_enabled = Some(s.cfg.scan.bpm_getsongbpm.live_enabled).filter(|&on| on != config_bpm_getsongbpm_enabled);
     let genre_embed_live_enabled = Some(s.cfg.scan.genre_embed.live_enabled).filter(|&on| on != config_genre_embed_enabled);
+    // No config.toml default for this one — it's always off unless explicitly turned on, so only
+    // persist a `true` (an absent key at load already means off).
+    let force_bpm_reanalysis = Some(s.force_bpm_reanalysis_enabled()).filter(|&on| on);
     let liked_playlist = Some(s.cfg.liked_playlist.as_str()).filter(|&name| name != config_liked_playlist);
     let media_cache_dir = Some(s.cfg.media_cache_dir.as_path()).filter(|&dir| dir != config_media_cache_dir);
     let media_cache_move_from = Some(running_media_cache_dir.as_path()).filter(|&dir| dir != s.cfg.media_cache_dir);
@@ -943,6 +964,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         bpm_deezer_live_enabled,
         bpm_getsongbpm_live_enabled,
         genre_embed_live_enabled,
+        force_bpm_reanalysis,
         liked_playlist,
         media_cache_dir,
         media_cache_move_from,

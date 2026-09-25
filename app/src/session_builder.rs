@@ -32,6 +32,7 @@ pub fn build_session(
     engine: medley_core::StreamEngine,
     history_path: PathBuf,
     scan_mode: ScanMode,
+    force_bpm_reanalysis: bool,
 ) -> Session {
     let mut session = Session::new(
         cfg,
@@ -43,6 +44,7 @@ pub fn build_session(
         plugins,
         media_cache.clone(),
         history_path,
+        force_bpm_reanalysis,
     );
     // Always spawned, even with an empty initial plugin list — plugins that
     // only become available after async setup register later via

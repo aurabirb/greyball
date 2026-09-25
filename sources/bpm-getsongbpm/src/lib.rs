@@ -30,15 +30,18 @@ pub struct GetSongBpmPlugin {
     client: reqwest::blocking::Client,
     /// Settings-toggled: gates this plugin only, independent of the global scan mode.
     enabled: Arc<AtomicBool>,
+    /// Debug toggle: when set, `needs()` returns true even for a track that already has `bpm:getsongbpm`.
+    force_reanalysis: Arc<AtomicBool>,
 }
 
 impl GetSongBpmPlugin {
-    pub fn new(api_key: String, min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
+    pub fn new(api_key: String, min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
         Self {
             api_key,
             min_interval: Duration::from_secs(min_interval_secs),
             client: reqwest::blocking::Client::new(),
             enabled,
+            force_reanalysis,
         }
     }
 }
@@ -53,7 +56,8 @@ impl ScanPlugin for GetSongBpmPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:getsongbpm")
+        self.enabled.load(Ordering::Relaxed)
+            && (self.force_reanalysis.load(Ordering::Relaxed) || !track.attrs.contains_key("bpm:getsongbpm"))
     }
 
     fn needs_audio(&self) -> bool {

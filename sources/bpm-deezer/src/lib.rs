@@ -39,16 +39,19 @@ pub struct DeezerBpmPlugin {
     client: reqwest::blocking::Client,
     /// Settings-toggled: gates this plugin only, independent of the global scan mode.
     enabled: Arc<AtomicBool>,
+    /// Debug toggle: when set, `needs()` returns true even for a track that already has `bpm:deezer`.
+    force_reanalysis: Arc<AtomicBool>,
 }
 
 impl DeezerBpmPlugin {
     /// `min_interval_secs`: Deezer's public API has no documented rate limit but is known to
     /// soft-throttle; the caller's default (5s) is a conservative guess, not a verified number.
-    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
+    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
         Self {
             min_interval: Duration::from_secs(min_interval_secs),
             client: reqwest::blocking::Client::new(),
             enabled,
+            force_reanalysis,
         }
     }
 
@@ -107,7 +110,8 @@ impl ScanPlugin for DeezerBpmPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key("bpm:deezer")
+        self.enabled.load(Ordering::Relaxed)
+            && (self.force_reanalysis.load(Ordering::Relaxed) || !track.attrs.contains_key("bpm:deezer"))
     }
 
     fn needs_audio(&self) -> bool {

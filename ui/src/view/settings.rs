@@ -30,6 +30,8 @@ pub(super) enum SettingsEntry {
     /// One plugin from `Session::scan_plugin_toggles` on/off — live, on top of `Scan`'s global mode:
     /// turning `Scan` off still stops everything regardless of these.
     ScanPlugin { id: &'static str, name: &'static str, enabled: bool, available: bool },
+    /// Debug toggle: makes the three BPM plugins re-analyze tracks they already have an attr for.
+    ForceBpmReanalysis(bool),
     /// Vis frame-rate limit — live; Enter steps through `VIS_FPS_STEPS`.
     VisFps(u32),
     /// The bottom scrubber row shown or hidden — live.
@@ -58,6 +60,7 @@ fn settings_entry_line(e: &SettingsEntry) -> String {
             format!("[{}] {name} scan", if *enabled { "x" } else { " " })
         }
         SettingsEntry::ScanPlugin { name, available: false, .. } => format!("[ ] {name} scan (unavailable)"),
+        SettingsEntry::ForceBpmReanalysis(on) => format!("[{}] force BPM reanalysis", if *on { "x" } else { " " }),
         SettingsEntry::StatusLine(shown) => format!("[{}] status line", if *shown { "x" } else { " " }),
         SettingsEntry::ShowHints(shown) => format!("[{}] hints", if *shown { "x" } else { " " }),
         SettingsEntry::AutoUpdate(on) => format!("[{}] auto update", if *on { "x" } else { " " }),
@@ -101,6 +104,7 @@ fn settings_entries(s: &Session, pane_cfg: PaneLayoutConfig, placements: &Placem
             available: s.scan.as_ref().is_some_and(|d| d.has_plugin(id)),
         });
     }
+    v.push(SettingsEntry::ForceBpmReanalysis(s.force_bpm_reanalysis_enabled()));
     v.push(SettingsEntry::VisFps(cfg.vis.limit()));
     v.push(SettingsEntry::StatusLine(cfg.status_line));
     v.push(SettingsEntry::ShowHints(cfg.show_hints));
@@ -176,6 +180,9 @@ impl MedleyView {
             }
             SettingsEntry::ScanPlugin { id, enabled, available: true, .. } => {
                 self.with_session_mut(|s| s.set_scan_plugin_enabled(id, !enabled));
+            }
+            SettingsEntry::ForceBpmReanalysis(on) => {
+                self.with_session_mut(|s| s.set_force_bpm_reanalysis(!on));
             }
             SettingsEntry::VisFps(fps) => {
                 let next = VIS_FPS_STEPS.into_iter().find(|&step| step > fps).unwrap_or(VIS_FPS_STEPS[0]);

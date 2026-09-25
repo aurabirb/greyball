@@ -561,6 +561,8 @@ pub struct Session {
     /// `app::main`'s plugin wiring and Settings' generic per-plugin row (`scan_plugin_enabled`/
     /// `set_scan_plugin_enabled`) share one list of ids instead of each repeating it.
     pub scan_plugin_toggles: Vec<(&'static str, &'static str, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Debug toggle: bypasses each BPM plugin's own "already analyzed" check in `needs()` only.
+    pub force_bpm_reanalysis: Arc<std::sync::atomic::AtomicBool>,
     /// Same cache the player and scan driver decode audio into
     /// (`session_builder::build_session` hands all three the same `Arc`) —
     /// held here too so the UI can ask "is this track's audio already on
@@ -639,6 +641,7 @@ impl Session {
         plugins: Vec<Arc<dyn Plugin>>,
         media_cache: Arc<MediaCache>,
         history_path: PathBuf,
+        force_bpm_reanalysis: bool,
     ) -> Self {
         let catalog = Arc::new(Catalog::new(store.clone(), bus.clone()));
         let search = Arc::new(Search::new(
@@ -718,6 +721,7 @@ impl Session {
             scan: None,
             waveform_enabled,
             scan_plugin_toggles,
+            force_bpm_reanalysis: Arc::new(std::sync::atomic::AtomicBool::new(force_bpm_reanalysis)),
             media_cache,
             failed_playback_sources: Vec::new(),
             load_failures: 0,
@@ -2173,6 +2177,20 @@ impl Session {
         self.touch();
         Arc::make_mut(&mut self.cfg).scan.waveform.enabled = enabled;
         self.waveform_enabled.store(enabled, Ordering::Relaxed);
+        if let Some(scan) = &self.scan {
+            scan.request_rebuild();
+        }
+    }
+
+    /// Current on/off for `force_bpm_reanalysis`.
+    pub fn force_bpm_reanalysis_enabled(&self) -> bool {
+        self.force_bpm_reanalysis.load(Ordering::Relaxed)
+    }
+
+    /// Live on/off for "Force BPM Reanalysis" — runtime-only, not stored in `cfg`/`config.toml`.
+    pub fn set_force_bpm_reanalysis(&mut self, enabled: bool) {
+        self.touch();
+        self.force_bpm_reanalysis.store(enabled, Ordering::Relaxed);
         if let Some(scan) = &self.scan {
             scan.request_rebuild();
         }
