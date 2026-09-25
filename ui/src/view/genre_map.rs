@@ -202,11 +202,13 @@ impl GenreMap {
     }
 }
 
-/// Draw priority for a point when several share a cell, highest first: selected-and-playing beats
-/// selected, which beats playing, which beats a plain point — so a highlight can't be silently
-/// overwritten by an unrelated point that happens to land in the same cell.
+/// Draw priority for a point when several share a cell, highest first: playing-and-selected beats
+/// playing, which beats selected, which beats a plain point. Playing outranks selected (not just
+/// the other way around) so the actual now-playing track is never the one silently hidden when a
+/// different, merely-cursor-selected point happens to land in the same cell — the cursor is
+/// transient, but "what's playing" should always be visible at a glance.
 fn cell_priority(is_selected: bool, is_playing: bool) -> u8 {
-    match (is_selected, is_playing) {
+    match (is_playing, is_selected) {
         (true, true) => 3,
         (true, false) => 2,
         (false, true) => 1,
