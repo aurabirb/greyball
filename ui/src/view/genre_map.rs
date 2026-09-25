@@ -349,8 +349,9 @@ fn fit_scale(dx: f32, dy: f32, w1: f32, h1: f32) -> f32 {
 }
 
 /// Number of evenly-spaced angles sampled across the half-turn `0..π` (rotating by `θ` and `θ+π`
-/// give the same bounding box, so a half-turn is the full period) — roughly a 0.5° step.
-const ANGLE_SAMPLES: usize = 360;
+/// give the same bounding box, so a half-turn is the full period) — roughly a 2.8° step. Coarse on
+/// its own, but the golden-section refinement below narrows in on the true optimum from here.
+const ANGLE_SAMPLES: usize = 64;
 
 /// The rotation angle (radians) that best fits `points` into a `w1`×`h1` box: a dense sweep over
 /// `0..π` evaluating `fit_scale` of the rotated bounding box directly against every point, refined
