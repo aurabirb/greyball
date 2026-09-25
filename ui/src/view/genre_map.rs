@@ -193,51 +193,158 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
     let (pc1, pc2) = pca_top2(&centered, dim);
     let proj: Vec<(f32, f32)> = centered.iter().map(|v| (dot(v, &pc1), dot(v, &pc2))).collect();
 
-    let (xlo, xhi) = axis_range(proj.iter().map(|p| p.0));
-    let (ylo, yhi) = axis_range(proj.iter().map(|p| p.1));
+    let placed = fit_to_pane(&proj, w, h);
     let points = decoded
         .iter()
-        .zip(&proj)
-        .map(|((track, _), &(px, py))| {
-            let nx = if xhi > xlo { ((px - xlo) / (xhi - xlo)).clamp(0.0, 1.0) } else { 0.5 };
-            let ny = if yhi > ylo { ((py - ylo) / (yhi - ylo)).clamp(0.0, 1.0) } else { 0.5 };
-            let x = (nx * (w.saturating_sub(1)) as f32).round() as usize;
-            let y = (ny * (h.saturating_sub(1)) as f32).round() as usize;
+        .zip(&placed)
+        .map(|((track, _), &(x, y))| {
             let color = track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
-            Point { track_id: track.id, title: track.title.clone(), artist: track.display_artist(), x: x.min(w - 1), y: y.min(h - 1), color }
+            Point { track_id: track.id, title: track.title.clone(), artist: track.display_artist(), x, y, color }
         })
         .collect();
     GenreMapFrame { w, h, points }
 }
 
-// 5/95 absorbs a single far outlier without collapsing the rest of the library into a cluster.
-const AXIS_LOW_PERCENTILE: f32 = 5.0;
-const AXIS_HIGH_PERCENTILE: f32 = 95.0;
-// Below this many points, percentile bounds are too coarse to be meaningful — fall back to min/max.
-const AXIS_PERCENTILE_MIN_N: usize = 10;
-
-/// Rescale range for one axis: percentile-based bounds once there are enough points to make them
-/// meaningful, true min/max otherwise (so 2-4 point cases still spread out like today).
-fn axis_range(vals: impl Iterator<Item = f32>) -> (f32, f32) {
-    let mut sorted: Vec<f32> = vals.collect();
-    if sorted.len() < AXIS_PERCENTILE_MIN_N {
-        return min_max(sorted.into_iter());
+/// Rotates `proj` to the orientation that best fills a `w`×`h` pane, scales uniformly (both axes by
+/// the same factor, so relative distances/angles between points are preserved — a similarity
+/// transform, not a stretch) and centers the result, returning each point's pane cell.
+///
+/// Rotation angle comes from rotating calipers over the point cloud's convex hull: for each hull
+/// edge direction, the best axis-aligned fit (`min(pane axis / point-cloud extent)` over x and y) is
+/// a candidate, and the edge whose fit needs the least shrinking wins. No point is ever discarded —
+/// the final bounding box is the true extent of every rotated point, so nothing needs clipping.
+fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
+    let (w1, h1) = ((w.saturating_sub(1)) as f32, (h.saturating_sub(1)) as f32);
+    if proj.is_empty() {
+        return Vec::new();
     }
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    (percentile(&sorted, AXIS_LOW_PERCENTILE), percentile(&sorted, AXIS_HIGH_PERCENTILE))
+    if proj.len() == 1 {
+        return vec![(w1 as usize / 2, h1 as usize / 2)];
+    }
+
+    let angle = best_angle(proj, w1, h1);
+    let (cos_t, sin_t) = (angle.cos(), angle.sin());
+    let rotated: Vec<(f32, f32)> = proj.iter().map(|&(x, y)| rotate(x, y, cos_t, sin_t)).collect();
+    let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
+    let (ylo, yhi) = min_max(rotated.iter().map(|p| p.1));
+    let (dx, dy) = (xhi - xlo, yhi - ylo);
+    // Both extents near-0 means every point is within `fit_scale`'s 1e-6 threshold of the centroid
+    // (e.g. duplicate embeddings): `fit_scale` would be infinite, and `0.0 * infinity` is NaN, so pin
+    // it to a finite value — the multiplied term is negligible either way.
+    let scale = fit_scale(dx, dy, w1, h1);
+    let scale = if scale.is_finite() { scale } else { 1.0 };
+    // Center: place the scaled cloud's midpoint at the pane's midpoint.
+    let (cx, cy) = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0);
+    let (pcx, pcy) = (w1 / 2.0, h1 / 2.0);
+    rotated
+        .iter()
+        .map(|&(x, y)| {
+            let px = (pcx + (x - cx) * scale).round().clamp(0.0, w1);
+            let py = (pcy + (y - cy) * scale).round().clamp(0.0, h1);
+            (px as usize, py as usize)
+        })
+        .collect()
 }
 
-/// Linear-interpolated percentile of an already-sorted, non-empty slice (`p` in `0..=100`).
-fn percentile(sorted: &[f32], p: f32) -> f32 {
-    let rank = (p / 100.0) * (sorted.len() - 1) as f32;
-    let lo = rank.floor() as usize;
-    let hi = rank.ceil() as usize;
-    let frac = rank - lo as f32;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
+/// Rotates `(x, y)` by `-θ` (`cos_t`/`sin_t` of `θ`), i.e. into the frame where `θ`'s direction lies
+/// along the x-axis.
+fn rotate(x: f32, y: f32, cos_t: f32, sin_t: f32) -> (f32, f32) {
+    (x * cos_t + y * sin_t, -x * sin_t + y * cos_t)
+}
+
+/// How much of the pane a `dx`×`dy` bounding box can fill without overflowing either dimension
+/// (`0.0` when the box is degenerate along an axis the pane isn't, since anything scales to fit a
+/// zero-width extent).
+fn fit_scale(dx: f32, dy: f32, w1: f32, h1: f32) -> f32 {
+    let sx = if dx > 1e-6 { w1 / dx } else { f32::INFINITY };
+    let sy = if dy > 1e-6 { h1 / dy } else { f32::INFINITY };
+    sx.min(sy)
+}
+
+/// The rotation angle (radians) that best fits `points` into a `w1`×`h1` box, via rotating calipers
+/// over the convex hull: candidate angles are each hull edge's direction, and the best one
+/// maximizes `fit_scale` of the rotated point cloud's bounding box against the target box — the most
+/// of the pane usable without overflowing either axis. This is deliberately the pane-aspect-fit
+/// objective, not the classic minimum-area rotating-calipers problem (which optimizes `dx*dy`
+/// regardless of the target's shape and would pick a worse angle for a non-square pane).
+fn best_angle(points: &[(f32, f32)], w1: f32, h1: f32) -> f32 {
+    let hull = convex_hull(points);
+    let edges: Vec<(f32, f32)> = match hull.len() {
+        0 | 1 => return 0.0,
+        2 => vec![(hull[1].0 - hull[0].0, hull[1].1 - hull[0].1)],
+        _ => (0..hull.len())
+            .map(|i| {
+                let a = hull[i];
+                let b = hull[(i + 1) % hull.len()];
+                (b.0 - a.0, b.1 - a.1)
+            })
+            .collect(),
+    };
+
+    let mut best = 0.0f32;
+    let mut best_fit = f32::NEG_INFINITY;
+    for (ex, ey) in edges {
+        let len = (ex * ex + ey * ey).sqrt();
+        if len < 1e-9 {
+            continue; // duplicate consecutive hull points: no direction to test
+        }
+        let theta = ey.atan2(ex);
+        // `fit_scale` isn't symmetric in dx/dy unless w1 == h1, so an edge's own direction and its
+        // perpendicular generally score differently (unlike the classic minimum-area calipers
+        // problem, where dx*dy is symmetric and only the edge direction itself needs testing) —
+        // both must be candidates, or a hull with no edge near the long axis's true best angle gets
+        // missed entirely.
+        for candidate in [theta, theta + std::f32::consts::FRAC_PI_2] {
+            let (cos_t, sin_t) = (candidate.cos(), candidate.sin());
+            let rotated: Vec<(f32, f32)> = points.iter().map(|&(x, y)| rotate(x, y, cos_t, sin_t)).collect();
+            let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
+            let (ylo, yhi) = min_max(rotated.iter().map(|p| p.1));
+            let fit = fit_scale(xhi - xlo, yhi - ylo, w1, h1);
+            if fit > best_fit {
+                best_fit = fit;
+                best = candidate;
+            }
+        }
+    }
+    best
 }
 
 fn min_max(vals: impl Iterator<Item = f32>) -> (f32, f32) {
     vals.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+}
+
+/// 2D convex hull via Andrew's monotone chain, in counter-clockwise order with no repeated closing
+/// point. Duplicate points collapse away naturally (a repeated point never survives the turn test).
+/// Callers handle 0/1/2-point inputs themselves; this still degrades gracefully on them (returns the
+/// input as-is) rather than panicking.
+fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut sorted: Vec<(f32, f32)> = points.to_vec();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    sorted.dedup();
+    if sorted.len() < 3 {
+        return sorted;
+    }
+    // Cross product of OA x OB; > 0 means a counter-clockwise (left) turn.
+    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+
+    let mut lower: Vec<(f32, f32)> = Vec::new();
+    for &p in &sorted {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<(f32, f32)> = Vec::new();
+    for &p in sorted.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
