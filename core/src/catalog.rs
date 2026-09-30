@@ -205,14 +205,18 @@ impl Catalog {
         self.bus.send(CoreEvent::BackgroundFailure { context: context.to_string(), message });
     }
 
-    /// Set attrs/tags/etc. from analysis or user edits.
+    /// Set attrs/tags/etc. from analysis or user edits; a patch that changes nothing writes and announces nothing.
     pub fn patch(&self, t: TrackId, f: impl FnOnce(&mut Track)) -> Result<()> {
         let _guard = self.lock.lock().unwrap();
-        let mut track = self
+        let before = self
             .store
             .get_track(t)?
             .ok_or(crate::traits::Error::NotFound)?;
+        let mut track = before.clone();
         f(&mut track);
+        if track == before {
+            return Ok(());
+        }
         self.store.upsert_track(&track)?;
         self.bus.send(CoreEvent::TrackUpdated(t));
         Ok(())

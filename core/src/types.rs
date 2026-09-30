@@ -108,7 +108,7 @@ pub enum LinkReason {
     Manual,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rendition {
     pub source: SourceId,
     /// OPAQUE to core. Never parsed here.
@@ -120,7 +120,7 @@ pub struct Rendition {
     pub added_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub title: String,
