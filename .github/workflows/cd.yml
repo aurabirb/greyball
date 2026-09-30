@@ -44,13 +44,20 @@ jobs:
         if: matrix.container
         run: |
           apk add bash curl git make musl-dev linux-headers pkgconf perl-utils
-          curl -sSfL https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2 | tar xj -C /tmp
-          cd /tmp/alsa-lib-1.2.15.3
+          cd /tmp
+          curl -sSfLo alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2
+          echo "7b079d614d582cade7ab8db2364e65271d0877a37df8757ac4ac0c8970be861e  alsa-lib.tar.bz2" > alsa-lib.sha256
+          sha256sum -c alsa-lib.sha256
+          tar xjf alsa-lib.tar.bz2
+          cd alsa-lib-1.2.15.3
           ./configure --prefix=/usr --enable-static --disable-shared --disable-python
           make -j"$(nproc)" install
           echo ALSA_STATIC=1 >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         name: Checkout src
+      - name: Trust workspace for git describe
+        if: matrix.container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install rustup
         shell: bash
         run: |
@@ -66,6 +73,7 @@ jobs:
           sudo apt update
           sudo apt install -y ${{ matrix.dependencies }}
       - uses: actions/cache@v6
+        if: '!matrix.container'
         with:
           path: |
             ~/.cargo/registry/index/

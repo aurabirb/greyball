@@ -98,8 +98,9 @@ Or skip Rust and download a prebuilt binary of the latest release (`:update` kee
 | macOS x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-x86_64 |
 | macOS arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-aarch64 |
 
-The musl build can't load ALSA plugins, so it plays straight to the sound card
-(bypassing PipeWire/PulseAudio); prefer the glibc build on a desktop.
+The musl build can't load ALSA plugins, so it only plays where ALSA's default
+device is the hardware itself (headless or minimal systems without a
+PipeWire/PulseAudio ALSA plugin); on a desktop use the glibc build.
 
 ```sh
 install -Dm755 medley-<platform> ~/.local/bin/medley
