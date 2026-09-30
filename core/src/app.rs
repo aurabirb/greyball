@@ -460,8 +460,8 @@ struct LikedLocal {
     members: HashSet<TrackId>,
 }
 
-/// Liked nodes' list generations, `ViewCache::pending_gen`, `playlists_gen`, the liked playlist's name.
-type LikedIdsKey = (Vec<u64>, u64, u64, String);
+/// Liked nodes' list generations, `ViewCache::pending_gen`, the `liked_local` it was built from.
+type LikedIdsKey = (Vec<u64>, u64, Arc<LikedLocal>);
 
 struct HotkeyMemo {
     table: Arc<Vec<HotkeyMembership>>,
@@ -551,7 +551,6 @@ pub struct Session {
     pub cfg: Arc<Config>,
     /// Memoized `liked_local`, rebuilt when the playlists or the configured name change.
     liked_local: Mutex<Option<(u64, Arc<LikedLocal>)>>,
-    /// Memoized `liked_ids`.
     liked_ids: Mutex<Option<(LikedIdsKey, Arc<HashSet<TrackId>>)>>,
     /// Background scan driver (bpm, later genre/...), if any plugin is
     /// registered. Built and spawned in `session_builder::build_session`.
@@ -1888,19 +1887,19 @@ impl Session {
     pub fn liked_ids(&self) -> Arc<HashSet<TrackId>> {
         let nodes: Vec<(&SourceId, BrowseNode)> =
             self.sources.iter().filter_map(|(id, src)| Some((id, src.liked_songs_node()?))).collect();
-        let key = (
+        let key: LikedIdsKey = (
             nodes.iter().map(|(id, node)| self.view.remote_playlist_gen(id, node)).collect(),
             self.view.pending_gen(),
-            self.playlists_gen(),
-            self.cfg.liked_playlist.clone(),
+            self.liked_local(),
         );
         let mut memo = self.liked_ids.lock().unwrap();
-        if let Some((k, ids)) = &*memo
-            && *k == key
+        if let Some(((gens, pending, local), ids)) = &*memo
+            && (gens, pending) == (&key.0, &key.1)
+            && Arc::ptr_eq(local, &key.2)
         {
             return ids.clone();
         }
-        let mut ids = self.liked_local().members.clone();
+        let mut ids = key.2.members.clone();
         for (id, node) in &nodes {
             self.view.extend_liked(id, node, &mut ids);
         }

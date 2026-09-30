@@ -2,7 +2,6 @@
 //! BPM. The PCA projection is computed on a per-pane worker thread; `frame` fits the last finished one.
 
 use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -34,9 +33,8 @@ struct Plot {
     h: usize,
     points: Vec<Point>,
     index: HashMap<TrackId, usize>,
-    /// Point indices ordered by cell; each `cells` range is one cell's points.
+    /// Point indices sorted by cell, so each cell's points are adjacent.
     by_cell: Vec<usize>,
-    cells: Vec<Range<usize>>,
 }
 
 impl Plot {
@@ -50,15 +48,13 @@ impl Plot {
             })
             .collect();
         let index = points.iter().enumerate().map(|(i, p)| (p.track.id, i)).collect();
-        let cell = |i: usize| (points[i].y, points[i].x);
         let mut by_cell: Vec<usize> = (0..points.len()).collect();
-        by_cell.sort_by_key(|&i| cell(i));
-        let mut cells = Vec::new();
-        for group in by_cell.chunk_by(|&a, &b| cell(a) == cell(b)) {
-            let start = cells.last().map_or(0, |r: &Range<usize>| r.end);
-            cells.push(start..start + group.len());
-        }
-        Self { w, h, points, index, by_cell, cells }
+        by_cell.sort_by_key(|&i| (points[i].y, points[i].x));
+        Self { w, h, points, index, by_cell }
+    }
+
+    fn cell(&self, i: usize) -> (usize, usize) {
+        (self.points[i].y, self.points[i].x)
     }
 
     fn point(&self, id: TrackId) -> Option<&Point> {
@@ -217,8 +213,7 @@ impl GenreMap {
         let selected = self.selected_track();
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let ring = PLAYING_RING[(millis * crate::BASELINE_FPS as u128 / 1000 / RING_FRAMES) as usize % PLAYING_RING.len()];
-        for cell in &plot.cells {
-            let members = &plot.by_cell[cell.clone()];
+        for members in plot.by_cell.chunk_by(|&a, &b| plot.cell(a) == plot.cell(b)) {
             // Draw one point per cell by priority, so a plain point can't paint over a highlighted one.
             let winner = members
                 .iter()
@@ -295,9 +290,18 @@ type Job = (u64, Arc<Vec<EmbeddedTrack>>);
 /// Computes projections off the UI thread, spawned on first use; lives as long as the app.
 #[derive(Default)]
 struct ProjectionWorker {
-    /// The job queue and the embeddings gen last sent on it; `None` before the first send or once the worker died.
-    jobs: Mutex<Option<(mpsc::Sender<Job>, u64)>>,
+    worker: Mutex<Worker>,
     done: Finished,
+}
+
+#[derive(Default)]
+enum Worker {
+    #[default]
+    Idle,
+    /// Its job queue and the embeddings gen last sent on it.
+    Running(mpsc::Sender<Job>, u64),
+    /// Not respawned: it only dies by panicking in `project`, which would recur.
+    Dead,
 }
 
 impl ProjectionWorker {
@@ -320,21 +324,28 @@ impl ProjectionWorker {
     /// The last finished projection; queues `emb_gen`'s if that isn't it. The baseline redraw picks it up.
     fn latest(&self, emb_gen: u64, tracks: &Arc<Vec<EmbeddedTrack>>) -> Option<(u64, Arc<Projection>)> {
         let done = self.done.locked().clone();
-        let mut jobs = self.jobs.locked();
-        if done.as_ref().is_some_and(|(g, _)| *g == emb_gen) || jobs.as_ref().is_some_and(|(_, sent)| *sent == emb_gen) {
+        if done.as_ref().is_some_and(|(g, _)| *g == emb_gen) {
             return done;
         }
-        let tx = jobs.take().map_or_else(|| Self::spawn(self.done.clone()), |(tx, _)| tx);
-        match tx.send((emb_gen, tracks.clone())) {
-            Ok(()) => *jobs = Some((tx, emb_gen)),
-            // Left `None`, so the next frame spawns a fresh worker.
-            Err(e) => log::error!("genre map projection worker is gone: {e}"),
-        }
+        let mut worker = self.worker.locked();
+        let tx = match &*worker {
+            Worker::Running(_, sent) if *sent == emb_gen => return done,
+            Worker::Dead => return done,
+            Worker::Running(tx, _) => tx.clone(),
+            Worker::Idle => Self::spawn(self.done.clone()),
+        };
+        *worker = match tx.send((emb_gen, tracks.clone())) {
+            Ok(()) => Worker::Running(tx, emb_gen),
+            Err(e) => {
+                log::error!("genre map projection worker is gone: {e}");
+                Worker::Dead
+            }
+        };
         done
     }
 }
 
-/// `basis` is the previous job's PC1/PC2, warm-starting this one's and replaced by them.
+/// `basis` is the previous job's PC1/PC2, warm-starting this one's and replaced by them unless either vanished.
 fn project(tracks: &[EmbeddedTrack], basis: &mut Option<(Vec<f32>, Vec<f32>)>) -> Projection {
     // Majority dimension wins so a stale/corrupt embedding of another length can't index out of bounds.
     let mut dim_votes: HashMap<usize, usize> = HashMap::new();
@@ -346,22 +357,22 @@ fn project(tracks: &[EmbeddedTrack], basis: &mut Option<(Vec<f32>, Vec<f32>)>) -
     };
     let rows: Vec<(TrackId, &[f32])> =
         tracks.iter().filter(|e| e.embedding.len() == dim).map(|e| (e.track.id, &*e.embedding)).collect();
-    let data: Vec<&[f32]> = rows.iter().map(|&(_, r)| r).collect();
     let mut mean = vec![0.0f32; dim];
-    for row in &data {
+    for (_, row) in &rows {
         for (m, x) in mean.iter_mut().zip(*row) {
             *m += x;
         }
     }
     for m in &mut mean {
-        *m /= data.len() as f32;
+        *m /= rows.len() as f32;
     }
     let (init1, init2) = basis.take().filter(|(pc1, _)| pc1.len() == dim).unwrap_or_else(|| (vec![1.0; dim], vec![1.0; dim]));
-    let pc1 = power_iteration(&data, &mean, init1, None);
-    let pc2 = power_iteration(&data, &mean, init2, Some(&pc1));
+    let (pc1, ok1) = power_iteration(&rows, &mean, init1, None);
+    let (pc2, ok2) = power_iteration(&rows, &mean, init2, Some(&pc1));
     let (m1, m2) = (dot(&mean, &pc1), dot(&mean, &pc2));
     let projection = rows.iter().map(|&(id, r)| (id, (dot(r, &pc1) - m1, dot(r, &pc2) - m2))).collect();
-    *basis = Some((pc1, pc2));
+    // A vanished PC (e.g. a zero PC2 from identical embeddings) would pin every later job to it.
+    *basis = (ok1 && ok2).then_some((pc1, pc2));
     projection
 }
 
@@ -482,9 +493,8 @@ fn normalize(v: &mut [f32]) -> f32 {
     norm
 }
 
-/// Top eigenvector of the covariance of `data` around `mean`, restricted to the complement of
-/// `ortho` (so PC2 doesn't rediscover PC1), without materializing the d×d matrix or centered rows.
-fn power_iteration(data: &[&[f32]], mean: &[f32], mut v: Vec<f32>, ortho: Option<&[f32]>) -> Vec<f32> {
+/// Top covariance eigenvector orthogonal to `ortho`, and false if the iterate vanished.
+fn power_iteration(rows: &[(TrackId, &[f32])], mean: &[f32], mut v: Vec<f32>, ortho: Option<&[f32]>) -> (Vec<f32>, bool) {
     let deflate = |v: &mut [f32]| {
         if let Some(p) = ortho {
             let d = dot(v, p);
@@ -493,7 +503,7 @@ fn power_iteration(data: &[&[f32]], mean: &[f32], mut v: Vec<f32>, ortho: Option
             }
         }
     };
-    let n = data.len().max(1) as f32;
+    let n = rows.len().max(1) as f32;
     deflate(&mut v);
     normalize(&mut v);
     let mut next = vec![0.0f32; v.len()];
@@ -501,7 +511,7 @@ fn power_iteration(data: &[&[f32]], mean: &[f32], mut v: Vec<f32>, ortho: Option
         next.fill(0.0);
         let mv = dot(mean, &v);
         let mut total = 0.0f32;
-        for row in data {
+        for (_, row) in rows {
             let s = dot(row, &v) - mv;
             total += s;
             for (nx, r) in next.iter_mut().zip(*row) {
@@ -514,7 +524,7 @@ fn power_iteration(data: &[&[f32]], mean: &[f32], mut v: Vec<f32>, ortho: Option
         }
         deflate(&mut next);
         if normalize(&mut next) < 1e-9 {
-            break; // degenerate: fewer than 2 distinct points
+            return (v, false); // no variance left along the iterate
         }
         // Covariance is PSD, so the iterate never flips sign.
         let delta = next.iter().zip(&v).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
@@ -523,6 +533,6 @@ fn power_iteration(data: &[&[f32]], mean: &[f32], mut v: Vec<f32>, ortho: Option
             break;
         }
     }
-    v
+    (v, true)
 }
 

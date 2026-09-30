@@ -26,7 +26,7 @@ struct RemotePlaylistTracks {
     tracks: Vec<Track>,
     /// `tracks`' ids, for cheap membership lookups.
     ids: HashSet<TrackId>,
-    /// Bumped by `edit_tracks`, the one way `tracks`' membership or order changes.
+    /// Set by `edit_tracks`, the one way `tracks`' membership or order changes; unique cache-wide.
     generation: u64,
     /// A background thread is already folding newly-landed raw hits into
     /// the catalog for this `(source, node)` — guards against starting a
@@ -89,8 +89,15 @@ impl RemotePlaylistTracks {
     fn edit_tracks(&mut self, edit: impl FnOnce(&mut Vec<Track>)) {
         edit(&mut self.tracks);
         self.ids = self.tracks.iter().map(|t| t.id).collect();
-        self.generation += 1;
+        self.generation = next_tracks_gen();
     }
+}
+
+static TRACKS_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Never repeats, so a removed-then-recreated entry can't come back at a generation a memo already saw.
+fn next_tracks_gen() -> u64 {
+    TRACKS_GEN.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// One track's membership in one playlist, as a hotkey toggle sees it.
@@ -134,7 +141,25 @@ impl PendingRows {
 
 type RemoteKey = (SourceId, BrowseNode);
 type TracksCache = Arc<Mutex<HashMap<RemoteKey, RemotePlaylistTracks>>>;
-type PendingChanges = Arc<Mutex<HashMap<RemoteKey, Vec<PendingChange>>>>;
+type PendingChanges = Arc<Mutex<Pending>>;
+
+#[derive(Default)]
+struct Pending {
+    changes: HashMap<RemoteKey, Vec<PendingChange>>,
+    generation: u64,
+}
+
+impl Pending {
+    fn get(&self, key: &RemoteKey) -> Option<&Vec<PendingChange>> {
+        self.changes.get(key)
+    }
+
+    /// The one way `changes` is edited, so `generation` can't miss one.
+    fn edit<T>(&mut self, key: &RemoteKey, f: impl FnOnce(&mut Vec<PendingChange>) -> T) -> T {
+        self.generation += 1;
+        f(self.changes.entry(key.clone()).or_default())
+    }
+}
 
 /// How often a pending toggle re-checks whether its playlist finished loading.
 /// Least gap between attempts to fetch a source's top-level playlists, so a dead endpoint isn't hammered.
@@ -277,8 +302,6 @@ pub(crate) struct ViewCache {
     remote_playlist_tracks: TracksCache,
     /// In-flight hotkey toggles per remote playlist — see `set_remote_membership`.
     pending: PendingChanges,
-    /// Bumped on every `pending` edit and dropped `remote_playlist_tracks` entry, which `remote_playlist_gen` can't see.
-    pending_gen: Arc<AtomicU64>,
     /// Every track with a genre embedding, sorted by id: one store scan on first read, then patched per `TrackUpdated`.
     embedded: Mutex<Option<Arc<Vec<EmbeddedTrack>>>>,
     embedded_gen: u64,
@@ -701,15 +724,12 @@ impl ViewCache {
     }
 
     pub fn pending_gen(&self) -> u64 {
-        self.pending_gen.load(Ordering::Relaxed)
+        self.pending.lock().unwrap().generation
     }
 
     /// Drops the in-flight marker of a finished liked-list change of `track`.
     pub fn clear_pending(&self, source: &SourceId, node: &BrowseNode, track: TrackId) {
-        if let Some(changes) = self.pending.lock().unwrap().get_mut(&(source.clone(), node.clone())) {
-            changes.retain(|c| c.track.id != track);
-            self.pending_gen.fetch_add(1, Ordering::Relaxed);
-        }
+        self.pending.lock().unwrap().edit(&(source.clone(), node.clone()), |c| c.retain(|c| c.track.id != track));
     }
 
     /// Starts (or resumes) loading `(source, node)` without demanding any of it; a walk frozen on
@@ -770,18 +790,19 @@ impl ViewCache {
             Change::Add => (true, None),
             Change::Remove(position) => (false, position),
         };
-        {
-            let mut pending = self.pending.lock().unwrap();
-            let changes = pending.entry(key.clone()).or_default();
-            let clash = |c: &PendingChange| {
-                (c.track.id == track.id && (c.position.is_none() || position.is_none()))
-                    || (c.position.is_some() && position.is_some())
-            };
-            if changes.iter().any(clash) {
-                return false;
+        let clash = |c: &PendingChange| {
+            (c.track.id == track.id && (c.position.is_none() || position.is_none()))
+                || (c.position.is_some() && position.is_some())
+        };
+        let queued = self.pending.lock().unwrap().edit(&key, |changes| {
+            let queued = !changes.iter().any(clash);
+            if queued {
+                changes.push(PendingChange { track: track.clone(), add: want_add, position, front });
             }
-            changes.push(PendingChange { track: track.clone(), add: want_add, position, front });
-            self.pending_gen.fetch_add(1, Ordering::Relaxed);
+            queued
+        });
+        if !queued {
+            return false;
         }
         let deps = RemotePlaylistDeps {
             catalog: ctx.catalog.clone(),
@@ -790,7 +811,6 @@ impl ViewCache {
             cache: self.remote_playlist_tracks.clone(),
         };
         let pending = self.pending.clone();
-        let pending_gen = self.pending_gen.clone();
         deps.bus.send(CoreEvent::PlaylistsChanged);
 
         std::thread::spawn(move || {
@@ -813,9 +833,8 @@ impl ViewCache {
                 // pending until the session has written its local fallback (`clear_pending`).
                 let mut pending = pending.lock().unwrap();
                 let mut cache = deps.cache.lock().unwrap();
-                if let Some(changes) = pending.get_mut(&key).filter(|_| !liked) {
-                    changes.retain(|c| !(c.track.id == track.id && c.position == position));
-                    pending_gen.fetch_add(1, Ordering::Relaxed);
+                if !liked {
+                    pending.edit(&key, |c| c.retain(|c| !(c.track.id == track.id && c.position == position)));
                 }
                 match (&outcome, cache.get_mut(&key)) {
                     (Ok(added), Some(entry)) => {
@@ -845,7 +864,6 @@ impl ViewCache {
             let cache_key = remote_playlist_cache_key(&key.0, &key.1);
             if reload {
                 deps.cache.lock().unwrap().remove(&key);
-                pending_gen.fetch_add(1, Ordering::Relaxed);
                 source.forget_playlist(&node);
                 if let Err(e) = deps.store.set_remote_playlist_ids(&cache_key, &[]) {
                     log::warn!("remote playlist cache: failed to clear {cache_key}: {e}");
@@ -989,7 +1007,7 @@ impl ViewCache {
                     let entry = RemotePlaylistTracks {
                         ids: tracks.iter().map(|t| t.id).collect(),
                         tracks,
-                        generation: 1,
+                        generation: next_tracks_gen(),
                         ingesting: false,
                         browsing: true,
                         partial: true,

@@ -198,8 +198,8 @@ adding one, walk every `self.`/argument read under the build closure against its
 `TrackList::list_gen` is the generation of the list on screen. Generations are held by the type that
 owns the data and bumped next to the write in one private method, so no mutation site has to judge
 what kind of change it made: `Queue` (`queue_gen`, `history_gen`), `ViewCache` (one per `ResultSet`, one per
-remote playlist in `edit_tracks`, one per source's folder list in `set_folders`, `pending_gen` for
-in-flight remote changes, and `embedded_gen`/`embeddings_gen` for the genre-embedded tracks), `Catalog`
+remote playlist in `edit_tracks`, unique cache-wide so a dropped and reloaded list can't repeat one, one
+per source's folder list in `set_folders`, `pending_gen` for in-flight remote changes in `Pending::edit`, and `embedded_gen`/`embeddings_gen` for the genre-embedded tracks), `Catalog`
 (`playlists_gen` in `save_playlist`, the one write path for a user playlist, and `removed_gen` for a
 track id that stops existing, which every `list_gen` adds in), `Hotkeys`, and `Session::context_gen`
 for the Now Playing list. A cache keys on the generation of exactly what it shows; `revision` stays
