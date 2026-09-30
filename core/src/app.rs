@@ -2258,18 +2258,13 @@ impl Session {
         ranked.into_iter().map(|(_, t)| t).collect()
     }
 
-    /// Every track with a computed genre embedding — the genre-map pane's source data, sorted
-    /// by id for a stable scatter/navigation order across calls.
-    pub fn tracks_with_embedding(&self) -> Vec<Track> {
-        let mut tracks: Vec<Track> = self
-            .store
-            .all_tracks()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|t| t.attrs.contains_key(crate::embedding::GENRE_EMBEDDING_ATTR))
-            .collect();
-        tracks.sort_by_key(|t| t.id);
-        tracks
+    /// Every track with a computed genre embedding, sorted by id — the genre-map pane's source data.
+    pub fn tracks_with_embedding(&self) -> Arc<Vec<Track>> {
+        self.view.tracks_with_embedding(&self.store)
+    }
+
+    pub fn embedded_tracks_gen(&self) -> u64 {
+        self.view.embedded_gen()
     }
 
     pub fn player_status(&self) -> PlayerStatus {

@@ -5,6 +5,8 @@
 //! embedded tracks changes or the pane resizes, so it's computed lazily on `draw`/`frame` and
 //! memoized rather than driven by a background thread.
 
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -60,22 +62,26 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 pub(super) struct GenreMap {
     cache: Memo<(u64, usize, usize), Arc<GenreMapFrame>>,
+    layout: Memo<(u64, usize, usize), Arc<Layout>>,
     selected: Mutex<Option<TrackId>>,
     last_click: Mutex<Option<(Instant, TrackId)>>,
 }
 
 impl GenreMap {
     pub(super) fn new() -> Self {
-        Self { cache: Memo::default(), selected: Mutex::new(None), last_click: Mutex::new(None) }
+        Self { cache: Memo::default(), layout: Memo::default(), selected: Mutex::new(None), last_click: Mutex::new(None) }
     }
 
-    /// The plot for `rect`'s width and one title row less of height, rebuilt only when the
-    /// session revision or the pane size changed since the last call.
+    /// The plot for `rect`'s width and one title row less of height, rebuilt only when an embedded
+    /// track changed or the pane resized; the PCA layout only when the embeddings themselves did.
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<GenreMapFrame> {
         let w = rect.width();
         let h = rect.height().saturating_sub(1);
-        let key = (ctx.s.revision(), w, h);
-        let frame = self.cache.get_or_build(key, || Arc::new(compute_frame(&ctx.s.tracks_with_embedding(), w, h)));
+        let frame = self.cache.get_or_build((ctx.s.embedded_tracks_gen(), w, h), || {
+            let tracks = ctx.s.tracks_with_embedding();
+            let layout = self.layout.get_or_build((embeddings_hash(&tracks), w, h), || Arc::new(compute_layout(&tracks, w, h)));
+            Arc::new(GenreMapFrame { w, h, points: points(&tracks, &layout) })
+        });
         let mut selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
         if !selected.is_some_and(|id| frame.points.iter().any(|p| p.track_id == id)) {
             *selected = frame.points.first().map(|p| p.track_id);
@@ -250,9 +256,32 @@ fn direction_score(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> isize 
     primary * primary + perp * perp * 4
 }
 
-fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
+/// Each plotted track's pane cell.
+type Layout = HashMap<TrackId, (usize, usize)>;
+
+fn embeddings_hash(tracks: &[Track]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for t in tracks {
+        t.id.hash(&mut hasher);
+        t.attrs.get(GENRE_EMBEDDING_ATTR).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn points(tracks: &[Track], layout: &Layout) -> Vec<Point> {
+    tracks
+        .iter()
+        .filter_map(|track| {
+            let &(x, y) = layout.get(&track.id)?;
+            let color = track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
+            Some(Point { track_id: track.id, title: track.title.clone(), artist: track.display_artist(), x, y, color })
+        })
+        .collect()
+}
+
+fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
     if w == 0 || h == 0 {
-        return GenreMapFrame { w, h, points: Vec::new() };
+        return Layout::new();
     }
     let decoded: Vec<(&Track, Vec<f32>)> =
         tracks.iter().filter_map(|t| t.attrs.get(GENRE_EMBEDDING_ATTR).and_then(|s| decode_genre_embedding(s)).map(|e| (t, e))).collect();
@@ -267,7 +296,7 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
         }
     }
     let Some(dim) = dim_votes.into_iter().max_by_key(|&(_, votes)| votes).map(|(dim, _)| dim) else {
-        return GenreMapFrame { w, h, points: Vec::new() };
+        return Layout::new();
     };
     let decoded: Vec<(&Track, Vec<f32>)> = decoded.into_iter().filter(|(_, e)| e.len() == dim).collect();
     let n = decoded.len() as f32;
@@ -277,16 +306,7 @@ fn compute_frame(tracks: &[Track], w: usize, h: usize) -> GenreMapFrame {
     let (pc1, pc2) = pca_top2(&centered, dim);
     let proj: Vec<(f32, f32)> = centered.iter().map(|v| (dot(v, &pc1), dot(v, &pc2))).collect();
 
-    let placed = fit_to_pane(&proj, w, h);
-    let points = decoded
-        .iter()
-        .zip(&placed)
-        .map(|((track, _), &(x, y))| {
-            let color = track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
-            Point { track_id: track.id, title: track.title.clone(), artist: track.display_artist(), x, y, color }
-        })
-        .collect();
-    GenreMapFrame { w, h, points }
+    decoded.iter().map(|(track, _)| track.id).zip(fit_to_pane(&proj, w, h)).collect()
 }
 
 /// Rotates `proj` to the orientation that best suits a `w`×`h` pane, then stretches x and y

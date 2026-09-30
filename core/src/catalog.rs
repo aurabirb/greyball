@@ -136,7 +136,7 @@ impl Catalog {
     }
 
     /// Merge b into a: move all b.renditions into a (skip dup uris), delete b,
-    /// fix up any playlist references b->a. Emits TrackUpdated(a).
+    /// fix up any playlist references b->a. Emits TrackUpdated for both.
     pub fn link(&self, a: TrackId, b: TrackId) -> Result<()> {
         if a == b {
             return Ok(());
@@ -172,6 +172,7 @@ impl Catalog {
         }
 
         self.bus.send(CoreEvent::TrackUpdated(a));
+        self.bus.send(CoreEvent::TrackUpdated(b));
         Ok(())
     }
 
