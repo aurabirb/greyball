@@ -1,0 +1,32 @@
+app-id: io.github.aurabirb.greyball
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: medley
+finish-args:
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --filesystem=xdg-config/medley:create
+  - --filesystem=xdg-data/medley:create
+  - --filesystem=~/.local/state/medley:create
+  - --own-name=org.mpris.MediaPlayer2.medley.*
+modules:
+  - name: medley
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 medley /app/libexec/medley
+      - install -Dm755 medley.sh /app/bin/medley
+    sources:
+      - type: file
+        path: ../target/flatpak/medley
+      # Share the native build's config, library and log instead of the per-app sandbox dirs.
+      - type: script
+        dest-filename: medley.sh
+        commands:
+          - export XDG_CONFIG_HOME="${HOST_XDG_CONFIG_HOME:-$HOME/.config}"
+          - export XDG_DATA_HOME="${HOST_XDG_DATA_HOME:-$HOME/.local/share}"
+          - export XDG_STATE_HOME="${HOST_XDG_STATE_HOME:-$HOME/.local/state}"
+          - exec /app/libexec/medley "$@"

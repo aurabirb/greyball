@@ -25,11 +25,13 @@ jobs:
           - build_target: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            dependencies: 'libasound2-dev pkg-config'
+            dependencies: 'libasound2-dev pkg-config flatpak flatpak-builder'
+            flatpak: true
           - build_target: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            dependencies: 'libasound2-dev pkg-config'
+            dependencies: 'libasound2-dev pkg-config flatpak flatpak-builder'
+            flatpak: true
           - build_target: linux-x86_64-musl
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -98,11 +100,21 @@ jobs:
           bin="medley-${{ matrix.build_target }}"
           cp medley "$bin"
           shasum -a 256 "$bin" > "$bin.sha256"
+      - name: Packaging Flatpak
+        if: matrix.flatpak
+        run: |
+          mkdir -p target/flatpak
+          cp target/${{ matrix.target }}/release/medley target/flatpak/medley
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean \
+            --state-dir=target/flatpak/state --repo=target/flatpak/repo target/flatpak/build flatpak/io.github.aurabirb.greyball.yml
+          cd target/${{ matrix.target }}/release
+          bundle="medley-${{ matrix.build_target }}.flatpak"
+          flatpak build-bundle ../../flatpak/repo "$bundle" io.github.aurabirb.greyball
+          shasum -a 256 "$bundle" > "$bundle.sha256"
       - name: Releasing assets
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            target/${{ matrix.target }}/release/medley-${{ matrix.build_target }}
-            target/${{ matrix.target }}/release/medley-${{ matrix.build_target }}.sha256
+          files: target/${{ matrix.target }}/release/medley-${{ matrix.build_target }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

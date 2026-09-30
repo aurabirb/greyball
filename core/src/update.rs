@@ -11,7 +11,7 @@ use crate::http::{fetch_url_bytes, fetch_url_to};
 const REPO: &str = "aurabirb/greyball";
 
 /// Package-manager-owned prefixes, which an update never touches.
-const MANAGED_PREFIXES: &[&str] = &["/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/snap/", "/var/lib/"];
+const MANAGED_PREFIXES: &[&str] = &["/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/snap/", "/var/lib/", "/app/"];
 
 /// (OS, arch, suffix) of the assets `cd.yml` publishes; musl builds append `-musl`.
 const PLATFORMS: &[(&str, &str, &str)] = &[
