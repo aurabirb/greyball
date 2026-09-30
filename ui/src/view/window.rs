@@ -155,13 +155,10 @@ impl Window {
         }
     }
 
-    /// Selects `track` on this window's Genre Map, if it's one; a no-op on any other window kind
-    /// (see `GenreMap::select` for the no-op-when-unplotted case).
-    pub(super) fn select_genre_map(&mut self, ctx: &Ctx, track: TrackId) {
-        let rect = self.content();
-        if let Body::GenreMap(gm) = &mut self.body {
-            let frame = gm.frame(ctx, rect);
-            gm.select(&frame, track);
+    /// Selects `track` on this window's Genre Map once plotted; a no-op on any other window kind.
+    pub(super) fn select_genre_map(&self, track: TrackId) {
+        if let Body::GenreMap(gm) = &self.body {
+            gm.select(track);
         }
     }
 
@@ -474,12 +471,6 @@ impl Windows {
     pub(super) fn place(&mut self, id: WindowId, placement: Placement) {
         self.placements.of[id.0] = placement;
         self.placements.generation += 1;
-    }
-
-    /// Selects `track` on the Genre Map window `id`, under one session lock (see `Window::select_genre_map`).
-    pub(super) fn select_genre_map(&mut self, id: WindowId, s: &Session, pane_cfg: PaneLayoutConfig, track: TrackId) {
-        let ctx = Ctx { s, pane_cfg, placements: &self.placements };
-        self.items[id.0].select_genre_map(&ctx, track);
     }
 
     /// Offers `event` to each of `ids`; the first window not ignoring it, and its outcome.

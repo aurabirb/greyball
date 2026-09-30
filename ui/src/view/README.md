@@ -174,8 +174,9 @@ A Queue window's rows are its tracks, then `Session::queue_info_rows` (`loading 
 (`get_or_build(key, || value)` clones the value out, so values are `Arc`s; `Memo<K>::changed(key)` is
 the value-less "did the key move" gate). Each memo is a field of whatever owns the cached thing, so a
 second window never evicts the first's. Interior mutability in `draw` is limited to these, the `Marquee`
-clock and the Log pane's `WrapCache`. When adding one, walk every `self.`/argument read under the
-build closure against its key.
+clock, the Log pane's `WrapCache` and the Genre Map's `ProjectionWorker` handoff (a worker thread
+computes the PCA projection; `frame` fits the last finished one and requests a newer one). When
+adding one, walk every `self.`/argument read under the build closure against its key.
 
 | memo | key | reads |
 | --- | --- | --- |
@@ -190,6 +191,7 @@ build closure against its key.
 | `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
 | `HelpPane::fitted` | the `built` key, body height | — (gates re-following the cursor after a re-wrap or resize) |
 | `PlaylistPicker::built` | playlists generation | the playlists |
+| `GenreMap::cache` (`GenreMapFrame`) | embedded-tracks and embeddings generations, the finished projection's embeddings generation, pane size | tracks with an embedding (title, artist, BPM), the finished projection fitted to the pane |
 
 `TrackList::list_gen` is the generation of the list on screen. Generations are held by the type that
 owns the data and bumped next to the write in one private method, so no mutation site has to judge

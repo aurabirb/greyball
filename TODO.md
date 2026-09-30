@@ -260,11 +260,10 @@
 - [ ] Extend track similarity beyond BPM/key (`core/src/similarity.rs`'s `similarity()`, which already
   has a comment anticipating a vector-embedding signal replacing its body) to also use the
   1280-dim genre/style embedding `sources/genre-embed` now writes to `attrs["embedding:genre"]`
-  (base64-encoded f32 LE, via Essentia's discogs-effnet model run on `tract-onnx`). A separate
-  visualization pane that PCA-projects these embeddings into a 2D scatter plot is still unbuilt.
-  Next, consider adding CLAP (ONNX export + `ort`) as a second signal for
-  text-driven "vibe" queries (typed mood prompt → cosine similarity against track embeddings) — the
-  one capability the pure classifiers don't give. Checked for newer alternatives (2025-2026): plain
+  (base64-encoded f32 LE, via Essentia's discogs-effnet model run on `tract-onnx`). Next,
+  consider adding CLAP (ONNX export + `ort`) as a second signal for text-driven
+  "vibe" queries (typed mood prompt → cosine similarity against track embeddings)
+  — the one capability the pure classifiers don't give. Checked for newer alternatives (2025-2026): plain
   LAION-CLAP (Apache-2.0) is still the best pick — permissive license, most mature ecosystem, no
   Rust/ONNX precedent exists for any option so this needs its own PyTorch→ONNX export regardless.
   If CLAP's genre/mood judgment proves too generic in practice, revisit MuQ-MuLan (Tencent, 2025,

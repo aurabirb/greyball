@@ -340,14 +340,9 @@ impl MedleyView {
             }
             Action::ShowInGenreMap(track) => {
                 let Some(id) = self.windows.named("genre-map") else { return EventResult::Ignored };
-                // A window just brought into view has no laid-out rect yet (that happens after
-                // this event returns) — force it now, or `select_genre_map` would compute the
-                // frame at its stale/zero size and silently fail to find the track's point.
-                if !self.focus_or_show(id) {
-                    self.layout();
-                }
+                self.focus_or_show(id);
                 if let Some(track) = track {
-                    self.select_genre_map(id, track);
+                    self.windows[id].select_genre_map(track);
                 }
                 self.edit_search(id);
                 EventResult::consumed()

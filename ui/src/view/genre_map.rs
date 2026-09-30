@@ -1,8 +1,8 @@
 //! `:genre-map` pane: tracks scattered by a 2D PCA projection of their genre embedding, colored by
-//! BPM. The projection is computed on a per-pane worker thread; `frame` shows the last finished one.
+//! BPM. The PCA projection is computed on a per-pane worker thread; `frame` fits the last finished one.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,33 +52,52 @@ impl GenreMapFrame {
 /// Same click-timing window `TrackList` uses for its own double-click detection.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
+/// Embedded-tracks gen, embeddings gen, the finished projection's gen, `w`, `h`.
+type FrameKey = (u64, u64, Option<u64>, usize, usize);
+
 pub(super) struct GenreMap {
-    cache: Memo<(u64, LayoutKey, Option<LayoutKey>), Arc<GenreMapFrame>>,
-    layout: LayoutWorker,
+    cache: Memo<FrameKey, Arc<GenreMapFrame>>,
+    projection: ProjectionWorker,
     selected: Mutex<Option<TrackId>>,
+    /// Selected once plotted; outranks the first-point fallback until a current frame resolves it.
+    pending: Mutex<Option<TrackId>>,
     last_click: Mutex<Option<(Instant, TrackId)>>,
 }
 
 impl GenreMap {
     pub(super) fn new() -> Self {
-        Self { cache: Memo::default(), layout: LayoutWorker::spawn(), selected: Mutex::new(None), last_click: Mutex::new(None) }
+        Self {
+            cache: Memo::default(),
+            projection: ProjectionWorker::default(),
+            selected: Mutex::new(None),
+            pending: Mutex::new(None),
+            last_click: Mutex::new(None),
+        }
     }
 
-    /// The plot for `rect` minus the title row, from the newest finished layout (possibly stale).
+    /// The plot for `rect` minus the title row, fitted from the newest finished projection (possibly stale).
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<GenreMapFrame> {
-        let key = (ctx.s.genre_embeddings_gen(), rect.width(), rect.height().saturating_sub(1));
+        let (w, h) = (rect.width(), rect.height().saturating_sub(1));
+        let emb_gen = ctx.s.genre_embeddings_gen();
         let tracks = ctx.s.tracks_with_embedding();
-        let done = self.layout.latest(key, &tracks);
-        let done_key = done.as_ref().map(|(k, _)| *k);
-        let frame = self.cache.get_or_build((ctx.s.embedded_tracks_gen(), key, done_key), || {
-            let computing = done_key != Some(key);
-            Arc::new(match &done {
-                Some(((_, w, h), layout)) => GenreMapFrame { w: *w, h: *h, points: points(&tracks, layout), computing },
-                None => GenreMapFrame { w: key.1, h: key.2, points: Vec::new(), computing },
-            })
+        let done = self.projection.latest(emb_gen, &tracks);
+        let done_gen = done.as_ref().map(|(g, _)| *g);
+        let frame = self.cache.get_or_build((ctx.s.embedded_tracks_gen(), emb_gen, done_gen, w, h), || {
+            let points = done.as_ref().map(|(_, proj)| points(&tracks, &fit_to_pane(proj, w, h))).unwrap_or_default();
+            Arc::new(GenreMapFrame { w, h, points, computing: done_gen != Some(emb_gen) })
         });
+        let plotted = |id: TrackId| frame.points.iter().any(|p| p.track_id == id);
         let mut selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
-        if !selected.is_some_and(|id| frame.points.iter().any(|p| p.track_id == id)) {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(id) = *pending
+            && (plotted(id) || !frame.computing)
+        {
+            *pending = None;
+            if plotted(id) {
+                *selected = Some(id);
+            }
+        }
+        if pending.is_none() && !selected.is_some_and(plotted) {
             *selected = frame.points.first().map(|p| p.track_id);
         }
         frame
@@ -93,15 +112,18 @@ impl GenreMap {
         frame.points.iter().filter(|p| ctx.s.liked_mark(p.track_id).is_some()).map(|p| p.track_id).collect()
     }
 
-    /// A no-op when `track` isn't plotted.
-    pub(super) fn select(&self, frame: &GenreMapFrame, track: TrackId) {
-        if frame.points.iter().any(|p| p.track_id == track) {
-            *self.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(track);
-        }
+    /// Applied by the next `frame` that plots `track`; dropped if a current frame doesn't.
+    pub(super) fn select(&self, track: TrackId) {
+        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(track);
+    }
+
+    fn clear_pending(&self) {
+        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Moves the selection to the nearest plotted point in `dir`.
     pub(super) fn nav(&self, frame: &GenreMapFrame, dir: Key) {
+        self.clear_pending();
         let mut selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
         let Some(cur) = selected.and_then(|id| frame.points.iter().find(|p| p.track_id == id)) else { return };
         let (cx, cy) = (cur.x as isize, cur.y as isize);
@@ -123,6 +145,7 @@ impl GenreMap {
             let (dx, dy) = (p.x as isize - x as isize, p.y as isize - y as isize);
             dx * dx + dy * dy
         })?;
+        self.clear_pending();
         *self.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(nearest.track_id);
         Some(nearest.track_id)
     }
@@ -225,67 +248,63 @@ fn direction_score(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> isize 
     primary * primary + perp * perp * 4
 }
 
-/// Each plotted track's pane cell.
-type Layout = HashMap<TrackId, (usize, usize)>;
+/// Each embedded track's 2D PCA coordinates, before fitting to a pane.
+type Projection = Vec<(TrackId, (f32, f32))>;
 
-/// `(Session::genre_embeddings_gen, w, h)` a layout was computed for.
-type LayoutKey = (u64, usize, usize);
+/// The projection and the `Session::genre_embeddings_gen` it was computed for.
+type Finished = Arc<Mutex<Option<(u64, Arc<Projection>)>>>;
 
-type Finished = Arc<Mutex<Option<(LayoutKey, Arc<Layout>)>>>;
-
-/// Computes layouts off the UI thread; dropping it (pane closed) ends the thread.
-struct LayoutWorker {
-    jobs: mpsc::Sender<(LayoutKey, Arc<Vec<Track>>)>,
-    requested: Mutex<Option<LayoutKey>>,
+/// Computes projections off the UI thread, spawned on first use; lives as long as the app.
+#[derive(Default)]
+struct ProjectionWorker {
+    jobs: OnceLock<mpsc::Sender<(u64, Arc<Vec<Track>>)>>,
+    requested: Mutex<Option<u64>>,
     done: Finished,
 }
 
-impl LayoutWorker {
-    fn spawn() -> Self {
-        let (jobs, rx) = mpsc::channel::<(LayoutKey, Arc<Vec<Track>>)>();
-        let done: Finished = Arc::default();
-        let out = done.clone();
+impl ProjectionWorker {
+    fn spawn(done: Finished) -> mpsc::Sender<(u64, Arc<Vec<Track>>)> {
+        let (jobs, rx) = mpsc::channel::<(u64, Arc<Vec<Track>>)>();
         thread::spawn(move || {
             while let Ok(mut job) = rx.recv() {
                 // A scan burst queues many; only the newest matters.
                 while let Ok(newer) = rx.try_recv() {
                     job = newer;
                 }
-                let ((_, w, h), tracks) = &job;
-                let layout = Arc::new(compute_layout(tracks, *w, *h));
-                *out.lock().unwrap_or_else(|e| e.into_inner()) = Some((job.0, layout));
+                let projection = Arc::new(project(&job.1));
+                *done.lock().unwrap_or_else(|e| e.into_inner()) = Some((job.0, projection));
             }
         });
-        Self { jobs, requested: Mutex::new(None), done }
+        jobs
     }
 
-    /// The last finished layout; queues `key`'s if that isn't it. The baseline redraw picks it up.
-    fn latest(&self, key: LayoutKey, tracks: &Arc<Vec<Track>>) -> Option<(LayoutKey, Arc<Layout>)> {
+    /// The last finished projection; queues `emb_gen`'s if that isn't it. The baseline redraw picks it up.
+    fn latest(&self, emb_gen: u64, tracks: &Arc<Vec<Track>>) -> Option<(u64, Arc<Projection>)> {
         let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut requested = self.requested.lock().unwrap_or_else(|e| e.into_inner());
-        if done.as_ref().map(|(k, _)| *k) != Some(key) && *requested != Some(key) {
-            let _ = self.jobs.send((key, tracks.clone()));
-            *requested = Some(key);
+        if done.as_ref().map(|(g, _)| *g) != Some(emb_gen) && *requested != Some(emb_gen) {
+            let jobs = self.jobs.get_or_init(|| Self::spawn(self.done.clone()));
+            if let Err(e) = jobs.send((emb_gen, tracks.clone())) {
+                log::error!("genre map projection worker is gone: {e}");
+            }
+            *requested = Some(emb_gen);
         }
         done
     }
 }
 
-fn points(tracks: &[Track], layout: &Layout) -> Vec<Point> {
+fn points(tracks: &[Track], cells: &HashMap<TrackId, (usize, usize)>) -> Vec<Point> {
     tracks
         .iter()
         .filter_map(|track| {
-            let &(x, y) = layout.get(&track.id)?;
+            let &(x, y) = cells.get(&track.id)?;
             let color = track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
             Some(Point { track_id: track.id, title: track.title.clone(), artist: track.display_artist(), x, y, color })
         })
         .collect()
 }
 
-fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
-    if w == 0 || h == 0 {
-        return Layout::new();
-    }
+fn project(tracks: &[Track]) -> Projection {
     let decoded: Vec<(&Track, Vec<f32>)> =
         tracks.iter().filter_map(|t| t.attrs.get(GENRE_EMBEDDING_ATTR).and_then(|s| decode_genre_embedding(s)).map(|e| (t, e))).collect();
     // Majority dimension wins so a stale/corrupt embedding of another length can't index out of bounds.
@@ -296,7 +315,7 @@ fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
         }
     }
     let Some(dim) = dim_votes.into_iter().max_by_key(|&(_, votes)| votes).map(|(dim, _)| dim) else {
-        return Layout::new();
+        return Projection::new();
     };
     let decoded: Vec<(&Track, Vec<f32>)> = decoded.into_iter().filter(|(_, e)| e.len() == dim).collect();
     let n = decoded.len() as f32;
@@ -304,22 +323,22 @@ fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
     let centered: Vec<Vec<f32>> = decoded.iter().map(|(_, e)| e.iter().zip(&mean).map(|(x, m)| x - m).collect()).collect();
 
     let (pc1, pc2) = pca_top2(&centered, dim);
-    let proj: Vec<(f32, f32)> = centered.iter().map(|v| (dot(v, &pc1), dot(v, &pc2))).collect();
-
-    decoded.iter().map(|(track, _)| track.id).zip(fit_to_pane(&proj, w, h)).collect()
+    decoded.iter().zip(&centered).map(|((track, _), v)| (track.id, (dot(v, &pc1), dot(v, &pc2)))).collect()
 }
 
-/// Rotates to suit the pane's aspect, then stretches each axis independently to fill it (by design).
-fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
+/// Each projected track's pane cell: rotated to suit the pane's aspect, then each axis stretched
+/// independently to fill it (by design).
+fn fit_to_pane(projection: &Projection, w: usize, h: usize) -> HashMap<TrackId, (usize, usize)> {
     let (w1, h1) = ((w.saturating_sub(1)) as f32, (h.saturating_sub(1)) as f32);
-    if proj.is_empty() {
-        return Vec::new();
+    if w == 0 || h == 0 || projection.is_empty() {
+        return HashMap::new();
     }
-    if proj.len() == 1 {
-        return vec![(w1 as usize / 2, h1 as usize / 2)];
+    if let [(id, _)] = projection.as_slice() {
+        return HashMap::from([(*id, (w1 as usize / 2, h1 as usize / 2))]);
     }
 
-    let angle = best_angle(proj, w1, h1);
+    let proj: Vec<(f32, f32)> = projection.iter().map(|&(_, p)| p).collect();
+    let angle = best_angle(&proj, w1, h1);
     let (cos_t, sin_t) = (angle.cos(), angle.sin());
     let rotated: Vec<(f32, f32)> = proj.iter().map(|&(x, y)| rotate(x, y, cos_t, sin_t)).collect();
     let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
@@ -330,12 +349,13 @@ fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
     let sy = if dy > 1e-6 { h1 / dy } else { 1.0 };
     let (cx, cy) = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0);
     let (pcx, pcy) = (w1 / 2.0, h1 / 2.0);
-    rotated
+    projection
         .iter()
-        .map(|&(x, y)| {
+        .zip(&rotated)
+        .map(|(&(id, _), &(x, y))| {
             let px = (pcx + (x - cx) * sx).round().clamp(0.0, w1);
             let py = (pcy + (y - cy) * sy).round().clamp(0.0, h1);
-            (px as usize, py as usize)
+            (id, (px as usize, py as usize))
         })
         .collect()
 }
