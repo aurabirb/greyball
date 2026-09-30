@@ -450,7 +450,7 @@ impl Worker {
     }
 
     /// The candidates in the order the walk tries them: the UI-reported view from its highlighted
-    /// row, wrapping, if one is set; otherwise all of them.
+    /// row, wrapping, if one is set; otherwise tracks missing `bpm:dsp` first, then the rest.
     fn walk_order(&self, candidates: &HashMap<TrackId, Track>) -> Vec<TrackId> {
         match self.inner.view.lock().unwrap().as_ref() {
             Some(view) => {
@@ -462,7 +462,14 @@ impl Worker {
                     .filter(|id| candidates.contains_key(id) && seen.insert(*id))
                     .collect()
             }
-            None => candidates.keys().copied().collect(),
+            None => {
+                let (mut missing_dsp, rest): (Vec<TrackId>, Vec<TrackId>) = candidates
+                    .keys()
+                    .copied()
+                    .partition(|id| !candidates[id].attrs.contains_key("bpm:dsp"));
+                missing_dsp.extend(rest);
+                missing_dsp
+            }
         }
     }
 

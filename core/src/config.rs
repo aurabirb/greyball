@@ -229,8 +229,9 @@ pub struct BpmScanConfig {
     /// Unrelated to `live_enabled` below despite the field name matching this struct's siblings'
     /// `enabled` — each of the three means something different (see each struct's own doc).
     pub enabled: bool,
-    /// Minimum spacing between this plugin's own background fetches.
-    pub min_interval_secs: u64,
+    /// Minimum spacing between this plugin's own background fetches. Also reused as the
+    /// waveform plugin's pacing (see `app/src/main.rs`'s `WaveformPlugin::new` call).
+    pub min_interval_ms: u64,
     /// Whether this specific plugin runs at all, independent of `enabled` above and of the
     /// global scan mode. Live-toggled from Settings (`Session::set_scan_plugin_enabled`), same
     /// mechanism as `WaveformScanConfig::enabled`.
@@ -261,8 +262,10 @@ pub struct BpmDeezerScanConfig {
     /// Whether the plugin is registered at all — restart-only, like a `TOGGLABLE_SOURCES` entry.
     /// Unrelated to `BpmScanConfig::enabled`'s meaning despite the shared field name.
     pub enabled: bool,
-    /// Minimum spacing between this plugin's own background fetches.
-    pub min_interval_secs: u64,
+    /// Minimum spacing between this plugin's own background fetches. Deezer has no documented
+    /// public rate limit; 2000ms is an educated guess trading caution for throughput, adjustable
+    /// if 429s/errors start appearing in practice.
+    pub min_interval_ms: u64,
     /// Whether a *registered* plugin actually runs — live-toggled from Settings
     /// (`Session::set_scan_plugin_enabled`), independent of `enabled` above.
     pub live_enabled: bool,
@@ -270,7 +273,7 @@ pub struct BpmDeezerScanConfig {
 
 impl Default for BpmDeezerScanConfig {
     fn default() -> Self {
-        Self { enabled: true, min_interval_secs: 5, live_enabled: true }
+        Self { enabled: true, min_interval_ms: 2000, live_enabled: true }
     }
 }
 
@@ -283,8 +286,9 @@ pub struct BpmGetSongBpmScanConfig {
     /// No default key shipped (GetSongBPM keys are per-registrant and tied to a mandatory
     /// backlink — see README's Credits section). Unset: plugin isn't registered at all.
     pub api_key: Option<String>,
-    /// Minimum spacing between this plugin's own background fetches.
-    pub min_interval_secs: u64,
+    /// Minimum spacing between this plugin's own background fetches. GetSongBPM's documented
+    /// limit is 3000 req/hour = 1.2s/request minimum; 1300ms (~2770/hr) leaves an ~8% margin.
+    pub min_interval_ms: u64,
     /// Whether a *registered* plugin actually runs — live-toggled from Settings
     /// (`Session::set_scan_plugin_enabled`), independent of `enabled` above.
     pub live_enabled: bool,
@@ -292,7 +296,7 @@ pub struct BpmGetSongBpmScanConfig {
 
 impl Default for BpmGetSongBpmScanConfig {
     fn default() -> Self {
-        Self { enabled: true, api_key: None, min_interval_secs: 2, live_enabled: true }
+        Self { enabled: true, api_key: None, min_interval_ms: 1300, live_enabled: true }
     }
 }
 
@@ -393,7 +397,7 @@ impl Default for BpmScanConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_interval_secs: 15,
+            min_interval_ms: 15000,
             live_enabled: true,
         }
     }

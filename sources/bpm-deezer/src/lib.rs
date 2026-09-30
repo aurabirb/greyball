@@ -44,11 +44,11 @@ pub struct DeezerBpmPlugin {
 }
 
 impl DeezerBpmPlugin {
-    /// `min_interval_secs`: Deezer's public API has no documented rate limit but is known to
-    /// soft-throttle; the caller's default (5s) is a conservative guess, not a verified number.
-    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
+    /// `min_interval_ms`: Deezer's public API has no documented rate limit but is known to
+    /// soft-throttle; the caller's default (2000ms) is an educated guess, not a verified number.
+    pub fn new(min_interval_ms: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
         Self {
-            min_interval: Duration::from_secs(min_interval_secs),
+            min_interval: Duration::from_millis(min_interval_ms),
             client: reqwest::blocking::Client::new(),
             enabled,
             force_reanalysis,

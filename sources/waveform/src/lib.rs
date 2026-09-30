@@ -29,8 +29,8 @@ pub struct WaveformPlugin {
 }
 
 impl WaveformPlugin {
-    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>) -> Self {
-        Self { min_interval: Duration::from_secs(min_interval_secs), enabled }
+    pub fn new(min_interval_ms: u64, enabled: Arc<AtomicBool>) -> Self {
+        Self { min_interval: Duration::from_millis(min_interval_ms), enabled }
     }
 }
 

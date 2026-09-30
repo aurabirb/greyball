@@ -712,9 +712,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // (see `register_plugin` below), not passed in here.
     let scan_plugins: Vec<Arc<dyn ScanPlugin>> = Vec::new();
     let bpm_default_mode = if cfg.scan.bpm.enabled { ScanMode::CacheOnly } else { ScanMode::Disabled };
-    let bpm_min_interval_secs = cfg.scan.bpm.min_interval_secs;
+    let bpm_min_interval_ms = cfg.scan.bpm.min_interval_ms;
     let bpm_deezer_enabled = cfg.scan.bpm_deezer.enabled;
-    let bpm_deezer_min_interval_secs = cfg.scan.bpm_deezer.min_interval_secs;
+    let bpm_deezer_min_interval_ms = cfg.scan.bpm_deezer.min_interval_ms;
     // Maintainer's own free-tier GetSongBPM key, rate-limited, tied to this repo's
     // README backlink per GetSongBPM's terms; a user's own config.toml key overrides it.
     const DEFAULT_GETSONGBPM_API_KEY: &str = "8bf297c63320f80e8bcb3410acd68984";
@@ -725,7 +725,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         .api_key
         .clone()
         .or_else(|| Some(DEFAULT_GETSONGBPM_API_KEY.to_string()));
-    let bpm_getsongbpm_min_interval_secs = cfg.scan.bpm_getsongbpm.min_interval_secs;
+    let bpm_getsongbpm_min_interval_ms = cfg.scan.bpm_getsongbpm.min_interval_ms;
     let genre_embed_enabled = cfg.scan.genre_embed.enabled;
     let genre_embed_min_interval_secs = cfg.scan.genre_embed.min_interval_secs;
     // Runtime mode is `B`/`:togglescan`; `cfg.scan.bpm.enabled` above only
@@ -751,7 +751,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     );
     if let Some(scan) = &session.scan {
         scan.register_plugin(Arc::new(bpm::BpmPlugin::new(
-            bpm_min_interval_secs,
+            bpm_min_interval_ms,
             session.scan_plugin_flag("bpm"),
             session.force_bpm_reanalysis.clone(),
         )));
@@ -759,12 +759,12 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             scan.register_plugin(p);
         }
         scan.register_plugin(Arc::new(waveform::WaveformPlugin::new(
-            bpm_min_interval_secs,
+            bpm_min_interval_ms,
             session.waveform_enabled.clone(),
         )));
         if bpm_deezer_enabled {
             scan.register_plugin(Arc::new(bpm_deezer::DeezerBpmPlugin::new(
-                bpm_deezer_min_interval_secs,
+                bpm_deezer_min_interval_ms,
                 session.scan_plugin_flag("bpm-deezer"),
                 session.force_bpm_reanalysis.clone(),
             )));
@@ -772,7 +772,7 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
         if bpm_getsongbpm_enabled && let Some(key) = bpm_getsongbpm_api_key {
             scan.register_plugin(Arc::new(bpm_getsongbpm::GetSongBpmPlugin::new(
                 key,
-                bpm_getsongbpm_min_interval_secs,
+                bpm_getsongbpm_min_interval_ms,
                 session.scan_plugin_flag("bpm-getsongbpm"),
                 session.force_bpm_reanalysis.clone(),
             )));

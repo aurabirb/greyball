@@ -35,10 +35,10 @@ pub struct GetSongBpmPlugin {
 }
 
 impl GetSongBpmPlugin {
-    pub fn new(api_key: String, min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
+    pub fn new(api_key: String, min_interval_ms: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
         Self {
             api_key,
-            min_interval: Duration::from_secs(min_interval_secs),
+            min_interval: Duration::from_millis(min_interval_ms),
             client: reqwest::blocking::Client::new(),
             enabled,
             force_reanalysis,

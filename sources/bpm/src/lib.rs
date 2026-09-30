@@ -65,9 +65,9 @@ pub struct BpmPlugin {
 }
 
 impl BpmPlugin {
-    pub fn new(min_interval_secs: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
+    pub fn new(min_interval_ms: u64, enabled: Arc<AtomicBool>, force_reanalysis: Arc<AtomicBool>) -> Self {
         Self {
-            min_interval: Duration::from_secs(min_interval_secs),
+            min_interval: Duration::from_millis(min_interval_ms),
             fft: FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE),
             enabled,
             force_reanalysis,
