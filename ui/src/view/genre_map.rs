@@ -212,7 +212,7 @@ impl GenreMap {
         }
         let selected = self.selected_track();
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-        let ring = PLAYING_RING[(millis * crate::BASELINE_FPS as u128 / 1000 / RING_FRAMES) as usize % PLAYING_RING.len()];
+        let flash_on = (millis * crate::BASELINE_FPS as u128 / 1000 / FLASH_FRAMES) % 2 == 1;
         for members in plot.by_cell.chunk_by(|&a, &b| plot.cell(a) == plot.cell(b)) {
             // Draw one point per cell by priority, so a plain point can't paint over a highlighted one.
             let winner = members
@@ -225,14 +225,17 @@ impl GenreMap {
             let is_playing = now_playing == Some(id);
             let white = Color::Dark(cursive::theme::BaseColor::White);
             let style = if is_selected { ColorStyle::new(white, winner.color) } else { ColorStyle::new(winner.color, Color::TerminalDefault) };
-            let base = if is_selected { SELECTED_GLYPH } else if liked.contains(&id) { LIKED_GLYPH } else { UNLIKED_GLYPH };
-            let mut glyph = base.to_string();
+            let glyph = if is_playing && flash_on {
+                PLAYING_GLYPH
+            } else if is_selected {
+                SELECTED_GLYPH
+            } else if liked.contains(&id) {
+                LIKED_GLYPH
+            } else {
+                UNLIKED_GLYPH
+            };
             let effect = if is_playing || members.len() > 1 { Effect::Bold } else { Effect::Simple };
-            if is_playing {
-                // Combining mark: zero-width, so it stacks onto the base glyph's cell.
-                glyph.push(ring);
-            }
-            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((winner.x, winner.y + 1), &glyph)));
+            printer.with_effect(effect, |p| p.with_color(style, |p| p.print((winner.x, winner.y + 1), glyph)));
         }
     }
 }
@@ -253,10 +256,10 @@ const LIKED_GLYPH: &str = "•";
 const UNLIKED_GLYPH: &str = "★";
 /// The selected point, regardless of liked status.
 const SELECTED_GLYPH: &str = "■";
-/// Combining marks cycled to give the now-playing point a pulsing reticle ring.
-const PLAYING_RING: [char; 3] = ['\u{20DD}', '\u{20DF}', '\u{20DE}']; // enclosing circle, diamond, square
-/// Baseline redraws each ring mark lasts; two so a redraw landing late can't skip or repeat one.
-const RING_FRAMES: u128 = 2;
+/// The now-playing point's flash, alternating with its normal glyph.
+const PLAYING_GLYPH: &str = "●";
+/// Baseline redraws each flash state lasts; two so a redraw landing late can't skip or repeat one.
+const FLASH_FRAMES: u128 = 2;
 
 /// Whether `(x, y)` lies on the `dir` side of `(cx, cy)`.
 fn in_direction(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> bool {

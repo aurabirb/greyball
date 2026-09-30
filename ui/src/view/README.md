@@ -270,7 +270,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
   (clock, marquee, title flush); `sync_fast_fps`, run after every event, raises it to the Vis fps limit (`Vis::fps`, mirroring `cfg.vis.fps`) while
   a Vis window is shown and to `SPINNER_FPS` while the tab bar spinner shows; it never goes below the
-  floor, whose ticks also step the Genre Map's now-playing reticle. `Event::Refresh` only runs that sync.
+  floor, whose ticks also flash the Genre Map's now-playing point. `Event::Refresh` only runs that sync.
 
 ## Routing in `MedleyView::route`
 
