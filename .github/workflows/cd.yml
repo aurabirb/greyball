@@ -16,6 +16,8 @@ jobs:
   publish:
     name: Publishing ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
+    env:
+      BUILD: cargo build --release --target ${{ matrix.target }} -p app --all-features
     strategy:
       fail-fast: false
       matrix:
@@ -31,11 +33,9 @@ jobs:
           - build_target: linux-x86_64-musl
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            musl: true
           - build_target: linux-arm64-musl
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            musl: true
           - build_target: macos-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v7
         name: Checkout src
       - name: Install rustup
-        if: '!matrix.musl'
+        if: "!contains(matrix.target, 'musl')"
         shell: bash
         run: |
           if ! command -v rustup &>/dev/null; then
@@ -54,15 +54,15 @@ jobs:
             echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
           fi
       - name: Add cross-compilation target
-        if: '!matrix.musl'
+        if: "!contains(matrix.target, 'musl')"
         run: rustup target add ${{ matrix.target }}
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && !matrix.musl
+        if: runner.os == 'Linux' && !contains(matrix.target, 'musl')
         run: |
           sudo apt update
           sudo apt install -y ${{ matrix.dependencies }}
       - uses: actions/cache@v6
-        if: '!matrix.musl'
+        if: "!contains(matrix.target, 'musl')"
         with:
           path: |
             ~/.cargo/registry/index/
@@ -70,13 +70,14 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Running cargo build
-        if: '!matrix.musl'
-        run: cargo build --release --target ${{ matrix.target }} -p app --all-features
+        if: "!contains(matrix.target, 'musl')"
+        run: $BUILD
       # JS actions can't run in Alpine job containers on arm64, so musl builds use docker run instead
       - name: Running cargo build in Alpine
-        if: matrix.musl
+        if: contains(matrix.target, 'musl')
         run: |
-          docker run --rm -v "$PWD:/src" -w /src -e TARGET=${{ matrix.target }} -e OWNER="$(id -u):$(id -g)" rust:alpine sh -euc '
+          docker run --rm -v "$PWD:/src" -w /src -e BUILD -e CARGO_TERM_COLOR -e TERM -e OWNER="$(id -u):$(id -g)" rust:alpine sh -euc '
+            trap "chown -R $OWNER /src" EXIT
             apk add curl git make musl-dev linux-headers pkgconf
             cd /tmp
             curl -sSfLo alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2
@@ -88,8 +89,7 @@ jobs:
             make -j"$(nproc)" install
             cd /src
             git config --global --add safe.directory /src
-            ALSA_STATIC=1 cargo build --release --target "$TARGET" -p app --all-features
-            chown -R "$OWNER" /src
+            ALSA_STATIC=1 $BUILD
           '
       - name: Packaging binary
         shell: bash
