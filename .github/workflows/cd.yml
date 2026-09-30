@@ -16,6 +16,7 @@ jobs:
   publish:
     name: Publishing ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,11 +24,15 @@ jobs:
           - build_target: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            dependencies: 'libasound2-dev libssl-dev pkg-config'
+            dependencies: 'libasound2-dev pkg-config'
           - build_target: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            dependencies: 'libasound2-dev libssl-dev pkg-config'
+            dependencies: 'libasound2-dev pkg-config'
+          - build_target: linux-x86_64-musl
+            os: ubuntu-latest
+            container: rust:alpine
+            target: x86_64-unknown-linux-musl
           - build_target: macos-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -35,6 +40,15 @@ jobs:
             os: macos-14
             target: aarch64-apple-darwin
     steps:
+      - name: Install Alpine dependencies
+        if: matrix.container
+        run: |
+          apk add bash curl git make musl-dev linux-headers pkgconf perl-utils
+          curl -sSfL https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2 | tar xj -C /tmp
+          cd /tmp/alsa-lib-1.2.15.3
+          ./configure --prefix=/usr --enable-static --disable-shared --disable-python
+          make -j"$(nproc)" install
+          echo ALSA_STATIC=1 >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         name: Checkout src
       - name: Install rustup
@@ -47,7 +61,7 @@ jobs:
       - name: Add cross-compilation target
         run: rustup target add ${{ matrix.target }}
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.container
         run: |
           sudo apt update
           sudo apt install -y ${{ matrix.dependencies }}

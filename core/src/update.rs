@@ -13,7 +13,7 @@ const REPO: &str = "aurabirb/greyball";
 /// Package-manager-owned prefixes, which an update never touches.
 const MANAGED_PREFIXES: &[&str] = &["/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/snap/", "/var/lib/"];
 
-/// (OS, arch, suffix) of the assets `cd.yml` publishes.
+/// (OS, arch, suffix) of the assets `cd.yml` publishes; musl builds append `-musl`.
 const PLATFORMS: &[(&str, &str, &str)] = &[
     ("linux", "x86_64", "linux-x86_64"),
     ("linux", "aarch64", "linux-arm64"),
@@ -81,7 +81,8 @@ pub fn run() -> Result<Outcome, String> {
     if latest <= parse_version(env!("CARGO_PKG_VERSION")).ok_or("running version is not semver")? {
         return Ok(Outcome::Current);
     }
-    let asset = format!("medley-{suffix}");
+    let libc = if cfg!(target_env = "musl") { "-musl" } else { "" };
+    let asset = format!("medley-{suffix}{libc}");
     let url = json["assets"]
         .as_array()
         .and_then(|assets| assets.iter().find(|a| a["name"] == asset.as_str()))

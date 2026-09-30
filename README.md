@@ -93,9 +93,13 @@ Or skip Rust and download a prebuilt binary of the latest release (`:update` kee
 | Platform | Download |
 | --- | --- |
 | Linux x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64 |
+| Linux x86_64 (static, musl) | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64-musl |
 | Linux arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-arm64 |
 | macOS x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-x86_64 |
 | macOS arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-aarch64 |
+
+The musl build can't load ALSA plugins, so it plays straight to the sound card
+(bypassing PipeWire/PulseAudio); prefer the glibc build on a desktop.
 
 ```sh
 install -Dm755 medley-<platform> ~/.local/bin/medley
