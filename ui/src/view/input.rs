@@ -98,8 +98,7 @@ impl MedleyView {
                 }
                 if let command::Parsed::Builtin(action) = parsed {
                     let (selected, collection) = self.with_session(|s| {
-                        let list = self.active_list();
-                        (list.and_then(|list| list.selected_track(s)), list.and_then(|list| list.selected_collection(s)))
+                        (self.selected_track(s), self.selection_list().and_then(|list| list.selected_collection(s)))
                     });
                     return match keybindings::builtin_action(action, selected, collection) {
                         Action::None => self.notify(Notice::failed("no track selected")),
@@ -142,8 +141,7 @@ impl MedleyView {
                     };
                 }
                 let cmd = self.with_session(|s| {
-                    let sel = self.active_list().and_then(|list| list.selected_track(s));
-                    command::resolve(parsed, s, sel)
+                    command::resolve(parsed, s, self.selected_track(s))
                 });
                 match cmd {
                     Ok(c) => self.run(c),
@@ -390,7 +388,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::ExportPlaylist => {
-                let target = self.with_session(|s| self.active_list().and_then(|list| list.selected_hotkey_target(s)));
+                let target = self.with_session(|s| self.selection_list().and_then(|list| list.selected_hotkey_target(s)));
                 match target {
                     Some(HotkeyTarget::Local(id)) => self.run(Command::ExportM3u(id)),
                     _ => EventResult::Ignored,

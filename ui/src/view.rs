@@ -9,7 +9,7 @@ use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
 use cursive::theme::{BaseColor, Color, ColorStyle};
 use cursive::view::CannotFocus;
 
-use core::{LastPlayed, Layout, LogBuf, PaneLayoutConfig, Session};
+use core::{LastPlayed, Layout, LogBuf, PaneLayoutConfig, Session, TrackId};
 
 use crate::{SessionHandle, keybindings};
 use crate::keybindings::Action;
@@ -295,6 +295,18 @@ impl MedleyView {
         self.windows[self.active_list_id()].list()
     }
 
+    /// The list whose selected row commands act on; none while a Genre Map is focused, as its point is the selection.
+    fn selection_list(&self) -> Option<&TrackList> {
+        if self.windows[self.focused_id()].genre_map().is_some() { None } else { self.active_list() }
+    }
+
+    fn selected_track(&self, s: &Session) -> Option<TrackId> {
+        match self.windows[self.focused_id()].genre_map() {
+            Some(gm) => gm.selected_track(),
+            None => self.active_list()?.selected_track(s),
+        }
+    }
+
     fn ctx<'a>(&'a self, s: &'a Session) -> Ctx<'a> {
         Ctx { s, pane_cfg: self.pane_cfg, placements: self.windows.placements() }
     }
@@ -402,8 +414,8 @@ impl MedleyView {
             Event::Key(Key::Left) => self.seek(-5000),
             &Event::Char(key) => {
                 let (sel, collection, open_row, hotkeys) = self.with_session(|s| {
-                    let list = self.active_list();
-                    let sel = list.and_then(|list| list.selected_track(s));
+                    let list = self.selection_list();
+                    let sel = self.selected_track(s);
                     let collection = list.and_then(|list| list.selected_collection(s));
                     (sel, collection, list.and_then(|list| list.open_row(s)), s.hotkeys().into_iter().collect())
                 });

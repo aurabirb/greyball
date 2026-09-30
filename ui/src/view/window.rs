@@ -155,6 +155,13 @@ impl Window {
         }
     }
 
+    pub(super) fn genre_map(&self) -> Option<&GenreMap> {
+        match &self.body {
+            Body::GenreMap(gm) => Some(gm),
+            _ => None,
+        }
+    }
+
     /// Selects `track` on this window's Genre Map once plotted; a no-op on any other window kind.
     pub(super) fn select_genre_map(&self, track: TrackId) {
         if let Body::GenreMap(gm) = &self.body {
