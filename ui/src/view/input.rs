@@ -86,7 +86,7 @@ impl MedleyView {
                     Ok(p) => p,
                     Err(e) => return self.notify(Notice::failed(e)),
                 };
-                let open = self.active_list().and_then(TrackList::open_local);
+                let open = self.selection_list().and_then(TrackList::open_local);
                 if let command::Parsed::ToggleWindow(name) = parsed {
                     return self.handle_action(Action::ToggleWindow(name));
                 }
@@ -182,7 +182,7 @@ impl MedleyView {
     /// The Search window a search goes to: the active list when it is one, else a shown one, else the tab.
     pub(super) fn search_window(&self) -> WindowId {
         let is_search = |id: &WindowId| self.windows[*id].kind == Kind::List(ListKind::Search);
-        Some(self.active_list_id())
+        Some(self.selection_id())
             .filter(is_search)
             .or_else(|| self.visible().into_iter().find(is_search))
             .or_else(|| self.windows.named("search"))
@@ -208,7 +208,7 @@ impl MedleyView {
 
     /// Cursor onto the playing track in the active list, without switching windows.
     fn reveal_active(&mut self) -> bool {
-        let id = self.active_list_id();
+        let id = self.selection_id();
         let session = self.session.clone();
         let s = session.lock().unwrap();
         self.windows[id].list_mut().is_some_and(|list| list.reveal(&s))
@@ -225,7 +225,7 @@ impl MedleyView {
         let shown = |id: &WindowId| self.windows.placement(*id) == Placement::Tabbed || self.open.iter().any(|&(open, _)| open == *id);
         let from_origin = |id: &WindowId| origin.is_some() && self.windows[*id].list().and_then(TrackList::open_target) == origin;
         let mut ids: Vec<WindowId> = self.windows.ids().filter(shown).filter(from_origin).collect();
-        ids.sort_by_key(|&id| id != self.active_list_id());
+        ids.sort_by_key(|&id| id != self.selection_id());
         ids.extend(self.windows.named(NOW_PLAYING));
         let found = ids.into_iter().find(|&id| self.windows[id].list_mut().is_some_and(|list| list.reveal(&s)));
         drop(s);
@@ -274,9 +274,9 @@ impl MedleyView {
             Action::Command(c) => self.run_confirmed(c),
             // `/` filters the focused window's own list; only an empty Search window sends it to the query input instead.
             Action::FocusSearch => {
-                let id = self.active_list_id();
+                let id = self.selection_id();
                 let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s))) else {
-                    // No list here at all (e.g. fullscreen Log/Help/Settings): fall back to global search.
+                    // No list here at all (a Log/Help/Settings tab, a focused Genre Map): fall back to global search.
                     let search_id = self.search_window();
                     self.show(search_id);
                     self.edit_search(search_id);
@@ -359,7 +359,7 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::CycleKindFilter => {
-                let id = self.active_list_id();
+                let id = self.selection_id();
                 if let Some(list) = self.windows[id].list_mut() {
                     list.cycle_kinds();
                 }
@@ -406,7 +406,7 @@ impl MedleyView {
 
     /// The `/`-filter of the list being filtered: the active one, as focus can't move while typing.
     fn set_filter(&mut self, query: Option<&str>) {
-        let id = self.active_list_id();
+        let id = self.selection_id();
         if let Some(list) = self.windows[id].list_mut() {
             list.set_query(query);
         }

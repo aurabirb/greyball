@@ -286,25 +286,17 @@ impl MedleyView {
         self.placed().into_iter().map(|placed| placed.id).collect()
     }
 
-    /// The list selection-based commands act on: the focused window's, else the active tab's.
-    fn active_list_id(&self) -> WindowId {
-        if self.windows[self.focused_id()].list().is_some() { self.focused_id() } else { self.main_id() }
+    /// The window selection-based commands act on: the focused one when it has a selection, else the active tab.
+    fn selection_id(&self) -> WindowId {
+        if self.windows[self.focused_id()].has_selection() { self.focused_id() } else { self.main_id() }
     }
 
-    fn active_list(&self) -> Option<&TrackList> {
-        self.windows[self.active_list_id()].list()
-    }
-
-    /// The list whose selected row commands act on; none while a Genre Map is focused, as its point is the selection.
     fn selection_list(&self) -> Option<&TrackList> {
-        if self.windows[self.focused_id()].genre_map().is_some() { None } else { self.active_list() }
+        self.windows[self.selection_id()].list()
     }
 
     fn selected_track(&self, s: &Session) -> Option<TrackId> {
-        match self.windows[self.focused_id()].genre_map() {
-            Some(gm) => gm.selected_track(),
-            None => self.active_list()?.selected_track(s),
-        }
+        self.windows[self.selection_id()].selected_track(s)
     }
 
     fn ctx<'a>(&'a self, s: &'a Session) -> Ctx<'a> {
@@ -324,7 +316,7 @@ impl MedleyView {
             WindowOutcome::Consumed => EventResult::consumed(),
             WindowOutcome::Run(cmd) => self.run(cmd),
             WindowOutcome::AddFile(path) => {
-                let playlist = self.active_list().and_then(TrackList::open_local);
+                let playlist = self.selection_list().and_then(TrackList::open_local);
                 self.run(core::Command::AddFilesToPlaylist { playlist, paths: vec![path] })
             }
             WindowOutcome::ToggleSetting(row) => {
@@ -362,7 +354,7 @@ impl MedleyView {
 
     /// Feeds the scan walk the active list, re-reporting only when the list or the cursor in it changed.
     fn follow_scan(&self, s: &Session) {
-        let (Some(scan), id) = (&s.scan, self.active_list_id()) else { return };
+        let (Some(scan), id) = (&s.scan, self.selection_id()) else { return };
         let Some(list) = self.windows[id].list() else { return };
         if self.follow_sig.changed((id, list.list_gen(s), list.follow_key())) {
             scan.follow_view(list.visible_track_ids(s), list.cursor());

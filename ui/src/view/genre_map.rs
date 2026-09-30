@@ -212,7 +212,7 @@ impl GenreMap {
         }
         let selected = self.selected_track();
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-        let flash_on = (millis * crate::BASELINE_FPS as u128 / 1000 / FLASH_FRAMES) % 2 == 1;
+        let flash_on = (millis / FLASH_MS) % 2 == 1;
         for members in plot.by_cell.chunk_by(|&a, &b| plot.cell(a) == plot.cell(b)) {
             // Draw one point per cell by priority, so a plain point can't paint over a highlighted one.
             let winner = members
@@ -258,8 +258,7 @@ const UNLIKED_GLYPH: &str = "★";
 const SELECTED_GLYPH: &str = "■";
 /// The now-playing point's flash, alternating with its normal glyph.
 const PLAYING_GLYPH: &str = "●";
-/// Baseline redraws each flash state lasts; two so a redraw landing late can't skip or repeat one.
-const FLASH_FRAMES: u128 = 2;
+const FLASH_MS: u128 = 500;
 
 /// Whether `(x, y)` lies on the `dir` side of `(cx, cy)`.
 fn in_direction(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> bool {

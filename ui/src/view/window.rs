@@ -155,9 +155,15 @@ impl Window {
         }
     }
 
-    pub(super) fn genre_map(&self) -> Option<&GenreMap> {
+    /// Whether track commands act on this window's own selection: a list row or a Genre Map point.
+    pub(super) fn has_selection(&self) -> bool {
+        matches!(self.body, Body::List(_) | Body::GenreMap(_))
+    }
+
+    pub(super) fn selected_track(&self, s: &Session) -> Option<TrackId> {
         match &self.body {
-            Body::GenreMap(gm) => Some(gm),
+            Body::List(list) => list.selected_track(s),
+            Body::GenreMap(gm) => gm.selected_track(),
             _ => None,
         }
     }

@@ -223,7 +223,7 @@ on `revision` — it is read fresh or kept in its own small cache.
   visible window its rect under one lock and runs from `required_size` and again after every input
   event — cursive drains buffered type-ahead through `on_event` before its next layout pass, so a tab
   switched to or a pane docked in the same batch must already have its rect. `follow_scan` feeds the
-  scan walk the active list — the focused window's, else the active tab's — from there, deduped by
+  scan walk the selection window's list (none while a Genre Map is focused) from there, deduped by
   `follow_sig`, so a memo hit in `draw` can never skip it.
 - `Session::revision` bumps on every UI-visible mutation, including an attribute-only `TrackUpdated`
   patch and every non-`Progress` player event; rows key on it so a scanned attribute shows up next
@@ -296,7 +296,8 @@ on `revision` — it is read fresh or kept in its own small cache.
    user isn't in. Esc with a window that is not tabbed focused stays with that window and closes
    it when ignored (focus returns to where it came from, `close_window`), and a key a focused floating or fullscreen window that is no list ignores goes no further unless
    it is a window action (a tab digit included) or Tab/Shift-Tab; Enter never goes on to the main list past a window shown over the view. What is left goes to `on_shell_key` (`Tab` and Shift-Tab cycle `focus_order()`, seek, and
-   `keybindings::map` / `hotkey_toggle` → `handle_action` with the active list's selection).
+   `keybindings::map` / `hotkey_toggle` → `handle_action` with the selection window's selection — `selection_id`: the focused
+   list or Genre Map, else the active tab; list-only actions (`/` filter, kind cycle, `:open` target, seek reveal) find no list on a map).
 7. A wheel event is accumulated by `push_wheel` (and consumed); `flush_wheel` applies the net notch count as ONE
    scroll before any other event and in `required_size` before the pre-draw layout. After `route` returns,
    `on_event` runs `layout()` and, for anything but a mouse event (a scroll must stay put), `clamp_scroll()`
