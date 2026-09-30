@@ -1,6 +1,8 @@
 //! Genre-embedding encode/decode shared by `sources/genre-embed` (writer) and the UI's
 //! genre-map pane (reader), so the base64/float-vector convention lives in exactly one place.
 
+use std::sync::Arc;
+
 use base64::Engine;
 
 use crate::Track;
@@ -24,4 +26,19 @@ pub fn decode_genre_embedding(s: &str) -> Option<Vec<f32>> {
         return None;
     }
     Some(bytes.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
+}
+
+/// A track and its decoded genre embedding, decoded once when it enters the cache.
+#[derive(Clone)]
+pub struct EmbeddedTrack {
+    pub track: Arc<Track>,
+    pub embedding: Arc<[f32]>,
+}
+
+impl EmbeddedTrack {
+    /// `None` without a decodable, non-empty embedding.
+    pub fn new(track: Track) -> Option<Self> {
+        let embedding = decode_genre_embedding(track.attrs.get(GENRE_EMBEDDING_ATTR)?).filter(|e| !e.is_empty())?;
+        Some(Self { track: Arc::new(track), embedding: embedding.into() })
+    }
 }

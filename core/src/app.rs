@@ -460,6 +460,9 @@ struct LikedLocal {
     members: HashSet<TrackId>,
 }
 
+/// Liked nodes' list generations, `ViewCache::pending_gen`, `playlists_gen`, the liked playlist's name.
+type LikedIdsKey = (Vec<u64>, u64, u64, String);
+
 struct HotkeyMemo {
     table: Arc<Vec<HotkeyMembership>>,
     dirty: bool,
@@ -548,6 +551,8 @@ pub struct Session {
     pub cfg: Arc<Config>,
     /// Memoized `liked_local`, rebuilt when the playlists or the configured name change.
     liked_local: Mutex<Option<(u64, Arc<LikedLocal>)>>,
+    /// Memoized `liked_ids`.
+    liked_ids: Mutex<Option<(LikedIdsKey, Arc<HashSet<TrackId>>)>>,
     /// Background scan driver (bpm, later genre/...), if any plugin is
     /// registered. Built and spawned in `session_builder::build_session`.
     pub scan: Option<Arc<crate::scan::ScanDriver>>,
@@ -717,6 +722,7 @@ impl Session {
             plugins,
             plugin_commands,
             liked_local: Mutex::new(None),
+            liked_ids: Mutex::new(None),
             cfg: Arc::new(cfg),
             scan: None,
             waveform_enabled,
@@ -1878,6 +1884,31 @@ impl Session {
         }
     }
 
+    /// Every track `liked_mark` marks, for a view marking many at once.
+    pub fn liked_ids(&self) -> Arc<HashSet<TrackId>> {
+        let nodes: Vec<(&SourceId, BrowseNode)> =
+            self.sources.iter().filter_map(|(id, src)| Some((id, src.liked_songs_node()?))).collect();
+        let key = (
+            nodes.iter().map(|(id, node)| self.view.remote_playlist_gen(id, node)).collect(),
+            self.view.pending_gen(),
+            self.playlists_gen(),
+            self.cfg.liked_playlist.clone(),
+        );
+        let mut memo = self.liked_ids.lock().unwrap();
+        if let Some((k, ids)) = &*memo
+            && *k == key
+        {
+            return ids.clone();
+        }
+        let mut ids = self.liked_local().members.clone();
+        for (id, node) in &nodes {
+            self.view.extend_liked(id, node, &mut ids);
+        }
+        let ids = Arc::new(ids);
+        *memo = Some((key, ids.clone()));
+        ids
+    }
+
     /// All of a remote playlist's ingested track ids, cheap (reads straight
     /// off the already-resolved cache, no store hits) — for cursor bounds
     /// and `Command::PlayContext`.
@@ -2259,7 +2290,7 @@ impl Session {
     }
 
     /// Every track with a computed genre embedding, sorted by id — the genre-map pane's source data.
-    pub fn tracks_with_embedding(&self) -> Arc<Vec<Track>> {
+    pub fn tracks_with_embedding(&self) -> Arc<Vec<crate::embedding::EmbeddedTrack>> {
         self.view.tracks_with_embedding(&self.store)
     }
 

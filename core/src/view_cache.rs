@@ -5,11 +5,12 @@
 //! wiring, not view state.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
-use crate::embedding::{GENRE_EMBEDDING_ATTR, has_genre_embedding};
+use crate::embedding::{EmbeddedTrack, GENRE_EMBEDDING_ATTR};
 use crate::event::{Bus, CoreEvent, MembershipOutcome};
 use crate::traits::{BrowseNode, BrowsePage, Error, NodeMeta, Source, Store};
 use crate::types::{ItemKind, SourceId, Track, TrackId};
@@ -276,8 +277,10 @@ pub(crate) struct ViewCache {
     remote_playlist_tracks: TracksCache,
     /// In-flight hotkey toggles per remote playlist — see `set_remote_membership`.
     pending: PendingChanges,
+    /// Bumped on every `pending` edit and dropped `remote_playlist_tracks` entry, which `remote_playlist_gen` can't see.
+    pending_gen: Arc<AtomicU64>,
     /// Every track with a genre embedding, sorted by id: one store scan on first read, then patched per `TrackUpdated`.
-    embedded: Mutex<Option<Arc<Vec<Track>>>>,
+    embedded: Mutex<Option<Arc<Vec<EmbeddedTrack>>>>,
     embedded_gen: u64,
     embeddings_gen: u64,
 }
@@ -339,14 +342,14 @@ impl ViewCache {
         true
     }
 
-    pub fn tracks_with_embedding(&self, store: &Arc<dyn Store>) -> Arc<Vec<Track>> {
+    pub fn tracks_with_embedding(&self, store: &Arc<dyn Store>) -> Arc<Vec<EmbeddedTrack>> {
         self.embedded
             .lock()
             .unwrap()
             .get_or_insert_with(|| {
-                let mut tracks: Vec<Track> =
-                    store.all_tracks().unwrap_or_default().into_iter().filter(has_genre_embedding).collect();
-                tracks.sort_by_key(|t| t.id);
+                let mut tracks: Vec<EmbeddedTrack> =
+                    store.all_tracks().unwrap_or_default().into_iter().filter_map(EmbeddedTrack::new).collect();
+                tracks.sort_by_key(|e| e.track.id);
                 Arc::new(tracks)
             })
             .clone()
@@ -386,23 +389,29 @@ impl ViewCache {
         let Some(tracks) = self.embedded.get_mut().unwrap() else {
             return;
         };
-        let fresh = fresh.filter(|t| has_genre_embedding(t)).cloned();
-        let embedding_changed = match (tracks.binary_search_by_key(&id, |t| t.id), fresh) {
-            (Err(_), None) => return,
-            (Ok(i), Some(t)) => {
-                let changed = tracks[i].attrs.get(GENRE_EMBEDDING_ATTR) != t.attrs.get(GENRE_EMBEDDING_ATTR);
-                Arc::make_mut(tracks)[i] = t;
-                changed
+        let at = tracks.binary_search_by_key(&id, |e| e.track.id);
+        let old = at.ok().map(|i| &tracks[i]);
+        if let (Some(old), Some(t)) = (old, fresh)
+            && *old.track == *t
+        {
+            return;
+        }
+        let entry = match (old, fresh) {
+            (Some(old), Some(t)) if old.track.attrs.get(GENRE_EMBEDDING_ATTR) == t.attrs.get(GENRE_EMBEDDING_ATTR) => {
+                Some(EmbeddedTrack { track: Arc::new(t.clone()), embedding: old.embedding.clone() })
             }
+            (_, t) => t.cloned().and_then(EmbeddedTrack::new),
+        };
+        let embedding_changed = !matches!((old, &entry), (Some(o), Some(e)) if Arc::ptr_eq(&o.embedding, &e.embedding));
+        // Entries are `Arc`s, so a copy forced by a reader's clone is pointers only.
+        match (at, entry) {
+            (Err(_), None) => return,
+            (Ok(i), Some(e)) => Arc::make_mut(tracks)[i] = e,
             (Ok(i), None) => {
                 Arc::make_mut(tracks).remove(i);
-                true
             }
-            (Err(i), Some(t)) => {
-                Arc::make_mut(tracks).insert(i, t);
-                true
-            }
-        };
+            (Err(i), Some(e)) => Arc::make_mut(tracks).insert(i, e),
+        }
         self.embedded_gen += 1;
         self.embeddings_gen += u64::from(embedding_changed);
     }
@@ -683,10 +692,23 @@ impl ViewCache {
         self.remote_playlist_cached(source, node, |e| e.ids.contains(&track)).unwrap_or(false).then_some(false)
     }
 
+    /// Adds every track `liked_mark` marks in `(source, node)` to `into`.
+    pub fn extend_liked(&self, source: &SourceId, node: &BrowseNode, into: &mut HashSet<TrackId>) {
+        if let Some(changes) = self.pending.lock().unwrap().get(&(source.clone(), node.clone())) {
+            into.extend(changes.iter().map(|c| c.track.id));
+        }
+        self.remote_playlist_cached(source, node, |e| into.extend(e.ids.iter().copied()));
+    }
+
+    pub fn pending_gen(&self) -> u64 {
+        self.pending_gen.load(Ordering::Relaxed)
+    }
+
     /// Drops the in-flight marker of a finished liked-list change of `track`.
     pub fn clear_pending(&self, source: &SourceId, node: &BrowseNode, track: TrackId) {
         if let Some(changes) = self.pending.lock().unwrap().get_mut(&(source.clone(), node.clone())) {
             changes.retain(|c| c.track.id != track);
+            self.pending_gen.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -759,6 +781,7 @@ impl ViewCache {
                 return false;
             }
             changes.push(PendingChange { track: track.clone(), add: want_add, position, front });
+            self.pending_gen.fetch_add(1, Ordering::Relaxed);
         }
         let deps = RemotePlaylistDeps {
             catalog: ctx.catalog.clone(),
@@ -767,6 +790,7 @@ impl ViewCache {
             cache: self.remote_playlist_tracks.clone(),
         };
         let pending = self.pending.clone();
+        let pending_gen = self.pending_gen.clone();
         deps.bus.send(CoreEvent::PlaylistsChanged);
 
         std::thread::spawn(move || {
@@ -791,6 +815,7 @@ impl ViewCache {
                 let mut cache = deps.cache.lock().unwrap();
                 if let Some(changes) = pending.get_mut(&key).filter(|_| !liked) {
                     changes.retain(|c| !(c.track.id == track.id && c.position == position));
+                    pending_gen.fetch_add(1, Ordering::Relaxed);
                 }
                 match (&outcome, cache.get_mut(&key)) {
                     (Ok(added), Some(entry)) => {
@@ -820,6 +845,7 @@ impl ViewCache {
             let cache_key = remote_playlist_cache_key(&key.0, &key.1);
             if reload {
                 deps.cache.lock().unwrap().remove(&key);
+                pending_gen.fetch_add(1, Ordering::Relaxed);
                 source.forget_playlist(&node);
                 if let Err(e) = deps.store.set_remote_playlist_ids(&cache_key, &[]) {
                     log::warn!("remote playlist cache: failed to clear {cache_key}: {e}");

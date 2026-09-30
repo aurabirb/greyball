@@ -175,7 +175,8 @@ A Queue window's rows are its tracks, then `Session::queue_info_rows` (`loading 
 the value-less "did the key move" gate). Each memo is a field of whatever owns the cached thing, so a
 second window never evicts the first's. Interior mutability in `draw` is limited to these, the `Marquee`
 clock, the Log pane's `WrapCache` and the Genre Map's `ProjectionWorker` handoff (a worker thread
-computes the PCA projection; `frame` fits the last finished one and requests a newer one). When
+computes the PCA projection, warm-started from its previous one; `frame` fits the last finished one
+and requests a newer one; the "computing" flag is read live, outside the memos). When
 adding one, walk every `self.`/argument read under the build closure against its key.
 
 | memo | key | reads |
@@ -191,12 +192,14 @@ adding one, walk every `self.`/argument read under the build closure against its
 | `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
 | `HelpPane::fitted` | the `built` key, body height | — (gates re-following the cursor after a re-wrap or resize) |
 | `PlaylistPicker::built` | playlists generation | the playlists |
-| `GenreMap::cache` (`GenreMapFrame`) | embedded-tracks and embeddings generations, the finished projection's embeddings generation, pane size | tracks with an embedding (title, artist, BPM), the finished projection fitted to the pane |
+| `GenreMap::fit` (each track's pane cell) | the finished projection's embeddings generation, pane size | the finished projection |
+| `GenreMap::plot` (`Plot`: points grouped by cell) | embedded-tracks generation, the `fit` key | tracks with an embedding (BPM), `fit` |
 
 `TrackList::list_gen` is the generation of the list on screen. Generations are held by the type that
 owns the data and bumped next to the write in one private method, so no mutation site has to judge
 what kind of change it made: `Queue` (`queue_gen`, `history_gen`), `ViewCache` (one per `ResultSet`, one per
-remote playlist in `edit_tracks`, one per source's folder list in `set_folders`), `Catalog`
+remote playlist in `edit_tracks`, one per source's folder list in `set_folders`, `pending_gen` for
+in-flight remote changes, and `embedded_gen`/`embeddings_gen` for the genre-embedded tracks), `Catalog`
 (`playlists_gen` in `save_playlist`, the one write path for a user playlist, and `removed_gen` for a
 track id that stops existing, which every `list_gen` adds in), `Hotkeys`, and `Session::context_gen`
 for the Now Playing list. A cache keys on the generation of exactly what it shows; `revision` stays
@@ -266,9 +269,8 @@ on `revision` — it is read fresh or kept in its own small cache.
   `on_root`, which dialog buttons also use to `run` a command); everything else is re-read from the
   session by the next `draw`. `set_fps(BASELINE_FPS)` is the idle redraw floor
   (clock, marquee, title flush); `sync_fast_fps`, run after every event, raises it to the Vis fps limit (`Vis::fps`, mirroring `cfg.vis.fps`) while
-  a Vis window is shown, to `SPINNER_FPS` while the tab bar spinner shows, and to `GENRE_MAP_FPS`
-  while a Genre Map window is shown with something playing (its now-playing reticle animation); it
-  never goes below the floor. `Event::Refresh` only runs that sync.
+  a Vis window is shown and to `SPINNER_FPS` while the tab bar spinner shows; it never goes below the
+  floor, whose ticks also step the Genre Map's now-playing reticle. `Event::Refresh` only runs that sync.
 
 ## Routing in `MedleyView::route`
 

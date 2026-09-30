@@ -71,7 +71,7 @@ pub(super) enum WindowFrame {
     /// The memoized scatter plot, plus the live now-playing track id and liked-track set (neither
     /// part of the memo key — both are redrawn as overlays so a track/like change doesn't force a
     /// PCA recompute).
-    GenreMap(Arc<GenreMapFrame>, Option<TrackId>, std::collections::HashSet<TrackId>),
+    GenreMap(GenreMapFrame, Option<TrackId>, Arc<std::collections::HashSet<TrackId>>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -222,9 +222,7 @@ impl Window {
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
             Body::GenreMap(gm) => {
-                let frame = gm.frame(ctx, self.content());
-                let liked = gm.liked_ids(ctx, &frame);
-                WindowFrame::GenreMap(frame, ctx.s.now_playing_id(), liked)
+                WindowFrame::GenreMap(gm.frame(ctx, self.content()), ctx.s.now_playing_id(), ctx.s.liked_ids())
             }
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
