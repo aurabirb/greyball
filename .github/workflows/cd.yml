@@ -16,7 +16,6 @@ jobs:
   publish:
     name: Publishing ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -31,8 +30,12 @@ jobs:
             dependencies: 'libasound2-dev pkg-config'
           - build_target: linux-x86_64-musl
             os: ubuntu-latest
-            container: rust:alpine
             target: x86_64-unknown-linux-musl
+            musl: true
+          - build_target: linux-arm64-musl
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            musl: true
           - build_target: macos-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -40,25 +43,10 @@ jobs:
             os: macos-14
             target: aarch64-apple-darwin
     steps:
-      - name: Install Alpine dependencies
-        if: matrix.container
-        run: |
-          apk add bash curl git make musl-dev linux-headers pkgconf perl-utils
-          cd /tmp
-          curl -sSfLo alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2
-          echo "7b079d614d582cade7ab8db2364e65271d0877a37df8757ac4ac0c8970be861e  alsa-lib.tar.bz2" > alsa-lib.sha256
-          sha256sum -c alsa-lib.sha256
-          tar xjf alsa-lib.tar.bz2
-          cd alsa-lib-1.2.15.3
-          ./configure --prefix=/usr --enable-static --disable-shared --disable-python
-          make -j"$(nproc)" install
-          echo ALSA_STATIC=1 >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         name: Checkout src
-      - name: Trust workspace for git describe
-        if: matrix.container
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install rustup
+        if: '!matrix.musl'
         shell: bash
         run: |
           if ! command -v rustup &>/dev/null; then
@@ -66,14 +54,15 @@ jobs:
             echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
           fi
       - name: Add cross-compilation target
+        if: '!matrix.musl'
         run: rustup target add ${{ matrix.target }}
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && !matrix.container
+        if: runner.os == 'Linux' && !matrix.musl
         run: |
           sudo apt update
           sudo apt install -y ${{ matrix.dependencies }}
       - uses: actions/cache@v6
-        if: '!matrix.container'
+        if: '!matrix.musl'
         with:
           path: |
             ~/.cargo/registry/index/
@@ -81,7 +70,27 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Running cargo build
+        if: '!matrix.musl'
         run: cargo build --release --target ${{ matrix.target }} -p app --all-features
+      # JS actions can't run in Alpine job containers on arm64, so musl builds use docker run instead
+      - name: Running cargo build in Alpine
+        if: matrix.musl
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e TARGET=${{ matrix.target }} -e OWNER="$(id -u):$(id -g)" rust:alpine sh -euc '
+            apk add curl git make musl-dev linux-headers pkgconf
+            cd /tmp
+            curl -sSfLo alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2
+            echo "7b079d614d582cade7ab8db2364e65271d0877a37df8757ac4ac0c8970be861e  alsa-lib.tar.bz2" > alsa-lib.sha256
+            sha256sum -c alsa-lib.sha256
+            tar xjf alsa-lib.tar.bz2
+            cd alsa-lib-1.2.15.3
+            ./configure --prefix=/usr --enable-static --disable-shared --disable-python
+            make -j"$(nproc)" install
+            cd /src
+            git config --global --add safe.directory /src
+            ALSA_STATIC=1 cargo build --release --target "$TARGET" -p app --all-features
+            chown -R "$OWNER" /src
+          '
       - name: Packaging binary
         shell: bash
         run: |
