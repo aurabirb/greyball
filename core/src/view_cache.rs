@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::catalog::Catalog;
-use crate::embedding::GENRE_EMBEDDING_ATTR;
+use crate::embedding::{GENRE_EMBEDDING_ATTR, has_genre_embedding};
 use crate::event::{Bus, CoreEvent, MembershipOutcome};
 use crate::traits::{BrowseNode, BrowsePage, Error, NodeMeta, Source, Store};
 use crate::types::{ItemKind, SourceId, Track, TrackId};
@@ -279,6 +279,7 @@ pub(crate) struct ViewCache {
     /// Every track with a genre embedding, sorted by id: one store scan on first read, then patched per `TrackUpdated`.
     embedded: Mutex<Option<Arc<Vec<Track>>>>,
     embedded_gen: u64,
+    embeddings_gen: u64,
 }
 
 /// The persistable id of a folder node; `Root` is never a folder.
@@ -344,7 +345,7 @@ impl ViewCache {
             .unwrap()
             .get_or_insert_with(|| {
                 let mut tracks: Vec<Track> =
-                    store.all_tracks().unwrap_or_default().into_iter().filter(|t| t.attrs.contains_key(GENRE_EMBEDDING_ATTR)).collect();
+                    store.all_tracks().unwrap_or_default().into_iter().filter(has_genre_embedding).collect();
                 tracks.sort_by_key(|t| t.id);
                 Arc::new(tracks)
             })
@@ -356,9 +357,16 @@ impl ViewCache {
         self.embedded_gen
     }
 
+    /// Moves only when the embedded set or an embedding itself changes, not on other attr edits.
+    pub fn embeddings_gen(&self) -> u64 {
+        self.embeddings_gen
+    }
+
     /// Result sets, `remote_playlist_tracks` and `embedded` hold resolved `Track`s, so a `TrackUpdated` must patch every copy.
     pub fn refresh_cached_track(&mut self, id: TrackId, store: &Arc<dyn Store>) {
-        let fresh = store.get_track(id).ok().flatten();
+        let Ok(fresh) = store.get_track(id) else {
+            return;
+        };
         self.refresh_embedded(id, fresh.as_ref());
         let Some(fresh) = fresh else {
             return;
@@ -378,16 +386,25 @@ impl ViewCache {
         let Some(tracks) = self.embedded.get_mut().unwrap() else {
             return;
         };
-        let fresh = fresh.filter(|t| t.attrs.contains_key(GENRE_EMBEDDING_ATTR)).cloned();
-        match (tracks.binary_search_by_key(&id, |t| t.id), fresh) {
+        let fresh = fresh.filter(|t| has_genre_embedding(t)).cloned();
+        let embedding_changed = match (tracks.binary_search_by_key(&id, |t| t.id), fresh) {
             (Err(_), None) => return,
-            (Ok(i), Some(t)) => Arc::make_mut(tracks)[i] = t,
+            (Ok(i), Some(t)) => {
+                let changed = tracks[i].attrs.get(GENRE_EMBEDDING_ATTR) != t.attrs.get(GENRE_EMBEDDING_ATTR);
+                Arc::make_mut(tracks)[i] = t;
+                changed
+            }
             (Ok(i), None) => {
                 Arc::make_mut(tracks).remove(i);
+                true
             }
-            (Err(i), Some(t)) => Arc::make_mut(tracks).insert(i, t),
-        }
+            (Err(i), Some(t)) => {
+                Arc::make_mut(tracks).insert(i, t);
+                true
+            }
+        };
         self.embedded_gen += 1;
+        self.embeddings_gen += u64::from(embedding_changed);
     }
 
     /// A source's landed top-level playlist folders — a pure read; `ensure_remote_playlists` fetches.

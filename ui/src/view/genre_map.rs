@@ -1,13 +1,9 @@
-//! `:genre-map` pane — a scatter plot of the library's tracks positioned by a 2D PCA projection
-//! of each track's genre embedding (`sources/genre-embed`, `core::embedding`), colored by BPM
-//! (`super::rows::bpm_color`, the same gradient list rows use). Unlike `Vis` (continuously
-//! resampled audio levels on a background worker), the projection only changes when the set of
-//! embedded tracks changes or the pane resizes, so it's computed lazily on `draw`/`frame` and
-//! memoized rather than driven by a background thread.
+//! `:genre-map` pane: tracks scattered by a 2D PCA projection of their genre embedding, colored by
+//! BPM. The projection is computed on a per-pane worker thread; `frame` shows the last finished one.
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cursive::event::Key;
@@ -37,19 +33,15 @@ pub(super) struct GenreMapFrame {
     w: usize,
     h: usize,
     points: Vec<Point>,
+    computing: bool,
 }
 
 impl GenreMapFrame {
-    /// `{artist} - {title}` for the plotted track `id`, the app's usual track-label format
-    /// (see `window_title_track_text`).
     pub(super) fn track_label(&self, id: TrackId) -> Option<String> {
         self.points.iter().find(|p| p.track_id == id).map(|p| format!("{} - {}", p.artist, p.title))
     }
 
-    /// `Command::PlayContext` for pressing Enter on `id`: the same "play this, and let playback
-    /// carry on through the rest of the list" shape a `TrackList` row's Enter uses
-    /// (`TrackList::activate`), with the plotted points (in their plotted order) standing in for
-    /// the list. `None` when `id` isn't actually one of the plotted points.
+    /// Plays `id` with the plotted points as the context, like a `TrackList` row's Enter.
     pub(super) fn play_context(&self, id: TrackId) -> Option<Command> {
         let index = self.points.iter().position(|p| p.track_id == id)?;
         let tracks = self.points.iter().map(|p| p.track_id).collect();
@@ -61,26 +53,29 @@ impl GenreMapFrame {
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 pub(super) struct GenreMap {
-    cache: Memo<(u64, usize, usize), Arc<GenreMapFrame>>,
-    layout: Memo<(u64, usize, usize), Arc<Layout>>,
+    cache: Memo<(u64, LayoutKey, Option<LayoutKey>), Arc<GenreMapFrame>>,
+    layout: LayoutWorker,
     selected: Mutex<Option<TrackId>>,
     last_click: Mutex<Option<(Instant, TrackId)>>,
 }
 
 impl GenreMap {
     pub(super) fn new() -> Self {
-        Self { cache: Memo::default(), layout: Memo::default(), selected: Mutex::new(None), last_click: Mutex::new(None) }
+        Self { cache: Memo::default(), layout: LayoutWorker::spawn(), selected: Mutex::new(None), last_click: Mutex::new(None) }
     }
 
-    /// The plot for `rect`'s width and one title row less of height, rebuilt only when an embedded
-    /// track changed or the pane resized; the PCA layout only when the embeddings themselves did.
+    /// The plot for `rect` minus the title row, from the newest finished layout (possibly stale).
     pub(super) fn frame(&self, ctx: &Ctx, rect: Rect) -> Arc<GenreMapFrame> {
-        let w = rect.width();
-        let h = rect.height().saturating_sub(1);
-        let frame = self.cache.get_or_build((ctx.s.embedded_tracks_gen(), w, h), || {
-            let tracks = ctx.s.tracks_with_embedding();
-            let layout = self.layout.get_or_build((embeddings_hash(&tracks), w, h), || Arc::new(compute_layout(&tracks, w, h)));
-            Arc::new(GenreMapFrame { w, h, points: points(&tracks, &layout) })
+        let key = (ctx.s.genre_embeddings_gen(), rect.width(), rect.height().saturating_sub(1));
+        let tracks = ctx.s.tracks_with_embedding();
+        let done = self.layout.latest(key, &tracks);
+        let done_key = done.as_ref().map(|(k, _)| *k);
+        let frame = self.cache.get_or_build((ctx.s.embedded_tracks_gen(), key, done_key), || {
+            let computing = done_key != Some(key);
+            Arc::new(match &done {
+                Some(((_, w, h), layout)) => GenreMapFrame { w: *w, h: *h, points: points(&tracks, layout), computing },
+                None => GenreMapFrame { w: key.1, h: key.2, points: Vec::new(), computing },
+            })
         });
         let mut selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
         if !selected.is_some_and(|id| frame.points.iter().any(|p| p.track_id == id)) {
@@ -93,24 +88,19 @@ impl GenreMap {
         *self.selected.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Which of `frame`'s plotted tracks are currently liked, read fresh from `Session::liked_mark`
-    /// (already-resolved local/cached state, no network round-trip) each call rather than baked into
-    /// the memoized `frame` — like `now_playing`, liked status can change without the embedded-track
-    /// set or pane size changing, so it's overlaid live instead of forcing a PCA recompute.
+    /// Read live rather than memoized: liking a track shouldn't rebuild the frame.
     pub(super) fn liked_ids(&self, ctx: &Ctx, frame: &GenreMapFrame) -> std::collections::HashSet<TrackId> {
         frame.points.iter().filter(|p| ctx.s.liked_mark(p.track_id).is_some()).map(|p| p.track_id).collect()
     }
 
-    /// Selects `track`, if it's one of `frame`'s plotted points; a no-op (selection left as-is) when
-    /// it has no embedding yet and so nothing to highlight.
+    /// A no-op when `track` isn't plotted.
     pub(super) fn select(&self, frame: &GenreMapFrame, track: TrackId) {
         if frame.points.iter().any(|p| p.track_id == track) {
             *self.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(track);
         }
     }
 
-    /// Moves the selection to the nearest plotted point in `dir` from the current one. A no-op
-    /// when nothing is plotted in that direction (the edge of the cluster) or at all.
+    /// Moves the selection to the nearest plotted point in `dir`.
     pub(super) fn nav(&self, frame: &GenreMapFrame, dir: Key) {
         let mut selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
         let Some(cur) = selected.and_then(|id| frame.points.iter().find(|p| p.track_id == id)) else { return };
@@ -127,8 +117,7 @@ impl GenreMap {
         }
     }
 
-    /// Selects the plotted point nearest `(x, y)` (pane-content coordinates, i.e. before the `+1`
-    /// title-row offset `draw` places points at) and returns it; `None` when nothing is plotted.
+    /// `(x, y)` excludes the title row.
     fn select_at(&self, frame: &GenreMapFrame, x: usize, y: usize) -> Option<TrackId> {
         let nearest = frame.points.iter().min_by_key(|p| {
             let (dx, dy) = (p.x as isize - x as isize, p.y as isize - y as isize);
@@ -138,9 +127,7 @@ impl GenreMap {
         Some(nearest.track_id)
     }
 
-    /// A mouse click at `(x, y)`: selects the nearest point like `select_at`, and returns it again
-    /// when this click completes a double-click (same point, within `DOUBLE_CLICK_WINDOW`) so the
-    /// caller can play it — the mouse's equivalent of arrow-nav-then-Enter.
+    /// Selects the nearest point; returns it when this click completes a double-click on it.
     pub(super) fn click(&self, frame: &GenreMapFrame, x: usize, y: usize) -> Option<TrackId> {
         let id = self.select_at(frame, x, y)?;
         let now = Instant::now();
@@ -150,9 +137,7 @@ impl GenreMap {
         double.then_some(id)
     }
 
-    /// `now_playing` is a live overlay, not baked into the memoized `frame` — it's read fresh
-    /// (`Session::now_playing_id`) on every draw so a track change highlights immediately without
-    /// forcing a PCA recompute, which is only keyed on the embedded-track set and pane size.
+    /// `now_playing` is passed live so a track change doesn't rebuild the frame.
     pub(super) fn draw(
         &self,
         printer: &Printer,
@@ -162,26 +147,19 @@ impl GenreMap {
         liked: &std::collections::HashSet<TrackId>,
     ) {
         let title = if focused { "[Genre Map]" } else { "Genre Map" };
+        let title = if frame.computing { format!("{title} (computing…)") } else { title.to_string() };
         printer.with_color(ColorStyle::title_secondary(), |p| {
-            p.print((0, 0), &crate::view::pad(title, p.size.x));
+            p.print((0, 0), &crate::view::pad(&title, p.size.x));
         });
         if printer.size.x == 0 || printer.size.y <= 1 || frame.w != printer.size.x || frame.h != printer.size.y.saturating_sub(1) {
             return; // not yet rebuilt for this size
         }
         let selected = self.selected_track();
-        // Multiple tracks can land on the same cell (small pane, large library, or the anisotropic
-        // stretch in `fit_to_pane` compressing an axis); group by cell so only one point's style is
-        // actually drawn per cell, picked by priority rather than "whichever came last in
-        // `frame.points`" — otherwise a plain point iterating after the selected/now-playing one in
-        // the same cell would silently paint over and hide its highlight. The winner's own
-        // liked-status still decides dot vs. star; a crowded cell is signaled by bold only (below),
-        // not by overriding the glyph shape.
+        // Draw one point per cell by priority, so a plain point can't paint over a highlighted one.
         let mut cells: std::collections::HashMap<(usize, usize), Vec<&Point>> = std::collections::HashMap::new();
         for point in &frame.points {
             cells.entry((point.x, point.y)).or_default().push(point);
         }
-        // Now-playing's pulsing reticle: sampled fresh from wall-clock time each draw, no stored
-        // animation-phase field, so it's purely a function of "now" rather than app state.
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let ring = PLAYING_RING[(millis / 400) as usize % PLAYING_RING.len()];
         for (&(x, y), points) in &cells {
@@ -199,8 +177,7 @@ impl GenreMap {
             let mut glyph = base.to_string();
             let effect = if is_playing || clustered { Effect::Bold } else { Effect::Simple };
             if is_playing {
-                // A combining ring stacks onto the base glyph in the same cell (zero-width, doesn't
-                // advance the cursor) and cycles shape for the animation — no effect/color flashing.
+                // Combining mark: zero-width, so it stacks onto the base glyph's cell.
                 glyph.push(ring);
             }
             printer.with_effect(effect, |p| p.with_color(style, |p| p.print((x, y + 1), &glyph)));
@@ -208,11 +185,7 @@ impl GenreMap {
     }
 }
 
-/// Draw priority for a point when several share a cell, highest first: playing-and-selected beats
-/// playing, which beats selected, which beats a plain point. Playing outranks selected (not just
-/// the other way around) so the actual now-playing track is never the one silently hidden when a
-/// different, merely-cursor-selected point happens to land in the same cell — the cursor is
-/// transient, but "what's playing" should always be visible at a glance.
+/// Playing outranks selected: the cursor is transient, what's playing should always show.
 fn cell_priority(is_selected: bool, is_playing: bool) -> u8 {
     match (is_playing, is_selected) {
         (true, true) => 3,
@@ -224,11 +197,9 @@ fn cell_priority(is_selected: bool, is_playing: bool) -> u8 {
 
 /// An unselected point for a track the user has liked.
 const LIKED_GLYPH: &str = "•";
-/// An unselected point for a track that isn't liked — a different silhouette (star) from the liked
-/// dot, not just a fuller circle.
+/// An unselected point for a track that isn't liked.
 const UNLIKED_GLYPH: &str = "★";
-/// The selected point — a square, distinguishable from the dot/star at a glance even without its
-/// white-on-background styling, regardless of the track's liked status.
+/// The selected point, regardless of liked status.
 const SELECTED_GLYPH: &str = "■";
 /// Combining marks cycled to give the now-playing point a pulsing reticle ring.
 const PLAYING_RING: [char; 3] = ['\u{20DD}', '\u{20DF}', '\u{20DE}']; // enclosing circle, diamond, square
@@ -244,9 +215,7 @@ fn in_direction(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> bool {
     }
 }
 
-/// Lower is a better match for a `dir` press: squared distance along the pressed axis, with
-/// perpendicular drift weighted heavier so a point roughly "in that direction" beats a distant
-/// one that happens to be perfectly axis-aligned.
+/// Lower is better; perpendicular drift weighs more so "roughly that way" beats far-but-aligned.
 fn direction_score(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> isize {
     let (primary, perp) = match dir {
         Key::Up | Key::Down => (y - cy, x - cx),
@@ -259,13 +228,47 @@ fn direction_score(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> isize 
 /// Each plotted track's pane cell.
 type Layout = HashMap<TrackId, (usize, usize)>;
 
-fn embeddings_hash(tracks: &[Track]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for t in tracks {
-        t.id.hash(&mut hasher);
-        t.attrs.get(GENRE_EMBEDDING_ATTR).hash(&mut hasher);
+/// `(Session::genre_embeddings_gen, w, h)` a layout was computed for.
+type LayoutKey = (u64, usize, usize);
+
+type Finished = Arc<Mutex<Option<(LayoutKey, Arc<Layout>)>>>;
+
+/// Computes layouts off the UI thread; dropping it (pane closed) ends the thread.
+struct LayoutWorker {
+    jobs: mpsc::Sender<(LayoutKey, Arc<Vec<Track>>)>,
+    requested: Mutex<Option<LayoutKey>>,
+    done: Finished,
+}
+
+impl LayoutWorker {
+    fn spawn() -> Self {
+        let (jobs, rx) = mpsc::channel::<(LayoutKey, Arc<Vec<Track>>)>();
+        let done: Finished = Arc::default();
+        let out = done.clone();
+        thread::spawn(move || {
+            while let Ok(mut job) = rx.recv() {
+                // A scan burst queues many; only the newest matters.
+                while let Ok(newer) = rx.try_recv() {
+                    job = newer;
+                }
+                let ((_, w, h), tracks) = &job;
+                let layout = Arc::new(compute_layout(tracks, *w, *h));
+                *out.lock().unwrap_or_else(|e| e.into_inner()) = Some((job.0, layout));
+            }
+        });
+        Self { jobs, requested: Mutex::new(None), done }
     }
-    hasher.finish()
+
+    /// The last finished layout; queues `key`'s if that isn't it. The baseline redraw picks it up.
+    fn latest(&self, key: LayoutKey, tracks: &Arc<Vec<Track>>) -> Option<(LayoutKey, Arc<Layout>)> {
+        let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut requested = self.requested.lock().unwrap_or_else(|e| e.into_inner());
+        if done.as_ref().map(|(k, _)| *k) != Some(key) && *requested != Some(key) {
+            let _ = self.jobs.send((key, tracks.clone()));
+            *requested = Some(key);
+        }
+        done
+    }
 }
 
 fn points(tracks: &[Track], layout: &Layout) -> Vec<Point> {
@@ -285,10 +288,7 @@ fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
     }
     let decoded: Vec<(&Track, Vec<f32>)> =
         tracks.iter().filter_map(|t| t.attrs.get(GENRE_EMBEDDING_ATTR).and_then(|s| decode_genre_embedding(s)).map(|e| (t, e))).collect();
-    // Every real embedding is the model's fixed dimension, but a stale entry from before a model
-    // change (or a corrupt attr that still happens to decode) could disagree — go with whatever
-    // length most tracks agree on and drop the rest, rather than indexing off the first track's
-    // length and risking an out-of-bounds panic on a mismatched one.
+    // Majority dimension wins so a stale/corrupt embedding of another length can't index out of bounds.
     let mut dim_votes: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for (_, e) in &decoded {
         if !e.is_empty() {
@@ -309,18 +309,7 @@ fn compute_layout(tracks: &[Track], w: usize, h: usize) -> Layout {
     decoded.iter().map(|(track, _)| track.id).zip(fit_to_pane(&proj, w, h)).collect()
 }
 
-/// Rotates `proj` to the orientation that best suits a `w`×`h` pane, then stretches x and y
-/// *independently* to fill `0..w-1`/`0..h-1`, and returns each point's pane cell.
-///
-/// This is no longer a similarity transform: independent per-axis scaling is shear-like and does
-/// not preserve relative distances/angles between points. That's an intentional trade-off (product
-/// decision, not an oversight) — the PCA projection is already an approximation, and using the full
-/// pane area for spread matters more than staying geometrically faithful to it. The rotation step
-/// still matters despite the final stretch always filling the pane exactly regardless of angle: it
-/// orients the cloud's natural spread sensibly relative to the pane's aspect ratio before that
-/// stretch is applied, rather than stretching an arbitrarily-oriented cloud. No point is ever
-/// discarded or clipped — the true min/max of every rotated point always lands exactly on the pane's
-/// edges.
+/// Rotates to suit the pane's aspect, then stretches each axis independently to fill it (by design).
 fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
     let (w1, h1) = ((w.saturating_sub(1)) as f32, (h.saturating_sub(1)) as f32);
     if proj.is_empty() {
@@ -336,13 +325,9 @@ fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
     let (xlo, xhi) = min_max(rotated.iter().map(|p| p.0));
     let (ylo, yhi) = min_max(rotated.iter().map(|p| p.1));
     let (dx, dy) = (xhi - xlo, yhi - ylo);
-    // Independent per-axis scale: each axis stretches (or shrinks) on its own to exactly fill the
-    // pane, rather than sharing one factor. A near-0 extent (e.g. duplicate embeddings collapsing an
-    // axis) would otherwise divide by ~0; pin that axis's scale to 1.0 instead — every point is
-    // already at (or near) that axis's center, so the factor doesn't matter.
+    // A collapsed axis (duplicate embeddings) would divide by ~0.
     let sx = if dx > 1e-6 { w1 / dx } else { 1.0 };
     let sy = if dy > 1e-6 { h1 / dy } else { 1.0 };
-    // Center: place the scaled cloud's midpoint at the pane's midpoint.
     let (cx, cy) = ((xlo + xhi) / 2.0, (ylo + yhi) / 2.0);
     let (pcx, pcy) = (w1 / 2.0, h1 / 2.0);
     rotated
@@ -355,38 +340,22 @@ fn fit_to_pane(proj: &[(f32, f32)], w: usize, h: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// Rotates `(x, y)` by `-θ` (`cos_t`/`sin_t` of `θ`), i.e. into the frame where `θ`'s direction lies
-/// along the x-axis.
+/// Rotates `(x, y)` by `-θ`.
 fn rotate(x: f32, y: f32, cos_t: f32, sin_t: f32) -> (f32, f32) {
     (x * cos_t + y * sin_t, -x * sin_t + y * cos_t)
 }
 
-/// How much of the pane a `dx`×`dy` bounding box can fill without overflowing either dimension
-/// (`0.0` when the box is degenerate along an axis the pane isn't, since anything scales to fit a
-/// zero-width extent).
+/// How far a `dx`×`dy` box can scale without overflowing the pane.
 fn fit_scale(dx: f32, dy: f32, w1: f32, h1: f32) -> f32 {
     let sx = if dx > 1e-6 { w1 / dx } else { f32::INFINITY };
     let sy = if dy > 1e-6 { h1 / dy } else { f32::INFINITY };
     sx.min(sy)
 }
 
-/// Number of evenly-spaced angles sampled across the half-turn `0..π` (rotating by `θ` and `θ+π`
-/// give the same bounding box, so a half-turn is the full period) — roughly a 2.8° step. Coarse on
-/// its own, but the golden-section refinement below narrows in on the true optimum from here.
+/// Samples over `0..π`, the bounding box's full period; golden-section refines the best one.
 const ANGLE_SAMPLES: usize = 64;
 
-/// The rotation angle (radians) that best fits `points` into a `w1`×`h1` box: a dense sweep over
-/// `0..π` evaluating `fit_scale` of the rotated bounding box directly against every point, refined
-/// by a golden-section search around the best sample.
-///
-/// A convex-hull/rotating-calipers candidate set (each hull edge's direction and its perpendicular)
-/// was tried first, but our objective is `min(w-1/dx(θ), h-1/dy(θ))` — a maximization against a
-/// *fixed target aspect ratio*, not the classic minimum-area bounding rectangle. That objective's
-/// true maximum can fall at a crossover angle mid-sweep, where the two ratio terms intersect, which
-/// isn't necessarily flush with any hull edge or its perpendicular — the calipers approach could
-/// land on a visibly worse angle than a dense search. A dense sweep directly against all points is
-/// simple, robust, and O(samples × n), trivial for realistic library sizes; it also drops the
-/// convex-hull computation, which had no other use in this file.
+/// The optimum can sit at a crossover of the two ratios, not on a hull edge, hence a dense sweep.
 fn best_angle(points: &[(f32, f32)], w1: f32, h1: f32) -> f32 {
     let step = std::f32::consts::PI / ANGLE_SAMPLES as f32;
     let mut best = 0.0f32;
@@ -399,9 +368,7 @@ fn best_angle(points: &[(f32, f32)], w1: f32, h1: f32) -> f32 {
             best = theta;
         }
     }
-    // Refine over a window wider than one sample step: the objective is a piecewise min of two
-    // ratios, and its true peak (a crossover between the two pieces) could otherwise straddle the
-    // edge of a ±1-step window centered on the coarse sample.
+    // ±2 steps: the peak can straddle a ±1-step window's edge.
     golden_section_refine(points, best - 2.0 * step, best + 2.0 * step, w1, h1)
 }
 
@@ -420,8 +387,7 @@ fn fit_at_angle(points: &[(f32, f32)], theta: f32, w1: f32, h1: f32) -> f32 {
     fit_scale(xhi - xlo, yhi - ylo, w1, h1)
 }
 
-/// Golden-section search maximizing `fit_at_angle` over `[lo, hi]`, for sharpening the coarse
-/// dense-sweep sample in `best_angle` to sub-sample precision.
+/// Golden-section search maximizing `fit_at_angle` over `[lo, hi]`.
 fn golden_section_refine(points: &[(f32, f32)], mut lo: f32, mut hi: f32, w1: f32, h1: f32) -> f32 {
     let gr = (5f32.sqrt() - 1.0) / 2.0;
     let mut c = hi - gr * (hi - lo);
@@ -457,10 +423,7 @@ fn normalize(v: &mut [f32]) -> f32 {
     norm
 }
 
-/// Top eigenvector of `data`'s (never materialized) covariance matrix via power iteration: each
-/// iteration is two O(N·d) passes computing `Σv` directly, rather than the O(N·d²) cost of
-/// forming the d×d covariance matrix — the standard trick for PCA when only a couple of
-/// components are needed out of a high-dimensional embedding.
+/// Top covariance eigenvector without materializing the d×d matrix.
 fn power_iteration(data: &[Vec<f32>], dim: usize) -> Vec<f32> {
     let n = (data.len().max(1)) as f32;
     let mut v = vec![1.0f32; dim];
@@ -477,17 +440,19 @@ fn power_iteration(data: &[Vec<f32>], dim: usize) -> Vec<f32> {
             *x /= n;
         }
         if normalize(&mut next) < 1e-9 {
-            break; // degenerate (e.g. fewer than 2 distinct points): nothing left to converge to
+            break; // degenerate: fewer than 2 distinct points
         }
+        // Covariance is PSD, so the iterate never flips sign.
+        let delta = next.iter().zip(&v).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         v = next;
+        if delta < 1e-5 {
+            break;
+        }
     }
     v
 }
 
-/// The top two principal components of `centered` (already mean-subtracted). PC2 is found by
-/// deflation: projecting PC1's contribution out of every row once, then running power iteration
-/// again on what's left, rather than a second implicit-matrix pass that would keep rediscovering
-/// PC1 itself.
+/// PC2 by deflating PC1 out of every row, else power iteration would rediscover PC1.
 fn pca_top2(centered: &[Vec<f32>], dim: usize) -> (Vec<f32>, Vec<f32>) {
     if centered.is_empty() {
         return (vec![0.0; dim], vec![0.0; dim]);

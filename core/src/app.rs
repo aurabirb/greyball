@@ -2267,6 +2267,10 @@ impl Session {
         self.view.embedded_gen()
     }
 
+    pub fn genre_embeddings_gen(&self) -> u64 {
+        self.view.embeddings_gen()
+    }
+
     pub fn player_status(&self) -> PlayerStatus {
         let (position_ms, duration_ms) = self.progress;
         let live = self.active_player().map(|p| p.status());

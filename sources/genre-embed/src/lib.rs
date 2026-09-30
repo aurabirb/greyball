@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core::audio_decode::DecodeError;
-use core::embedding::{GENRE_EMBEDDING_ATTR, encode_genre_embedding};
+use core::embedding::{GENRE_EMBEDDING_ATTR, encode_genre_embedding, has_genre_embedding};
 use core::{Outcome, ScanPlugin, StreamHandle, Track, TrackMeta};
 use mel::MelSpectrogram;
 
@@ -68,7 +68,7 @@ impl ScanPlugin for GenreEmbedPlugin {
     }
 
     fn needs(&self, track: &Track) -> bool {
-        self.enabled.load(Ordering::Relaxed) && !track.attrs.contains_key(GENRE_EMBEDDING_ATTR)
+        self.enabled.load(Ordering::Relaxed) && !has_genre_embedding(track)
     }
 
     fn needs_audio(&self) -> bool {

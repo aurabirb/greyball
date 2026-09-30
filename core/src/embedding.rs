@@ -3,8 +3,14 @@
 
 use base64::Engine;
 
+use crate::Track;
+
 /// `Track.attrs` key a genre embedding is stored under.
 pub const GENRE_EMBEDDING_ATTR: &str = "embedding:genre";
+
+pub fn has_genre_embedding(track: &Track) -> bool {
+    track.attrs.contains_key(GENRE_EMBEDDING_ATTR)
+}
 
 /// Little-endian `f32`s, base64-encoded.
 pub fn encode_genre_embedding(v: &[f32]) -> String {
