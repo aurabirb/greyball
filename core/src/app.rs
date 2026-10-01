@@ -2176,7 +2176,7 @@ impl Session {
 
     /// Downloads a newer release in the background; a failure is a warning, being current or not ready is silent.
     pub fn check_for_update(&self) {
-        if !self.cfg.auto_update || INSTALLED.load(Ordering::Relaxed) {
+        if !self.cfg.auto_update || INSTALLED.load(Ordering::Relaxed) || crate::update::in_flatpak() {
             return;
         }
         let bus = self.bus.clone();

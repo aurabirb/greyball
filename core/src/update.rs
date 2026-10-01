@@ -11,9 +11,9 @@ use crate::http::{fetch_url_bytes, fetch_url_to};
 const REPO: &str = "aurabirb/greyball";
 
 /// Package-manager-owned prefixes, which an update never touches.
-const MANAGED_PREFIXES: &[&str] = &["/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/snap/", "/var/lib/", "/app/"];
+const MANAGED_PREFIXES: &[&str] = &["/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/snap/", "/var/lib/"];
 
-/// (OS, arch, suffix) of the assets `cd.yml` publishes; musl builds append `-musl`.
+/// (OS, arch, suffix) of the assets `cd.yml` publishes.
 const PLATFORMS: &[(&str, &str, &str)] = &[
     ("linux", "x86_64", "linux-x86_64"),
     ("linux", "aarch64", "linux-arm64"),
@@ -63,8 +63,15 @@ fn link_to_replace(install: &Path) -> Result<Option<PathBuf>, String> {
     Ok(Some(found))
 }
 
+pub fn in_flatpak() -> bool {
+    Path::new("/.flatpak-info").exists()
+}
+
 /// Installs the latest release when newer than the running one.
 pub fn run() -> Result<Outcome, String> {
+    if in_flatpak() {
+        return Err(format!("the Flatpak can't update itself; get the latest .flatpak from https://github.com/{REPO}/releases/latest"));
+    }
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let suffix = PLATFORMS
@@ -81,8 +88,7 @@ pub fn run() -> Result<Outcome, String> {
     if latest <= parse_version(env!("CARGO_PKG_VERSION")).ok_or("running version is not semver")? {
         return Ok(Outcome::Current);
     }
-    let libc = if cfg!(target_env = "musl") { "-musl" } else { "" };
-    let asset = format!("medley-{suffix}{libc}");
+    let asset = format!("medley-{suffix}");
     let url = json["assets"]
         .as_array()
         .and_then(|assets| assets.iter().find(|a| a["name"] == asset.as_str()))

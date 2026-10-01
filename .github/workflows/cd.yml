@@ -32,12 +32,6 @@ jobs:
             target: aarch64-unknown-linux-gnu
             dependencies: 'libasound2-dev pkg-config flatpak flatpak-builder'
             flatpak: true
-          - build_target: linux-x86_64-musl
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - build_target: linux-arm64-musl
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
           - build_target: macos-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -48,7 +42,6 @@ jobs:
       - uses: actions/checkout@v7
         name: Checkout src
       - name: Install rustup
-        if: "!contains(matrix.target, 'musl')"
         shell: bash
         run: |
           if ! command -v rustup &>/dev/null; then
@@ -56,15 +49,13 @@ jobs:
             echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
           fi
       - name: Add cross-compilation target
-        if: "!contains(matrix.target, 'musl')"
         run: rustup target add ${{ matrix.target }}
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && !contains(matrix.target, 'musl')
+        if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y ${{ matrix.dependencies }}
       - uses: actions/cache@v6
-        if: "!contains(matrix.target, 'musl')"
         with:
           path: |
             ~/.cargo/registry/index/
@@ -72,27 +63,7 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Running cargo build
-        if: "!contains(matrix.target, 'musl')"
         run: $BUILD
-      # JS actions can't run in Alpine job containers on arm64, so musl builds use docker run instead
-      - name: Running cargo build in Alpine
-        if: contains(matrix.target, 'musl')
-        run: |
-          docker run --rm -v "$PWD:/src" -w /src -e BUILD -e CARGO_TERM_COLOR -e TERM -e OWNER="$(id -u):$(id -g)" rust:alpine sh -euc '
-            trap "chown -R $OWNER /src" EXIT
-            apk add curl git make musl-dev linux-headers pkgconf
-            cd /tmp
-            curl -sSfLo alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.15.3.tar.bz2
-            echo "7b079d614d582cade7ab8db2364e65271d0877a37df8757ac4ac0c8970be861e  alsa-lib.tar.bz2" > alsa-lib.sha256
-            sha256sum -c alsa-lib.sha256
-            tar xjf alsa-lib.tar.bz2
-            cd alsa-lib-1.2.15.3
-            ./configure --prefix=/usr --enable-static --disable-shared --disable-python
-            make -j"$(nproc)" install
-            cd /src
-            git config --global --add safe.directory /src
-            ALSA_STATIC=1 $BUILD
-          '
       - name: Packaging binary
         shell: bash
         run: |
@@ -110,7 +81,7 @@ jobs:
             --state-dir=target/flatpak/state --repo=target/flatpak/repo target/flatpak/build flatpak/io.github.aurabirb.greyball.yml
           cd target/${{ matrix.target }}/release
           bundle="medley-${{ matrix.build_target }}.flatpak"
-          flatpak build-bundle ../../flatpak/repo "$bundle" io.github.aurabirb.greyball
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo ../../flatpak/repo "$bundle" io.github.aurabirb.greyball
           shasum -a 256 "$bundle" > "$bundle.sha256"
       - name: Releasing assets
         uses: softprops/action-gh-release@v3

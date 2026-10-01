@@ -93,14 +93,11 @@ Or skip Rust and download a prebuilt binary of the latest release (`:update` kee
 | Platform | Download |
 | --- | --- |
 | Linux x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64 |
-| Linux x86_64 (static, musl) | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64-musl |
 | Linux arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-arm64 |
 | macOS x86_64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-x86_64 |
 | macOS arm64 | https://github.com/aurabirb/greyball/releases/latest/download/medley-macos-aarch64 |
-
-The musl build can't load ALSA plugins, so it only plays where ALSA's default
-device is the hardware itself (headless or minimal systems without a
-PipeWire/PulseAudio ALSA plugin); on a desktop use the glibc build.
+| Linux x86_64 Flatpak | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-x86_64.flatpak |
+| Linux arm64 Flatpak | https://github.com/aurabirb/greyball/releases/latest/download/medley-linux-arm64.flatpak |
 
 ```sh
 install -Dm755 medley-<platform> ~/.local/bin/medley
@@ -109,6 +106,14 @@ install -Dm755 medley-<platform> ~/.local/bin/medley
 `~/.local/bin` must be on your `PATH`; it is where `:update` installs. On macOS,
 run `xattr -d com.apple.quarantine ~/.local/bin/medley` if the binary was
 downloaded in a browser (or fetch it with `curl -fLo`).
+
+The Flatpak shares its config, library and log with the native binary and adds
+a menu entry; `:update` doesn't apply to it, so install a newer `.flatpak` instead:
+
+```sh
+flatpak install --user medley-linux-x86_64.flatpak
+flatpak run io.github.aurabirb.greyball
+```
 
 ### 4. Run
 
