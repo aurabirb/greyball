@@ -351,9 +351,12 @@ async fn run(session: Arc<Mutex<Session>>, mut rx: mpsc::UnboundedReceiver<Signa
     }
 }
 
-/// Per-instance bus name, per the MPRIS spec's multi-instance policy:
-/// <https://specifications.freedesktop.org/mpris-spec/2.2/#Bus-Name-Policy>
+// Each Flatpak instance has its own PID namespace, so its pid isn't unique; its instance-id is.
 fn instance_bus_name() -> String {
-    format!("org.mpris.MediaPlayer2.medley.instance{}", std::process::id())
+    let id = std::fs::read_to_string("/.flatpak-info")
+        .ok()
+        .and_then(|info| info.lines().find_map(|l| l.strip_prefix("instance-id=").map(str::to_owned)))
+        .unwrap_or_else(|| std::process::id().to_string());
+    format!("org.mpris.MediaPlayer2.medley.instance{id}")
 }
 

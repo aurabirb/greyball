@@ -16,8 +16,6 @@ jobs:
   publish:
     name: Publishing ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
-    env:
-      BUILD: cargo build --release --target ${{ matrix.target }} -p app --all-features
     strategy:
       fail-fast: false
       matrix:
@@ -25,13 +23,9 @@ jobs:
           - build_target: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            dependencies: 'libasound2-dev pkg-config flatpak flatpak-builder'
-            flatpak: true
           - build_target: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            dependencies: 'libasound2-dev pkg-config flatpak flatpak-builder'
-            flatpak: true
           - build_target: macos-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -54,7 +48,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt update
-          sudo apt install -y ${{ matrix.dependencies }}
+          sudo apt install -y libasound2-dev pkg-config flatpak flatpak-builder
       - uses: actions/cache@v6
         with:
           path: |
@@ -63,7 +57,7 @@ jobs:
             ~/.cargo/git/db/
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Running cargo build
-        run: $BUILD
+        run: cargo build --release --target ${{ matrix.target }} -p app --all-features
       - name: Packaging binary
         shell: bash
         run: |
@@ -72,7 +66,7 @@ jobs:
           cp medley "$bin"
           shasum -a 256 "$bin" > "$bin.sha256"
       - name: Packaging Flatpak
-        if: matrix.flatpak
+        if: runner.os == 'Linux'
         run: |
           mkdir -p target/flatpak
           cp target/${{ matrix.target }}/release/medley target/flatpak/medley

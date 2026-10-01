@@ -107,8 +107,11 @@ install -Dm755 medley-<platform> ~/.local/bin/medley
 run `xattr -d com.apple.quarantine ~/.local/bin/medley` if the binary was
 downloaded in a browser (or fetch it with `curl -fLo`).
 
-The Flatpak shares its config, library and log with the native binary and adds
-a menu entry; `:update` doesn't apply to it, so install a newer `.flatpak` instead:
+The Flatpak shares `~/.config/medley`, `~/.local/share/medley` and
+`~/.local/state/medley` with the native binary and adds a menu entry; paths
+configured elsewhere (a moved media cache, a Spotify cache dir, the slskd data
+dir) need `flatpak override --user --filesystem=<path> io.github.aurabirb.greyball`.
+`:update` doesn't apply to it, so install a newer `.flatpak` instead:
 
 ```sh
 flatpak install --user medley-linux-x86_64.flatpak

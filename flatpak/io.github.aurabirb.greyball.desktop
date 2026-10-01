@@ -5,5 +5,5 @@ Comment=Terminal music player
 Exec=medley
 Icon=io.github.aurabirb.greyball
 Terminal=true
-Categories=AudioVideo;Audio;Player;
+Categories=AudioVideo;Audio;Player;ConsoleOnly;
 Keywords=music;player;
