@@ -19,9 +19,15 @@ modules:
     build-commands:
       - install -Dm755 medley /app/libexec/medley
       - install -Dm755 medley.sh /app/bin/medley
+      - install -Dm644 io.github.aurabirb.greyball.desktop -t /app/share/applications
+      - install -Dm644 io.github.aurabirb.greyball.svg -t /app/share/icons/hicolor/scalable/apps
     sources:
       - type: file
         path: ../target/flatpak/medley
+      - type: file
+        path: io.github.aurabirb.greyball.desktop
+      - type: file
+        path: io.github.aurabirb.greyball.svg
       # Share the native build's config, library and log instead of the per-app sandbox dirs.
       - type: script
         dest-filename: medley.sh

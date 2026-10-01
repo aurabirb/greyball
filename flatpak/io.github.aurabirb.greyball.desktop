@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Medley
+Comment=Terminal music player
+Exec=medley
+Icon=io.github.aurabirb.greyball
+Terminal=true
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;
