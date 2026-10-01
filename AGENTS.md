@@ -60,7 +60,7 @@ working-agreement rule is established, add it here directly rather than only in 
   has explicitly asked for a specific deletion/edit themselves (directly, or relayed through another
   agent) — do that, don't decline or hedge on an explicit direct request; only ask back if which
   file/entry they mean is genuinely unclear.
-- Always clean up afterward: `tmux send-keys -t medley 'q'` then `tmux kill-session -t medley`, and
+- Always clean up afterward: `tmux send-keys -t medley 'Q'` then `tmux kill-session -t medley`, and
   remove any debug log file you redirected to.
 - Only kill tmux sessions (and Alacritty windows) you started yourself, by name — never
   `tmux kill-server`, never kill a session you didn't create (the owner's own sessions, e.g. `0`,
