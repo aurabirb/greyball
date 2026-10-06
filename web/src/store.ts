@@ -33,29 +33,36 @@ export type ServerMessage =
 interface Store {
   connected: boolean;
   player: PlayerState;
+  frame: number;
   search: Search | null;
   setConnected: (connected: boolean) => void;
   receive: (msg: ServerMessage) => void;
   clearSearch: () => void;
 }
 
+const MAX_HITS = 300;
+
 export const useStore = create<Store>((set) => ({
   connected: false,
   player: { state: "stopped", position_ms: 0, duration_ms: 0, volume: 1, buffering: false, track: null },
+  frame: 0,
   search: null,
-  setConnected: (connected) => set({ connected }),
+  // The server forgets a connection's search when it drops.
+  setConnected: (connected) => set(connected ? { connected } : { connected, search: null }),
   clearSearch: () => set({ search: null }),
   receive: (msg) =>
     set((s) => {
       switch (msg.type) {
         case "state": {
           const { type: _, ...player } = msg;
-          return { player };
+          return { player, frame: s.frame + 1 };
         }
         case "search_started":
           return { search: { id: msg.search, pending: msg.sources, hits: [] } };
         case "search_hit":
-          return s.search?.id === msg.search ? { search: { ...s.search, hits: [...s.search.hits, msg.track] } } : {};
+          return s.search?.id === msg.search && s.search.hits.length < MAX_HITS
+            ? { search: { ...s.search, hits: [...s.search.hits, msg.track] } }
+            : {};
         case "search_done":
           return s.search?.id === msg.search
             ? { search: { ...s.search, pending: s.search.pending.filter((p) => p !== msg.source) } }

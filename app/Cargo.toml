@@ -62,7 +62,7 @@ signal-hook = "0.3"
 # (simpler than a target-cfg dependency table) but only ever used behind
 # `#[cfg(target_os = "linux")]` in src/mpris.rs.
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "ws"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

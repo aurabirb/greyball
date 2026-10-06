@@ -1,6 +1,4 @@
-//! Web interface: playback controls and search over a loopback HTTP + WebSocket server.
-//! Events reach it from `main.rs`'s loop via `notify` (the bus has a single consumer); requests
-//! become `Command`s like MPRIS's do. The frontend in `web/` is embedded from `web/dist`.
+//! Web interface: playback controls and search over a loopback HTTP + WebSocket server, frontend embedded from `web/dist`.
 
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::media_keys_common::{seek_delta_ms, volume_delta_percent};
+
+const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
 static DIST: Dir = include_dir!("$CARGO_MANIFEST_DIR/../web/dist");
 
@@ -63,7 +63,7 @@ enum Reply {
     SearchDone { search: u64, source: String },
 }
 
-/// One serialized reply; `search` set means only the connection that owns that search wants it.
+/// A serialized reply; `search` set limits it to the connection owning that search.
 #[derive(Clone)]
 struct Out {
     search: Option<u64>,
@@ -85,7 +85,10 @@ struct Shared {
 
 impl Shared {
     fn state(&self) -> Out {
-        let s = self.session.lock().unwrap();
+        Self::state_of(&self.session.lock().unwrap())
+    }
+
+    fn state_of(s: &Session) -> Out {
         let st = s.player_status();
         let state = match st.state {
             PlayerState::Playing => "playing",
@@ -97,6 +100,9 @@ impl Shared {
     }
 
     fn publish(&self, ev: CoreEvent) {
+        if self.out.receiver_count() == 0 {
+            return;
+        }
         let out = match ev {
             CoreEvent::SearchHit { search, track } => {
                 let found = self.session.lock().unwrap().tracks_for(&[track]);
@@ -112,6 +118,7 @@ impl Shared {
 
     fn handle(&self, req: ClientRequest, search: &mut Option<u64>) -> Option<Out> {
         let mut s = self.session.lock().unwrap();
+        let volume_changed = matches!(req, ClientRequest::Volume { .. });
         let cmd = match req {
             ClientRequest::PlayPause => Command::PlayPause,
             ClientRequest::Next => Command::Next,
@@ -132,6 +139,10 @@ impl Shared {
         if let Err(e) = s.dispatch(cmd) {
             log::warn!("web: command failed: {e}");
         }
+        // Volume emits no event; a seek's position lags, so the periodic tick reports it.
+        if volume_changed {
+            let _ = self.out.send(Self::state_of(&s));
+        }
         None
     }
 }
@@ -147,7 +158,7 @@ impl WebManager {
         let (tx, rx) = mpsc::unbounded_channel();
         std::thread::Builder::new()
             .name("web".into())
-            .spawn(move || match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            .spawn(move || match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(rt) => rt.block_on(run(Shared { session, out: broadcast::channel(4096).0, port }, rx)),
                 Err(e) => log::warn!("web: cannot start tokio runtime: {e}"),
             })
@@ -168,7 +179,7 @@ async fn run(shared: Shared, mut rx: mpsc::UnboundedReceiver<CoreEvent>) {
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", shared.port)).await {
         Ok(l) => l,
         Err(e) => {
-            log::warn!("web: cannot listen on 127.0.0.1:{}: {e}", shared.port);
+            shared.session.lock().unwrap().warn("web", &format!("cannot listen on 127.0.0.1:{}: {e}", shared.port));
             return;
         }
     };
@@ -183,8 +194,26 @@ async fn run(shared: Shared, mut rx: mpsc::UnboundedReceiver<CoreEvent>) {
             log::warn!("web: server stopped: {e}");
         }
     });
-    while let Some(ev) = rx.recv().await {
-        shared.publish(ev);
+    // Volume/seek changes made from the TUI emit no event either.
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut last = shared.state().json;
+    loop {
+        tokio::select! {
+            ev = rx.recv() => match ev {
+                Some(ev) => shared.publish(ev),
+                None => break,
+            },
+            _ = tick.tick() => {
+                if shared.out.receiver_count() == 0 {
+                    continue;
+                }
+                let now = shared.state();
+                if now.json != last {
+                    last = now.json.clone();
+                    let _ = shared.out.send(now);
+                }
+            }
+        }
     }
 }
 
@@ -221,7 +250,7 @@ async fn asset(uri: axum::http::Uri) -> Response {
 }
 
 async fn upgrade(ws: WebSocketUpgrade, State(shared): State<Shared>) -> Response {
-    ws.on_upgrade(move |socket| connection(socket, shared))
+    ws.max_message_size(MAX_MESSAGE_BYTES).max_frame_size(MAX_MESSAGE_BYTES).on_upgrade(move |socket| connection(socket, shared))
 }
 
 async fn connection(mut socket: WebSocket, shared: Shared) {
@@ -246,8 +275,8 @@ async fn connection(mut socket: WebSocket, shared: Shared) {
             out = rx.recv() => match out {
                 Ok(out) if out.search.is_none_or(|id| Some(id) == search) => next = Some(out),
                 Ok(_) => {}
-                Err(broadcast::error::RecvError::Lagged(_)) => next = Some(shared.state()),
-                Err(broadcast::error::RecvError::Closed) => break,
+                // Dropped hits would leave the search pending forever; a reconnect resets the client.
+                Err(_) => break,
             },
         }
     }

@@ -21,4 +21,5 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/index");
     println!("cargo:rerun-if-changed=../.git/refs/tags");
     println!("cargo:rerun-if-changed=../.git/packed-refs");
+    println!("cargo:rerun-if-changed=../web/dist");
 }
