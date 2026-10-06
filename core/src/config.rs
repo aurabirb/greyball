@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub http: HttpConfig,
+    pub web: WebConfig,
     /// "Cached music" source plugin — browses whatever's already in `media_cache_dir`.
     pub cached: CachedConfig,
     /// Spotify source plugin. Only consulted when `app` is built with the
@@ -126,6 +127,20 @@ pub struct HttpConfig {
     pub enabled: bool,
     pub roots: Vec<String>,
     pub recurse_depth: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Serve the web interface (playback controls + search) on 127.0.0.1:`port`.
+    pub enabled: bool,
+    pub port: u16,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self { enabled: false, port: 7878 }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -374,6 +389,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             http: HttpConfig::default(),
+            web: WebConfig::default(),
             cached: CachedConfig::default(),
             spotify: SpotifyConfig::default(),
             soundcloud: SoundcloudConfig::default(),

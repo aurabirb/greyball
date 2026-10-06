@@ -81,7 +81,10 @@ impl Search {
                     }
                     Err(e) => {
                         log::warn!("search {id} [{sid}]: {e}");
-                        bus.send(CoreEvent::BackgroundFailure { context: sid.to_string(), message: format!("search: {e}") })
+                        bus.send(CoreEvent::BackgroundFailure { context: sid.to_string(), message: format!("search: {e}") });
+                        if wanted() {
+                            bus.send(CoreEvent::SearchDone { search: id, source: sid.clone() });
+                        }
                     }
                 }
             });

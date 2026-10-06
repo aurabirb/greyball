@@ -7,8 +7,8 @@
 pub mod mpris;
 #[cfg(target_os = "macos")]
 pub mod media_keys_macos;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod media_keys_common;
 pub mod session_builder;
+pub mod web;
 
 pub use session_builder::build_session;

@@ -20,24 +20,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, Value};
 use zbus::connection;
 
-use crate::media_keys_common::{pause_command, play_command};
-
-// ---- pure command/value mapping (unit-tested) ----
-
-/// `SetPosition` is absolute microseconds; `Command::Seek` is relative
-/// milliseconds.
-fn set_position_delta_ms(target_position_us: i64, current_position_ms: u32) -> i64 {
-    target_position_us / 1000 - i64::from(current_position_ms)
-}
-
-/// The `Volume` property setter is absolute (0.0..=1.0); `Command::Volume`
-/// is a relative percent delta. Rounds to the nearest percent; clamped to
-/// fit `i8` (it always will in practice, `Volume` being 0.0..=1.0).
-fn volume_delta_percent(target_volume: f64, current_volume: f32) -> i8 {
-    let target_pct = (target_volume.clamp(0.0, 1.0) * 100.0).round();
-    let current_pct = f64::from(current_volume.clamp(0.0, 1.0)) * 100.0;
-    (target_pct - current_pct).clamp(f64::from(i8::MIN), f64::from(i8::MAX)) as i8
-}
+use crate::media_keys_common::{pause_command, play_command, seek_delta_ms, volume_delta_percent};
 
 fn playback_status_str(state: PlayerState) -> &'static str {
     match state {
@@ -247,7 +230,7 @@ impl MprisPlayer {
 
     fn set_position(&self, _track_id: ObjectPath<'_>, position: i64) {
         let mut s = self.session.lock().unwrap();
-        let delta = set_position_delta_ms(position, s.player_status().position_ms);
+        let delta = seek_delta_ms(position / 1000, s.player_status().position_ms);
         let _ = s.dispatch(Command::Seek(delta));
     }
 

@@ -805,6 +805,11 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     let mpris = app::mpris::MprisManager::spawn(session.clone());
 
+    let web = {
+        let web_cfg = session.lock().unwrap().cfg.web.clone();
+        web_cfg.enabled.then(|| app::web::WebManager::spawn(session.clone(), web_cfg.port))
+    };
+
     // macOS equivalent: MPRemoteCommandCenter/MPNowPlayingInfoCenter. These
     // are synchronous, main-thread-affine Cocoa APIs, so registration is a
     // plain call here rather than a spawned worker. UNTESTED, see
@@ -889,6 +894,9 @@ fn run(log_buf: Arc<LogBuf>) -> Result<(), Box<dyn std::error::Error>> {
             drop(s);
 
             window_title.update(&mut siv, now_playing_track.as_ref(), &player_state);
+            if let Some(web) = &web {
+                web.notify(&events);
+            }
 
             #[cfg(target_os = "linux")]
             {

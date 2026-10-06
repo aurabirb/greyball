@@ -33,6 +33,13 @@ full list with descriptions.
 
 `config.toml` under `$XDG_CONFIG_HOME/medley` (fallback `~/.config/medley`).
 
+### Web interface
+
+Playback controls and search in a browser: set `[web] enabled = true` (optional `port`, default `7878`) and open
+`http://127.0.0.1:7878`. It listens on loopback only and rejects foreign `Host`/`Origin` headers. The frontend
+(`web/`, React + zustand) is embedded from the committed `web/dist`; after changing it run
+`npm install && npm run build` (or `bun install && bun run build`) in `web/` and commit `dist`.
+
 ## Build & run
 
 Check the Github Releases page of this project before building it yourself.
