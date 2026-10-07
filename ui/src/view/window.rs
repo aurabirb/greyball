@@ -17,7 +17,7 @@ use super::files::FilesPane;
 use super::genre_map::{GenreMap, GenreMapFrame};
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
-use super::rows::Row;
+use super::rows::{Row, draw_standalone_row};
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::text::{pad, pad_right_aligned};
 use super::settings::{SettingsEntry, SettingsPane};
@@ -69,13 +69,18 @@ pub(super) enum WindowFrame {
     List(Arc<ListFrame>),
     Settings(Arc<Vec<SettingsEntry>>),
     Help(Arc<Built>),
-    /// The memoized scatter plot, plus the live now-playing track id and liked-track set (neither
-    /// part of the memo key — both are redrawn as overlays so a track/like change doesn't force a
-    /// PCA recompute).
-    /// The selected point's list row, shown in the status row.
-    GenreMap(GenreMapFrame, Option<TrackId>, Arc<std::collections::HashSet<TrackId>>, Option<Row>),
+    GenreMap(GenreFrame),
     /// Log and Vis read only their own live state.
     Live,
+}
+
+/// The memoized plot plus the live overlays, which stay out of its memo key so a track or like change doesn't refit it.
+pub(super) struct GenreFrame {
+    plot: GenreMapFrame,
+    playing: Option<TrackId>,
+    liked: Arc<std::collections::HashSet<TrackId>>,
+    /// The selected point's list row, drawn in the status row.
+    row: Option<Row>,
 }
 
 enum Body {
@@ -257,9 +262,9 @@ impl Window {
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
             Body::GenreMap(gm) => {
-                let (frame, playing) = (gm.frame(ctx, self.content()), ctx.s.now_playing_id());
-                let row = gm.selected_track().and_then(|id| frame.track_row(ctx.s, id, playing == Some(id)));
-                WindowFrame::GenreMap(frame, playing, ctx.s.liked_ids(), row)
+                let (plot, playing) = (gm.frame(ctx, self.content()), ctx.s.now_playing_id());
+                let row = gm.selected_track().filter(|_| self.status.message.is_none()).and_then(|id| plot.track_row(ctx.s, id, playing == Some(id)));
+                WindowFrame::GenreMap(GenreFrame { plot, playing, liked: ctx.s.liked_ids(), row })
             }
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
@@ -277,11 +282,6 @@ impl Window {
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             (Body::Files(files), _) => pane(files.idle()),
-            (Body::GenreMap(_), WindowFrame::GenreMap(.., row)) => {
-                let tail = status.tail().join("   ");
-                let room = fit.saturating_sub(if tail.is_empty() { 0 } else { tail.width() + 3 });
-                pane(&row.as_ref().map(|row| row.standalone_line(room)).unwrap_or_default())
-            }
             _ => pane(""),
         }
     }
@@ -296,7 +296,7 @@ impl Window {
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing, liked, _)) => gm.draw(content, focused, frame, *now_playing, liked),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(g)) => gm.draw(content, focused, &g.plot, g.playing, &g.liked),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_) | Body::GenreMap(_), _) => {}
         }
@@ -312,7 +312,11 @@ impl Window {
             _ => None,
         };
         let fit = room.saturating_sub(count.as_ref().map_or(0, |count| count.width() + 2));
-        let (text, refused) = message.unwrap_or_else(|| (if status.hints { self.idle(frame, placement, status, fit) } else { String::new() }, false));
+        let genre_row = match frame {
+            WindowFrame::GenreMap(GenreFrame { row: Some(row), .. }) if idle => Some(row),
+            _ => None,
+        };
+        let (text, refused) = message.unwrap_or_else(|| (if status.hints && genre_row.is_none() { self.idle(frame, placement, status, fit) } else { String::new() }, false));
         let style = if refused { ColorStyle::front(Color::Dark(BaseColor::Yellow)) } else { ColorStyle::primary() };
         // A message keeps its room; the idle hint gives way to the count.
         let count = count.filter(|count| idle || text.width() + count.width() + 2 <= room);
@@ -323,6 +327,13 @@ impl Window {
                 p.print((left, y), &pad_right_aligned(&format!("{count} "), room - left));
             }
         });
+        // The map's readout is its selected row, shown whenever no message is; only the hints after it are optional.
+        if let Some(row) = genre_row {
+            let tail = if status.hints { status.tail().join("   ") } else { String::new() };
+            let row_w = room.saturating_sub(if tail.is_empty() { 0 } else { tail.width() + 3 });
+            draw_standalone_row(&printer.windowed(Rect::from_size((0, y), (row_w, 1))), row);
+            printer.with_color(style, |p| p.print((row_w + 3, y), &tail));
+        }
     }
 
     pub(super) fn on_event(&mut self, event: &Event, ctx: &Ctx) -> WindowOutcome {
@@ -344,13 +355,12 @@ impl Window {
         if let Body::List(list) = &mut self.body {
             return list.on_event(event, ctx, rect);
         }
-        // Real spatial navigation (not Vis's no-op-nav): moves the selection to the nearest
-        // plotted point in the pressed direction. Only intercepts the 4 arrow keys — everything
-        // else (mouse included) falls through to the shared handling below, same as Vis.
+        // Spatial navigation: the nearest plotted point in the pressed direction, j/k and the page keys being Down/Up hops.
         if let Body::GenreMap(gm) = &mut self.body
-            && let Event::Key(dir @ (Key::Up | Key::Down | Key::Left | Key::Right)) = event
+            && let Some((dir, hops)) = map_hops(event)
         {
-            gm.nav(&gm.frame(ctx, rect), *dir);
+            let frame = gm.frame(ctx, rect);
+            (0..hops).for_each(|_| gm.nav(&frame, dir));
             return WindowOutcome::Consumed;
         }
         // Enter plays the selected point, same "play this and carry on through the rest of the
@@ -549,5 +559,17 @@ impl Index<WindowId> for Windows {
 impl IndexMut<WindowId> for Windows {
     fn index_mut(&mut self, id: WindowId) -> &mut Window {
         &mut self.items[id.0]
+    }
+}
+
+/// The direction and hop count a Genre Map key moves by.
+fn map_hops(event: &Event) -> Option<(Key, usize)> {
+    match (event, Nav::of(event)) {
+        (Event::Key(dir @ (Key::Left | Key::Right)), _) => Some((*dir, 1)),
+        (_, Some(nav @ (Nav::Line(_) | Nav::Page(_)))) => {
+            let (up, hops) = nav.step(PAGE_SCROLL_STEP);
+            Some((if up { Key::Up } else { Key::Down }, hops))
+        }
+        _ => None,
     }
 }

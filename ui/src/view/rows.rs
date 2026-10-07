@@ -60,7 +60,7 @@ pub(super) struct Row {
 
 impl Row {
     /// The now-playing mark and the columns padded to `width`; `title_end` cuts the main column short of the action labels.
-    pub(super) fn line(&self, layout: &Layout, width: usize, title_end: Option<usize>) -> String {
+    fn line(&self, layout: &Layout, width: usize, title_end: Option<usize>) -> String {
         let mark = if self.current { "> " } else { "  " };
         let [tags, main, hotkeys, source, duration] = [&self.tags, &self.main, &self.hotkeys, &self.source, &self.duration].map(Cell::text);
         let main = match (title_end, layout[1]) {
@@ -69,11 +69,6 @@ impl Row {
         };
         let cols = columns([&tags, &main, &hotkeys, &source, &duration], layout, width.saturating_sub(ROW_MARK_W));
         pad(&format!("{mark}{cols}"), width)
-    }
-
-    /// The row laid out on its own, filling `width`.
-    pub(super) fn standalone_line(&self, width: usize) -> String {
-        self.line(&column_layout(width.saturating_sub(ROW_MARK_W), false), width, None)
     }
 }
 
@@ -144,25 +139,33 @@ fn render_cell(
 
 /// The one track-row builder every list and docked pane goes through.
 pub(super) fn tracks_to_rows(s: &Session, tracks: Vec<core::Track>, pending: &PendingRows, offset: usize, playing: Option<usize>) -> Vec<Row> {
-    let visible = &s.cfg.visible_track_attrs;
     let hotkeys = s.hotkey_memberships();
     tracks
         .into_iter()
         .enumerate()
-        .map(|(i, t)| {
-            let cached = s.is_track_cached(&t);
-            let liked = s.liked_mark(t.id);
-            Row {
-                tags: render_cell(Column::Tags, &t, cached, liked, visible, &hotkeys),
-                main: render_cell(Column::Main, &t, cached, liked, visible, &hotkeys),
-                hotkeys: render_cell(Column::Hotkeys, &t, cached, liked, visible, &hotkeys),
-                source: render_cell(Column::Source, &t, cached, liked, visible, &hotkeys),
-                duration: render_cell(Column::Duration, &t, cached, liked, visible, &hotkeys),
-                current: playing == Some(offset + i),
-                pending: pending.has(t.id, offset + i),
-            }
-        })
+        .map(|(i, t)| track_row(s, &t, &hotkeys, playing == Some(offset + i), pending.has(t.id, offset + i)))
         .collect()
+}
+
+/// `t` as a lone row (no pending state), for surfaces that show one track outside a list.
+pub(super) fn single_track_row(s: &Session, t: &core::Track, playing: bool) -> Row {
+    track_row(s, t, &s.hotkey_memberships(), playing, false)
+}
+
+fn track_row(s: &Session, t: &core::Track, hotkeys: &[HotkeyMembership], current: bool, pending: bool) -> Row {
+    let visible = &s.cfg.visible_track_attrs;
+    let cached = s.is_track_cached(t);
+    let liked = s.liked_mark(t.id);
+    let cell = |col| render_cell(col, t, cached, liked, visible, hotkeys);
+    Row {
+        tags: cell(Column::Tags),
+        main: cell(Column::Main),
+        hotkeys: cell(Column::Hotkeys),
+        source: cell(Column::Source),
+        duration: cell(Column::Duration),
+        current,
+        pending,
+    }
 }
 
 /// Per-tag-attr cell renderer, keyed by attr name (a `Config::visible_track_attrs` entry).
@@ -234,53 +237,63 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
     let list_h = printer.size.y;
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W), reserve_hotkeys);
     for (y, row) in rows.iter().enumerate() {
-        let selected = y + offset == sel;
-        let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
-        let spans = if selected { action_spans(row, actions, &layout) } else { Vec::new() };
-        let title_end = spans.first().map(|&(x, ..)| x - ACTION_GAP);
-        let line = row.line(&layout, content_w, title_end);
-        let mut row_style = Style::from(if selected {
-            ColorStyle::highlight()
-        } else if row.current {
-            ColorStyle::secondary()
-        } else {
-            ColorStyle::primary()
-        });
-        if row.pending {
-            row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
-        }
-        printer.with_style(row_style, |p| p.print((0, y), &line));
-        for (x, _, label) in spans {
-            printer.with_style(row_style, |p| p.print((x, y), label));
-        }
-        // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
-        let plain = !selected && !row.current;
-        for (i, (&(start, width, right_aligned), cell)) in layout.iter().zip(cells).enumerate().filter_map(|(i, (l, c))| Some((i, (l.as_ref()?, c)))) {
-            if !cell.styled() {
-                continue;
-            }
-            let mut end = ROW_MARK_W + start + width;
-            if i == 1 && let Some(title_end) = title_end {
-                end = end.min(title_end);
-            }
-            let indent = if right_aligned { width.saturating_sub(cell.text().width()) } else { 0 };
-            let mut x = ROW_MARK_W + start + indent;
-            for span in &cell.spans {
-                let text = truncate(&span.text, end.saturating_sub(x));
-                let mut style = row_style;
-                if plain && let Some(color) = span.color {
-                    style = style.combine(ColorStyle::front(color));
-                }
-                // Combining an effect twice toggles it back off.
-                if span.italic && !row.pending {
-                    style = style.combine(Effect::Italic);
-                }
-                printer.with_style(style, |p| p.print((x, y), &text));
-                x += text.width();
-            }
-        }
+        draw_row(printer, y, row, &layout, content_w, y + offset == sel, actions);
     }
     draw_scrollbar(printer, content_w, list_h, offset, total, playing);
+}
+
+/// `row` alone on a one-row `printer`, laid out like a list row (unselected, no action labels).
+pub(super) fn draw_standalone_row(printer: &Printer, row: &Row) {
+    let width = printer.size.x;
+    draw_row(printer, 0, row, &column_layout(width.saturating_sub(ROW_MARK_W), false), width, false, &[] as &[((), String, &str)]);
+}
+
+/// One row at line `y`: its columns padded to `content_w`, then its per-cell styles over them; `actions` show only when `selected`.
+fn draw_row<A>(printer: &Printer, y: usize, row: &Row, layout: &Layout, content_w: usize, selected: bool, actions: &[(A, String, &'static str)]) {
+    let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
+    let spans = if selected { action_spans(row, actions, layout) } else { Vec::new() };
+    let title_end = spans.first().map(|&(x, ..)| x - ACTION_GAP);
+    let line = row.line(layout, content_w, title_end);
+    let mut row_style = Style::from(if selected {
+        ColorStyle::highlight()
+    } else if row.current {
+        ColorStyle::secondary()
+    } else {
+        ColorStyle::primary()
+    });
+    if row.pending {
+        row_style = row_style.combine(Effect::Italic).combine(Effect::Dim);
+    }
+    printer.with_style(row_style, |p| p.print((0, y), &line));
+    for (x, _, label) in spans {
+        printer.with_style(row_style, |p| p.print((x, y), label));
+    }
+    // The selection/now-playing color takes the whole line; a span's own color only shows on a plain row.
+    let plain = !selected && !row.current;
+    for (i, (&(start, width, right_aligned), cell)) in layout.iter().zip(cells).enumerate().filter_map(|(i, (l, c))| Some((i, (l.as_ref()?, c)))) {
+        if !cell.styled() {
+            continue;
+        }
+        let mut end = ROW_MARK_W + start + width;
+        if i == 1 && let Some(title_end) = title_end {
+            end = end.min(title_end);
+        }
+        let indent = if right_aligned { width.saturating_sub(cell.text().width()) } else { 0 };
+        let mut x = ROW_MARK_W + start + indent;
+        for span in &cell.spans {
+            let text = truncate(&span.text, end.saturating_sub(x));
+            let mut style = row_style;
+            if plain && let Some(color) = span.color {
+                style = style.combine(ColorStyle::front(color));
+            }
+            // Combining an effect twice toggles it back off.
+            if span.italic && !row.pending {
+                style = style.combine(Effect::Italic);
+            }
+            printer.with_style(style, |p| p.print((x, y), &text));
+            x += text.width();
+        }
+    }
 }
 
 /// Gap between a title and the row's action labels, and between the labels.
