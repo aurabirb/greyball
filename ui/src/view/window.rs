@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 
@@ -78,7 +79,7 @@ pub(super) enum WindowFrame {
 pub(super) struct GenreFrame {
     plot: GenreMapFrame,
     playing: Option<TrackId>,
-    liked: Arc<std::collections::HashSet<TrackId>>,
+    liked: Arc<HashSet<TrackId>>,
     /// The selected point's list row, drawn in the status row.
     row: Option<Row>,
 }
@@ -263,7 +264,7 @@ impl Window {
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
             Body::GenreMap(gm) => {
                 let (plot, playing) = (gm.frame(ctx, self.content()), ctx.s.now_playing_id());
-                let row = gm.selected_track().filter(|_| self.status.message.is_none()).and_then(|id| plot.track_row(ctx.s, id, playing == Some(id)));
+                let row = gm.selected_track().and_then(|id| plot.track_row(ctx.s, id, playing == Some(id)));
                 WindowFrame::GenreMap(GenreFrame { plot, playing, liked: ctx.s.liked_ids(), row })
             }
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
@@ -327,12 +328,18 @@ impl Window {
                 p.print((left, y), &pad_right_aligned(&format!("{count} "), room - left));
             }
         });
-        // The map's readout is its selected row, shown whenever no message is; only the hints after it are optional.
+        // The map's readout is its selected row, shown whenever no message is; the hints after it only when the row keeps at least as much room.
         if let Some(row) = genre_row {
             let tail = if status.hints { status.tail().join("   ") } else { String::new() };
-            let row_w = room.saturating_sub(if tail.is_empty() { 0 } else { tail.width() + 3 });
-            draw_standalone_row(&printer.windowed(Rect::from_size((0, y), (row_w, 1))), row);
-            printer.with_color(style, |p| p.print((row_w + 3, y), &tail));
+            let tail_w = tail.width() + 3;
+            let tail_fits = !tail.is_empty() && room >= 2 * tail_w;
+            let row_w = if tail_fits { room - tail_w } else { room };
+            if row_w > 0 {
+                draw_standalone_row(&printer.windowed(Rect::from_size((0, y), (row_w, 1))), row);
+            }
+            if tail_fits {
+                printer.with_color(style, |p| p.print((row_w + 3, y), &tail));
+            }
         }
     }
 
@@ -355,12 +362,12 @@ impl Window {
         if let Body::List(list) = &mut self.body {
             return list.on_event(event, ctx, rect);
         }
-        // Spatial navigation: the nearest plotted point in the pressed direction, j/k and the page keys being Down/Up hops.
+        // Spatial navigation: the nearest plotted point in the pressed direction (at least a page of cells away for the page keys).
         if let Body::GenreMap(gm) = &mut self.body
-            && let Some((dir, hops)) = map_hops(event)
+            && let Some((dir, reach)) = map_move(event)
         {
             let frame = gm.frame(ctx, rect);
-            (0..hops).for_each(|_| gm.nav(&frame, dir));
+            gm.nav(&frame, dir, reach as isize);
             return WindowOutcome::Consumed;
         }
         // Enter plays the selected point, same "play this and carry on through the rest of the
@@ -562,13 +569,13 @@ impl IndexMut<WindowId> for Windows {
     }
 }
 
-/// The direction and hop count a Genre Map key moves by.
-fn map_hops(event: &Event) -> Option<(Key, usize)> {
+/// The direction and minimum cells a Genre Map key moves by: one hop for j/k, a page for J/K and PgUp/PgDn.
+fn map_move(event: &Event) -> Option<(Key, usize)> {
     match (event, Nav::of(event)) {
         (Event::Key(dir @ (Key::Left | Key::Right)), _) => Some((*dir, 1)),
         (_, Some(nav @ (Nav::Line(_) | Nav::Page(_)))) => {
-            let (up, hops) = nav.step(PAGE_SCROLL_STEP);
-            Some((if up { Key::Up } else { Key::Down }, hops))
+            let (up, reach) = nav.step(PAGE_SCROLL_STEP);
+            Some((if up { Key::Up } else { Key::Down }, reach))
         }
         _ => None,
     }

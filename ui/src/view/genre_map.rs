@@ -152,21 +152,24 @@ impl GenreMap {
         self.selection.locked().pending = Some(track);
     }
 
-    /// Moves the selection to the nearest plotted point in `dir`.
-    pub(super) fn nav(&self, frame: &GenreMapFrame, dir: Key) {
+    /// Moves the selection to the nearest plotted point in `dir` at least `reach` cells away, else the farthest one that way.
+    pub(super) fn nav(&self, frame: &GenreMapFrame, dir: Key, reach: isize) {
         let mut sel = self.selection.locked();
         sel.pending = None;
         let Some(cur) = sel.selected.and_then(|id| frame.plot.point(id)) else { return };
         let (cx, cy) = (cur.x as isize, cur.y as isize);
         let cur_id = cur.track.id;
-        let next = frame
+        let ahead: Vec<_> = frame
             .plot
             .points
             .iter()
             .filter(|p| p.track.id != cur_id)
-            .filter(|p| in_direction(dir, cx, cy, p.x as isize, p.y as isize))
-            .min_by_key(|p| direction_score(dir, cx, cy, p.x as isize, p.y as isize));
-        if let Some(p) = next {
+            .map(|p| (p, axes(dir, cx, cy, p.x as isize, p.y as isize)))
+            .filter(|(_, (primary, _))| *primary > 0)
+            .collect();
+        let score = |&&(_, (primary, perp)): &&(&Point, (isize, isize))| primary * primary + perp * perp * 4;
+        let next = ahead.iter().filter(|(_, (primary, _))| *primary >= reach).min_by_key(score).or_else(|| ahead.iter().max_by_key(|(_, (primary, _))| *primary));
+        if let Some((p, _)) = next {
             sel.selected = Some(p.track.id);
         }
     }
@@ -261,25 +264,15 @@ const SELECTED_GLYPH: &str = "■";
 const PLAYING_GLYPH: &str = "●";
 const FLASH_MS: u128 = 500;
 
-/// Whether `(x, y)` lies on the `dir` side of `(cx, cy)`.
-fn in_direction(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> bool {
+/// `(distance toward dir, perpendicular drift)` from `(cx, cy)` to `(x, y)`; a point on the `dir` side has a positive first.
+fn axes(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> (isize, isize) {
     match dir {
-        Key::Up => y < cy,
-        Key::Down => y > cy,
-        Key::Left => x < cx,
-        Key::Right => x > cx,
-        _ => false,
+        Key::Up => (cy - y, x - cx),
+        Key::Down => (y - cy, x - cx),
+        Key::Left => (cx - x, y - cy),
+        Key::Right => (x - cx, y - cy),
+        _ => (0, 0),
     }
-}
-
-/// Lower is better; perpendicular drift weighs more so "roughly that way" beats far-but-aligned.
-fn direction_score(dir: Key, cx: isize, cy: isize, x: isize, y: isize) -> isize {
-    let (primary, perp) = match dir {
-        Key::Up | Key::Down => (y - cy, x - cx),
-        Key::Left | Key::Right => (x - cx, y - cy),
-        _ => return isize::MAX,
-    };
-    primary * primary + perp * perp * 4
 }
 
 /// Each embedded track's 2D PCA coordinates, before fitting to a pane.

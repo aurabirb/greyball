@@ -245,7 +245,7 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
 /// `row` alone on a one-row `printer`, laid out like a list row (unselected, no action labels).
 pub(super) fn draw_standalone_row(printer: &Printer, row: &Row) {
     let width = printer.size.x;
-    draw_row(printer, 0, row, &column_layout(width.saturating_sub(ROW_MARK_W), false), width, false, &[] as &[((), String, &str)]);
+    draw_row::<()>(printer, 0, row, &column_layout(width.saturating_sub(ROW_MARK_W), false), width, false, &[]);
 }
 
 /// One row at line `y`: its columns padded to `content_w`, then its per-cell styles over them; `actions` show only when `selected`.
