@@ -42,3 +42,27 @@ impl EmbeddedTrack {
         Some(Self { track: Arc::new(track), embedding: embedding.into() })
     }
 }
+
+pub fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// L2-normalizes `v` in place, returning its pre-normalization norm.
+pub fn normalize(v: &mut [f32]) -> f32 {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-9 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+    norm
+}
+
+/// Cosine similarity, or `NEG_INFINITY` (ranks last) for mismatched lengths or a zero vector.
+pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let (na, nb) = (dot(a, a).sqrt(), dot(b, b).sqrt());
+    if a.len() != b.len() || na <= 1e-9 || nb <= 1e-9 {
+        return f32::NEG_INFINITY;
+    }
+    dot(a, b) / (na * nb)
+}

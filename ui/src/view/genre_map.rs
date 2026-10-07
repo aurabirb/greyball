@@ -10,7 +10,7 @@ use cursive::event::Key;
 use cursive::theme::{Color, ColorStyle, Effect};
 use cursive::{Printer, Rect};
 
-use core::embedding::EmbeddedTrack;
+use core::embedding::{EmbeddedTrack, cosine, dot, normalize};
 use core::{Command, MutexExt, Session, Track, TrackId};
 
 use super::memo::Memo;
@@ -22,6 +22,7 @@ const NEUTRAL_COLOR: Color = Color::Rgb(120, 120, 120);
 /// One plotted track: its cell in the pane and the color it's drawn in.
 struct Point {
     track: Arc<Track>,
+    embedding: Arc<[f32]>,
     x: usize,
     y: usize,
     color: Color,
@@ -44,7 +45,7 @@ impl Plot {
             .filter_map(|e| {
                 let &(x, y) = fitted.get(&e.track.id)?;
                 let color = e.track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
-                Some(Point { track: e.track.clone(), x, y, color })
+                Some(Point { track: e.track.clone(), embedding: e.embedding.clone(), x, y, color })
             })
             .collect();
         let index = points.iter().enumerate().map(|(i, p)| (p.track.id, i)).collect();
@@ -74,13 +75,27 @@ impl GenreMapFrame {
         Some(single_track_row(s, &self.plot.point(id)?.track, playing))
     }
 
-    /// Plays `id` with the plotted points as the context, like a `TrackList` row's Enter.
+    /// Plays `id` first, then the points most cosine-similar to it by genre embedding.
     pub(super) fn play_context(&self, id: TrackId) -> Option<Command> {
-        let index = *self.plot.index.get(&id)?;
-        let tracks = self.plot.points.iter().map(|p| p.track.id).collect();
-        Some(Command::PlayContext { tracks, index, remote: None, local: None, name: Some("Genre Map".to_string()) })
+        let sel = *self.plot.index.get(&id)?;
+        let query = &self.plot.points[sel].embedding;
+        let mut ranked: Vec<(f32, usize)> = (0..self.plot.points.len())
+            .map(|i| (if i == sel { f32::INFINITY } else { cosine(query, &self.plot.points[i].embedding) }, i))
+            .collect();
+        // Ties break by plot index so the order is deterministic.
+        let by_rank = |a: &(f32, usize), b: &(f32, usize)| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1));
+        if ranked.len() > PLAY_LIMIT {
+            ranked.select_nth_unstable_by(PLAY_LIMIT - 1, by_rank);
+            ranked.truncate(PLAY_LIMIT);
+        }
+        ranked.sort_unstable_by(by_rank);
+        let tracks = ranked.iter().map(|&(_, i)| self.plot.points[i].track.id).collect();
+        Some(Command::PlayContext { tracks, index: 0, remote: None, local: None, name: Some("Genre Map".to_string()) })
     }
 }
+
+/// Most tracks a played map context holds.
+const PLAY_LIMIT: usize = 5000;
 
 /// Same click-timing window `TrackList` uses for its own double-click detection.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
@@ -472,21 +487,6 @@ fn golden_section_refine(points: &[(f32, f32)], mut lo: f32, mut hi: f32, w1: f3
 
 fn min_max(vals: impl Iterator<Item = f32>) -> (f32, f32) {
     vals.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
-}
-
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-/// L2-normalizes `v` in place, returning its pre-normalization norm.
-fn normalize(v: &mut [f32]) -> f32 {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-9 {
-        for x in v.iter_mut() {
-            *x /= norm;
-        }
-    }
-    norm
 }
 
 /// Top covariance eigenvector orthogonal to `ortho`, and false if the iterate vanished.
