@@ -274,8 +274,9 @@ impl MedleyView {
             Action::Command(c) => self.run_confirmed(c),
             // `/` filters the focused window's own list; only an empty Search window sends it to the query input instead.
             Action::FocusSearch => {
-                let id = self.selection_id();
-                let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s))) else {
+                let id = self.filter_id();
+                let help = self.windows[id].kind == Kind::Help;
+                let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s)).or(help.then_some(false))) else {
                     // No list here at all (a Log/Help/Settings tab, a focused Genre Map): fall back to global search.
                     let search_id = self.search_window();
                     self.show(search_id);
@@ -311,28 +312,14 @@ impl MedleyView {
                 EventResult::consumed()
             }
             Action::ShowSimilar(track) => {
-                let mut visible_id = None;
-                for name in ["similar-tab", "similar"] {
-                    if let Some(id) = self.windows.named(name)
-                        && let Some(list) = self.windows[id].list_mut()
-                    {
-                        match track {
-                            Some(track) => list.pin_similar(track),
-                            None => list.unpin_similar(),
-                        }
-                        if self.visible().contains(&id) {
-                            visible_id = Some(id);
-                        }
+                let Some(id) = self.windows.named("similar") else { return EventResult::Ignored };
+                if let Some(list) = self.windows[id].list_mut() {
+                    match track {
+                        Some(track) => list.pin_similar(track),
+                        None => list.unpin_similar(),
                     }
                 }
-                let id = if let Some(id) = visible_id {
-                    self.focus_window(id);
-                    id
-                } else {
-                    let Some(id) = self.windows.named("similar-tab") else { return EventResult::Ignored };
-                    self.show(id);
-                    id
-                };
+                self.focus_or_show(id);
                 self.edit_search(id);
                 EventResult::consumed()
             }
@@ -406,10 +393,8 @@ impl MedleyView {
 
     /// The `/`-filter of the list being filtered: the active one, as focus can't move while typing.
     fn set_filter(&mut self, query: Option<&str>) {
-        let id = self.selection_id();
-        if let Some(list) = self.windows[id].list_mut() {
-            list.set_query(query);
-        }
+        let id = self.filter_id();
+        self.windows[id].set_filter(query);
     }
 
     /// Takes the query input of Search window `id`, typed in its title row; any other window is left alone.

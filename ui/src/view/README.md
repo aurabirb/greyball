@@ -16,7 +16,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   `Log`, `Settings`, `Vis`, `Help`; `Kind` stays nested because a `TrackList` matches exhaustively over its five
   `ListKind`s). Startup adds one window per entry of `screen::WINDOWS`, which gives each the name
   `:panes`, `:window` and `state.toml` know it by: the five tabs (`now-playing`, `playlists`, `search`,
-  `history-tab`, `queue-tab`), the three panes (`log`, `settings`, `vis`), the tabs' companions (`playing`, `results`,
+  `history-tab`, `queue-tab`), the panes (`log`, `settings`, `vis`, `genre-map`, `similar`), the tabs' companions (`playing`, `results`,
   `queue`, `history`, and `playlist-keys` for Playlists) and `help`; `playlist-keys` and `help` start floating and closed. A `Startup` entry also says where the window is first placed (`Home`: a tab, a pane
   placed by `Config::panes`, or floating) and carries its instance settings. The Queue
   tab and the Queue pane are two instances of one kind, each with its own cursor, scroll window, filter
@@ -70,7 +70,7 @@ files here are those components plus `impl MedleyView` blocks grouped by concern
   shortcut lane one width shared by every section (so all keys share a column); an item's `:command`
   spelling is the first line of its description block, wrapped with it, and lines after the first are indented two spaces; one blank line precedes every item and separates sections. The result, a flat
   line list plus each row's `first..end` line span and each section's title line, is cached in
-  `HelpPane::built`; `draw` and scrolling only slice it. The cursor is a row index and the scroll
+  `HelpPane::built`; `draw` and scrolling only slice it. `/` opens the shell's `Editing::Filter` on a focused Help window (`MedleyView::filter_id`, `Window::set_filter`): `build` keeps the items whose command, summary, detail or shortcut contains the text (case-insensitive) and the sections that still have one, the cursor restarts at the top, and Esc clears it before it closes the window. The cursor is a row index and the scroll
   offset a line index: only a row's first line is a cursor stop or highlighted, `follow` keeps the
   whole item in view, and `relayout` re-follows when the layout key or body height moved (a rebind
   re-wraps). Floating or fullscreen, a focused Help window jumps sections with Tab and Shift-Tab (title
@@ -189,7 +189,7 @@ adding one, walk every `self.`/argument read under the build closure against its
 | `SettingsPane::entries` | `revision`, pane layout config, `Placements::generation` | config, volume, scan mode, vis fps, every window's placement |
 | `MedleyView::chrome` (`Chrome`) | `revision`, `warnings_revision` | status core, warning count, the help, playlist-keys, placement, like, transport, queue, reveal and layout keys, and the keys assigned to playlists |
 | `MedleyView::follow_sig` | window id, `list_gen`, `view_gen`, cursor | — (gates `ScanDriver::follow_view`) |
-| `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
+| `HelpPane::built` (`Built`: lines, rows, sections) | body width, hotkeys, playlists and remote-playlists generations, the `/`-filter | the item table, effective keys, keyed playlists' names (plugin commands are fixed at startup) |
 | `HelpPane::fitted` | the `built` key, body height | — (gates re-following the cursor after a re-wrap or resize) |
 | `PlaylistPicker::built` | playlists generation | the playlists |
 | `GenreMap::fit` (each track's pane cell) | the finished projection's embeddings generation, pane size | the finished projection |

@@ -291,6 +291,14 @@ impl MedleyView {
         if self.windows[self.focused_id()].has_selection() { self.focused_id() } else { self.main_id() }
     }
 
+    /// The window `/` filters: the focused Help window, else the one selection-based commands act on.
+    fn filter_id(&self) -> WindowId {
+        match self.focused_id() {
+            id if self.windows[id].kind == Kind::Help => id,
+            _ => self.selection_id(),
+        }
+    }
+
     fn selection_list(&self) -> Option<&TrackList> {
         self.windows[self.selection_id()].list()
     }

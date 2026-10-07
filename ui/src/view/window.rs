@@ -160,6 +160,15 @@ impl Window {
         matches!(self.body, Body::List(_) | Body::GenreMap(_))
     }
 
+    /// Sets the `/`-filter of a list or the Help window; any other kind has none.
+    pub(super) fn set_filter(&mut self, query: Option<&str>) {
+        match &mut self.body {
+            Body::List(list) => list.set_query(query),
+            Body::Help(help) => help.set_query(query),
+            _ => {}
+        }
+    }
+
     pub(super) fn selected_track(&self, s: &Session) -> Option<TrackId> {
         match &self.body {
             Body::List(list) => list.selected_track(s),

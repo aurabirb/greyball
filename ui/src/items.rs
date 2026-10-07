@@ -133,7 +133,7 @@ pub const ITEMS: &[Item] = &[
         &["window", "w"],
         "<window>",
         "open or close any window, or switch to its tab",
-        "The windows: now-playing, playlists, search, history-tab, queue-tab, similar-tab (the startup tabs), log, settings, vis, genre-map, queue, history, similar (the panes), playlist-keys, help, files.",
+        "The windows: now-playing, playlists, search, history-tab, queue-tab (the startup tabs), log, settings, vis, genre-map, similar, queue, history (the panes), playlist-keys, help, files.",
     ),
     command(
         Cmd::Panes,
@@ -155,10 +155,7 @@ pub const ITEMS: &[Item] = &[
     builtin(Section::Player, BuiltinAction::Previous, "previous track (<)", ""),
     builtin(Section::Player, BuiltinAction::SeekForward, "seek forward 5s (→)", ""),
     builtin(Section::Player, BuiltinAction::SeekBack, "seek back 5s (←)", ""),
-    builtin(Section::Player, BuiltinAction::ToggleShuffle, "toggle queue shuffle", ""),
     builtin(Section::Player, BuiltinAction::LikePlaying, "like the playing track, or unlike it (asks first)", ""),
-    builtin(Section::Player, BuiltinAction::ToggleVis, "toggle the visualizer pane", ""),
-    builtin(Section::Player, BuiltinAction::ToggleGenreMap, "toggle the genre-map pane", ""),
     builtin(Section::Player, BuiltinAction::RevealPlaying, "show the playing track in its playlist, else Now Playing", ""),
     fixed(
         Section::Hotkeys,
@@ -184,7 +181,7 @@ pub const ITEMS: &[Item] = &[
     fixed(Section::Movement, "J/K", "move a page (PgUp/PgDn too)", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),
     fixed(Section::Movement, "Esc", "clear the filter, go back, close a window that is not a tab", ""),
-    fixed(Section::Movement, "/", "search in Search, filter the current list elsewhere", ""),
+    fixed(Section::Movement, "/", "search in Search, filter the current list or help elsewhere", ""),
     fixed(Section::Movement, ":", "open the command line", ""),
 ];
 

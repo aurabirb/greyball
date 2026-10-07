@@ -66,6 +66,13 @@ struct Cells {
     target: Target,
 }
 
+impl Cells {
+    /// Case-insensitive substring over everything the row shows.
+    fn matches(&self, needle: &str) -> bool {
+        [&self.command, &self.summary, &self.detail, &self.shortcut].into_iter().any(|text| text.to_lowercase().contains(needle))
+    }
+}
+
 fn key_label(key: char) -> String {
     if key == ' ' { "Space".to_string() } else { key.to_string() }
 }
@@ -120,10 +127,18 @@ fn playlist_cells(s: &Session) -> Vec<Cells> {
     keyed.into_iter().map(|(_, cells)| cells).collect()
 }
 
-fn build(width: usize, s: &Session) -> Built {
+fn build(width: usize, s: &Session, query: Option<&str>) -> Built {
     let mut built = Built { lines: Vec::new(), rows: Vec::new(), sections: Vec::new() };
     let titled = Section::ALL.iter().map(|&section| (section.title(), table_cells(section, s)));
-    let sections: Vec<_> = titled.chain(std::iter::once(("Playlist keys", playlist_cells(s)))).filter(|(_, cells)| !cells.is_empty()).collect();
+    let needle = query.map(str::to_lowercase);
+    let sections: Vec<_> = titled
+        .chain(std::iter::once(("Playlist keys", playlist_cells(s))))
+        .map(|(title, mut cells)| {
+            cells.retain(|cell| needle.as_deref().is_none_or(|needle| cell.matches(needle)));
+            (title, cells)
+        })
+        .filter(|(_, cells)| !cells.is_empty())
+        .collect();
     let avail = width.saturating_sub(RIGHT_PAD).max(1);
     // One key lane for every section, so all keys share a column.
     let shortcut_w = sections.iter().flat_map(|(_, cells)| cells).map(|c| c.shortcut.chars().count().max(usize::from(matches!(c.target, Target::Bindable(_))))).max().unwrap_or(0).min(avail / 4);
@@ -165,13 +180,16 @@ pub(super) struct HelpPane {
     offset: usize,
     /// The row awaiting its new key: its name and what the key will bind.
     capturing: Option<(String, HotkeyTarget)>,
+    /// The `/`-filter; `filter_gen` moves with it so the layout key sees it.
+    query: Option<String>,
+    filter_gen: u64,
     built: Memo<LayoutKey, Arc<Built>>,
     /// The layout and body height the scroll window was last fitted to.
     fitted: Memo<(LayoutKey, usize)>,
 }
 
-/// Body width, then the hotkeys, playlists and remote-playlists generations.
-type LayoutKey = (usize, u64, u64, u64);
+/// Body width, then the hotkeys, playlists and remote-playlists generations, then the filter's.
+type LayoutKey = (usize, u64, u64, u64, u64);
 
 impl HelpPane {
     /// `rect` minus the title row and the scrollbar gutter.
@@ -179,14 +197,24 @@ impl HelpPane {
         Rect::from_size((rect.left(), rect.top() + 1), (rect.width().saturating_sub(1), rect.height().saturating_sub(1)))
     }
 
-    /// Everything the layout shows that can change: the width, the keys, the playlist names.
-    fn key(s: &Session, rect: Rect) -> LayoutKey {
-        (Self::body(rect).width(), s.hotkeys_gen(), s.playlists_gen(), s.remote_playlists_gen())
+    /// Everything the layout shows that can change: the width, the keys, the playlist names, the filter.
+    fn key(&self, s: &Session, rect: Rect) -> LayoutKey {
+        (Self::body(rect).width(), s.hotkeys_gen(), s.playlists_gen(), s.remote_playlists_gen(), self.filter_gen)
+    }
+
+    /// Sets the `/`-filter and, when it changed, restarts the cursor at the top.
+    pub(super) fn set_query(&mut self, query: Option<&str>) {
+        let query = query.filter(|q| !q.trim().is_empty());
+        if self.query.as_deref() != query {
+            self.query = query.map(str::to_string);
+            self.filter_gen += 1;
+            (self.cursor, self.offset) = (0, 0);
+        }
     }
 
     pub(super) fn built(&self, s: &Session, rect: Rect) -> Arc<Built> {
-        let key = Self::key(s, rect);
-        self.built.get_or_build(key, || Arc::new(build(key.0, s)))
+        let key = self.key(s, rect);
+        self.built.get_or_build(key, || Arc::new(build(key.0, s, self.query.as_deref())))
     }
 
     /// Keeps the cursor on a row and the whole item under it in view.
@@ -204,7 +232,7 @@ impl HelpPane {
     pub(super) fn relayout(&mut self, rect: Rect, s: &Session) {
         let (built, view_h) = (self.built(s, rect), Self::body(rect).height());
         // A rebuilt layout moved the lines under the cursor, which a wheel scroll otherwise leaves alone.
-        if self.fitted.changed((Self::key(s, rect), view_h)) {
+        if self.fitted.changed((self.key(s, rect), view_h)) {
             self.follow(&built, view_h);
         }
         self.cursor = self.cursor.min(built.rows.len().saturating_sub(1));
@@ -229,7 +257,7 @@ impl HelpPane {
         };
         let leave = (!placement.closes_on_esc()).then(|| "[?] leave".to_string());
         let close = Some("[Esc] close".to_string());
-        [keys.to_string()].into_iter().chain(close).chain(leave).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
+        [keys.to_string()].into_iter().chain(close).chain(leave).chain(Some("[/] filter".to_string())).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
     }
 
     /// Moves to the next or previous section: cursor on its first item, its title at the top.
@@ -272,6 +300,10 @@ impl HelpPane {
                 _ => WindowOutcome::Consumed,
             };
         }
+        if *event == Event::Key(Key::Esc) && self.query.is_some() {
+            self.set_query(None);
+            return WindowOutcome::Consumed;
+        }
         let Some(row) = built.rows.get(self.cursor) else { return WindowOutcome::Ignored };
         if let Some(nav) = Nav::of(event) {
             let (up, step) = nav.step(LIST_JUMP_STEP);
@@ -293,7 +325,11 @@ impl HelpPane {
     }
 
     pub(super) fn draw(&self, printer: &Printer, focused: bool, built: &Built) {
-        let title = if focused { format!("[{}]", Kind::Help.label()) } else { Kind::Help.label().to_string() };
+        let label = if focused { format!("[{}]", Kind::Help.label()) } else { Kind::Help.label().to_string() };
+        let title = match &self.query {
+            Some(query) => format!("{label}  /{query}"),
+            None => label,
+        };
         printer.with_color(ColorStyle::title_secondary(), |p| p.print((0, 0), &pad(&format!("{}{title}", " ".repeat(MENU_PAD)), p.size.x)));
         let body = Self::body(Rect::from_size((0, 0), printer.size));
         let view = printer.windowed(body);
