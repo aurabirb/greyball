@@ -17,6 +17,7 @@ use super::files::FilesPane;
 use super::genre_map::{GenreMap, GenreMapFrame};
 use super::help::{Built, HelpPane};
 use super::log::LogPane;
+use super::rows::Row;
 use super::scroll::{Nav, PAGE_SCROLL_STEP};
 use super::text::{pad, pad_right_aligned};
 use super::settings::{SettingsEntry, SettingsPane};
@@ -71,7 +72,8 @@ pub(super) enum WindowFrame {
     /// The memoized scatter plot, plus the live now-playing track id and liked-track set (neither
     /// part of the memo key — both are redrawn as overlays so a track/like change doesn't force a
     /// PCA recompute).
-    GenreMap(GenreMapFrame, Option<TrackId>, Arc<std::collections::HashSet<TrackId>>),
+    /// The selected point's list row, shown in the status row.
+    GenreMap(GenreMapFrame, Option<TrackId>, Arc<std::collections::HashSet<TrackId>>, Option<Row>),
     /// Log and Vis read only their own live state.
     Live,
 }
@@ -255,7 +257,9 @@ impl Window {
             Body::Settings(settings) => WindowFrame::Settings(settings.entries(ctx)),
             Body::Help(help) => WindowFrame::Help(help.built(ctx.s, self.content())),
             Body::GenreMap(gm) => {
-                WindowFrame::GenreMap(gm.frame(ctx, self.content()), ctx.s.now_playing_id(), ctx.s.liked_ids())
+                let (frame, playing) = (gm.frame(ctx, self.content()), ctx.s.now_playing_id());
+                let row = gm.selected_track().and_then(|id| frame.track_row(ctx.s, id, playing == Some(id)));
+                WindowFrame::GenreMap(frame, playing, ctx.s.liked_ids(), row)
             }
             Body::Log(_) | Body::Vis(_) | Body::Files(_) => WindowFrame::Live,
         }
@@ -273,8 +277,10 @@ impl Window {
             (Body::Settings(_), _) => pane("[j/k] move   [Enter] toggle"),
             (Body::Log(_), _) => pane("[j/k] scroll   [PgUp/PgDn] page"),
             (Body::Files(files), _) => pane(files.idle()),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, ..)) => {
-                pane(&gm.selected_track().and_then(|id| frame.track_label(id)).unwrap_or_default())
+            (Body::GenreMap(_), WindowFrame::GenreMap(.., row)) => {
+                let tail = status.tail().join("   ");
+                let room = fit.saturating_sub(if tail.is_empty() { 0 } else { tail.width() + 3 });
+                pane(&row.as_ref().map(|row| row.standalone_line(room)).unwrap_or_default())
             }
             _ => pane(""),
         }
@@ -290,7 +296,7 @@ impl Window {
             (Body::Log(log), _) => log.draw(content, focused),
             (Body::Files(files), _) => files.draw(content, focused),
             (Body::Vis(vis), _) => vis.draw(content, focused),
-            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing, liked)) => gm.draw(content, focused, frame, *now_playing, liked),
+            (Body::GenreMap(gm), WindowFrame::GenreMap(frame, now_playing, liked, _)) => gm.draw(content, focused, frame, *now_playing, liked),
             (Body::Help(help), WindowFrame::Help(built)) => help.draw(content, focused, built),
             (Body::List(_) | Body::Settings(_) | Body::Help(_) | Body::GenreMap(_), _) => {}
         }

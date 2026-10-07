@@ -11,10 +11,10 @@ use cursive::theme::{Color, ColorStyle, Effect};
 use cursive::{Printer, Rect};
 
 use core::embedding::EmbeddedTrack;
-use core::{Command, MutexExt, Track, TrackId};
+use core::{Command, MutexExt, PendingRows, Session, Track, TrackId};
 
 use super::memo::Memo;
-use super::rows::bpm_color;
+use super::rows::{Row, bpm_color, tracks_to_rows};
 use super::window::Ctx;
 
 const NEUTRAL_COLOR: Color = Color::Rgb(120, 120, 120);
@@ -69,8 +69,10 @@ pub(super) struct GenreMapFrame {
 }
 
 impl GenreMapFrame {
-    pub(super) fn track_label(&self, id: TrackId) -> Option<String> {
-        self.plot.point(id).map(|p| format!("{} - {}", p.track.display_artist(), p.track.title))
+    /// The selected point's track as the list row every track list shows.
+    pub(super) fn track_row(&self, s: &Session, id: TrackId, playing: bool) -> Option<Row> {
+        let track = (*self.plot.point(id)?.track).clone();
+        tracks_to_rows(s, vec![track], &PendingRows::default(), 0, playing.then_some(0)).pop()
     }
 
     /// Plays `id` with the plotted points as the context, like a `TrackList` row's Enter.

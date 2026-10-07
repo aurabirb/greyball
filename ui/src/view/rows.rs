@@ -58,6 +58,25 @@ pub(super) struct Row {
     pending: bool,
 }
 
+impl Row {
+    /// The now-playing mark and the columns padded to `width`; `title_end` cuts the main column short of the action labels.
+    pub(super) fn line(&self, layout: &Layout, width: usize, title_end: Option<usize>) -> String {
+        let mark = if self.current { "> " } else { "  " };
+        let [tags, main, hotkeys, source, duration] = [&self.tags, &self.main, &self.hotkeys, &self.source, &self.duration].map(Cell::text);
+        let main = match (title_end, layout[1]) {
+            (Some(end), Some((start, ..))) => truncate(&main, end.saturating_sub(ROW_MARK_W + start)),
+            _ => main,
+        };
+        let cols = columns([&tags, &main, &hotkeys, &source, &duration], layout, width.saturating_sub(ROW_MARK_W));
+        pad(&format!("{mark}{cols}"), width)
+    }
+
+    /// The row laid out on its own, filling `width`.
+    pub(super) fn standalone_line(&self, width: usize) -> String {
+        self.line(&column_layout(width.saturating_sub(ROW_MARK_W), false), width, None)
+    }
+}
+
 /// A `Row` with only its main column set — placeholder messages and the Playlists top level.
 pub(super) fn plain_row(main: impl Into<String>) -> Row {
     Row {
@@ -216,17 +235,10 @@ fn draw_list_body<A>(printer: &Printer, ListBody { rows, state, total, playing, 
     let layout = column_layout(content_w.saturating_sub(ROW_MARK_W), reserve_hotkeys);
     for (y, row) in rows.iter().enumerate() {
         let selected = y + offset == sel;
-        let mark = if row.current { "> " } else { "  " };
         let cells = [&row.tags, &row.main, &row.hotkeys, &row.source, &row.duration];
-        let [tags, main, hotkeys, source, duration] = cells.map(Cell::text);
         let spans = if selected { action_spans(row, actions, &layout) } else { Vec::new() };
         let title_end = spans.first().map(|&(x, ..)| x - ACTION_GAP);
-        let main = match (title_end, layout[1]) {
-            (Some(end), Some((start, ..))) => truncate(&main, end.saturating_sub(ROW_MARK_W + start)),
-            _ => main,
-        };
-        let cols = columns([&tags, &main, &hotkeys, &source, &duration], &layout, content_w.saturating_sub(ROW_MARK_W));
-        let line = pad(&format!("{mark}{cols}"), content_w);
+        let line = row.line(&layout, content_w, title_end);
         let mut row_style = Style::from(if selected {
             ColorStyle::highlight()
         } else if row.current {
