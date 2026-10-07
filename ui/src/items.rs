@@ -180,7 +180,7 @@ pub const ITEMS: &[Item] = &[
     fixed(Section::Movement, "j/k", "move the cursor (↑/↓ too)", ""),
     fixed(Section::Movement, "J/K", "move a page (PgUp/PgDn too)", ""),
     fixed(Section::Movement, "Enter", "play or open the selected row", ""),
-    fixed(Section::Movement, "Esc", "clear the filter, go back, close a window that is not a tab", ""),
+    fixed(Section::Movement, "Esc", "clear the filter, go back, close a window that is not a startup tab", ""),
     fixed(Section::Movement, "/", "search in Search, filter the current list or help elsewhere", ""),
     fixed(Section::Movement, ":", "open the command line", ""),
 ];

@@ -180,16 +180,15 @@ pub(super) struct HelpPane {
     offset: usize,
     /// The row awaiting its new key: its name and what the key will bind.
     capturing: Option<(String, HotkeyTarget)>,
-    /// The `/`-filter; `filter_gen` moves with it so the layout key sees it.
+    /// The `/`-filter.
     query: Option<String>,
-    filter_gen: u64,
     built: Memo<LayoutKey, Arc<Built>>,
     /// The layout and body height the scroll window was last fitted to.
     fitted: Memo<(LayoutKey, usize)>,
 }
 
-/// Body width, then the hotkeys, playlists and remote-playlists generations, then the filter's.
-type LayoutKey = (usize, u64, u64, u64, u64);
+/// Body width, then the hotkeys, playlists and remote-playlists generations, then the filter.
+type LayoutKey = (usize, u64, u64, u64, Option<String>);
 
 impl HelpPane {
     /// `rect` minus the title row and the scrollbar gutter.
@@ -199,7 +198,7 @@ impl HelpPane {
 
     /// Everything the layout shows that can change: the width, the keys, the playlist names, the filter.
     fn key(&self, s: &Session, rect: Rect) -> LayoutKey {
-        (Self::body(rect).width(), s.hotkeys_gen(), s.playlists_gen(), s.remote_playlists_gen(), self.filter_gen)
+        (Self::body(rect).width(), s.hotkeys_gen(), s.playlists_gen(), s.remote_playlists_gen(), self.query.clone())
     }
 
     /// Sets the `/`-filter and, when it changed, restarts the cursor at the top.
@@ -207,14 +206,14 @@ impl HelpPane {
         let query = query.filter(|q| !q.trim().is_empty());
         if self.query.as_deref() != query {
             self.query = query.map(str::to_string);
-            self.filter_gen += 1;
             (self.cursor, self.offset) = (0, 0);
         }
     }
 
     pub(super) fn built(&self, s: &Session, rect: Rect) -> Arc<Built> {
         let key = self.key(s, rect);
-        self.built.get_or_build(key, || Arc::new(build(key.0, s, self.query.as_deref())))
+        let width = key.0;
+        self.built.get_or_build(key, || Arc::new(build(width, s, self.query.as_deref())))
     }
 
     /// Keeps the cursor on a row and the whole item under it in view.
@@ -243,8 +242,7 @@ impl HelpPane {
     pub(super) fn blur(&mut self) {
         self.capturing = None;
     }
-
-    /// The status row's text when nothing was reported: the capture prompt, else what the row under the cursor allows; Tab is its own only over the view, and Esc closes it unless it is tabbed.
+    /// The status row's text when nothing was reported: the capture prompt, else what the row under the cursor allows; Tab is its own only over the view, and Esc clears the filter before it closes.
     pub(super) fn idle(&self, built: &Built, placement: Placement, status: &StatusCtx) -> String {
         if let Some((name, _)) = &self.capturing {
             return format!("press a key for {name:?} — [Esc] cancel");
@@ -252,12 +250,10 @@ impl HelpPane {
         let keys = match built.rows.get(self.cursor) {
             Some(Row { name, target: Target::Refused(why), .. }) => return format!("{name}: {why}"),
             _ if placement.over_view() => "[Enter] rebind   [Bksp] default   [Tab] next section",
-            _ if placement.closes_on_esc() => "[Enter] rebind   [Bksp] default   [Tab] next window",
             _ => "[Enter] rebind   [Bksp] default   [Tab] next window",
         };
-        let leave = (!placement.closes_on_esc()).then(|| "[?] leave".to_string());
-        let close = Some("[Esc] close".to_string());
-        [keys.to_string()].into_iter().chain(close).chain(leave).chain(Some("[/] filter".to_string())).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
+        let esc = if self.query.is_some() { "[Esc] clear filter" } else { "[Esc] close" };
+        [keys, esc, "[/] filter"].into_iter().map(str::to_string).chain(status.place.clone()).collect::<Vec<_>>().join("   ")
     }
 
     /// Moves to the next or previous section: cursor on its first item, its title at the top.

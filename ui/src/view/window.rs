@@ -102,12 +102,14 @@ pub(super) struct StatusCtx<'a> {
     pub(super) hints: bool,
     /// Cells at the row's right end the shell draws over.
     pub(super) reserved: usize,
+    /// Whether Esc closes this window.
+    pub(super) closes: bool,
 }
 
 impl StatusCtx<'_> {
     /// `[Esc] close` where Esc closes the window, then the placement hint.
-    pub(super) fn tail(&self, placement: Placement) -> Vec<String> {
-        let close = placement.closes_on_esc().then(|| "[Esc] close".to_string());
+    pub(super) fn tail(&self) -> Vec<String> {
+        let close = self.closes.then(|| "[Esc] close".to_string());
         close.into_iter().chain(self.place.clone()).collect()
     }
 
@@ -166,6 +168,15 @@ impl Window {
             Body::List(list) => list.set_query(query),
             Body::Help(help) => help.set_query(query),
             _ => {}
+        }
+    }
+
+    /// Whether `/` should go to the query input rather than filter, for a window that has a filter at all.
+    pub(super) fn awaiting_search(&self, s: &Session) -> Option<bool> {
+        match &self.body {
+            Body::List(list) => Some(list.awaiting_search(s)),
+            Body::Help(_) => Some(false),
+            _ => None,
         }
     }
 
@@ -253,7 +264,7 @@ impl Window {
     /// The status row's text when nothing was reported; `placement` is the window's.
     fn idle(&self, frame: &WindowFrame, placement: Placement, status: &StatusCtx, fit: usize) -> String {
         let pane = |keys: &str| {
-            let hints = Some(keys.to_string()).filter(|keys| !keys.is_empty()).into_iter().chain(status.tail(placement));
+            let hints = Some(keys.to_string()).filter(|keys| !keys.is_empty()).into_iter().chain(status.tail());
             hints.collect::<Vec<_>>().join("   ")
         };
         match (&self.body, frame) {
@@ -392,6 +403,15 @@ impl Window {
     }
 }
 
+/// Where a startup window is placed first and returns to when closed; `panes` is where a `Home::Pane` one goes.
+fn home_placement(home: Home, panes: Placement) -> Placement {
+    match home {
+        Home::Tab => Placement::Tabbed,
+        Home::Pane => panes,
+        Home::Float => Placement::Floating,
+    }
+}
+
 /// Every window instance, by id; ids stay valid because windows are never removed.
 pub(super) struct Windows {
     items: Vec<Window>,
@@ -406,12 +426,7 @@ impl Windows {
         let placements = Placements { of: Vec::new(), generation: 0 };
         let mut windows = Self { items: Vec::new(), placements, log, vis };
         for startup in &WINDOWS {
-            let placement = match startup.home {
-                Home::Tab => Placement::Tabbed,
-                Home::Pane => panes,
-                Home::Float => Placement::Floating,
-            };
-            windows.add(startup, placement);
+            windows.add(startup, home_placement(startup.home, panes));
         }
         windows
     }
@@ -468,6 +483,16 @@ impl Windows {
     /// A startup tab: it stays in the tab bar.
     pub(super) fn is_startup_tab(&self, id: WindowId) -> bool {
         WINDOWS[id.0].home == Home::Tab
+    }
+
+    /// Esc closes it once it has nothing left to undo: every window but a startup tab.
+    pub(super) fn closes_on_esc(&self, id: WindowId) -> bool {
+        !self.is_startup_tab(id)
+    }
+
+    /// Where `id` sits closed: its startup placement.
+    pub(super) fn home_placement(&self, id: WindowId, panes: Placement) -> Placement {
+        home_placement(WINDOWS[id.0].home, panes)
     }
 
     pub(super) fn name(&self, id: WindowId) -> &'static str {

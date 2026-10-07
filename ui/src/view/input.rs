@@ -157,7 +157,7 @@ impl MedleyView {
                 Err(e) => self.notify(Notice::failed(e)),
             },
             Editing::Filter => {
-                self.set_filter(Some(text.as_str()).filter(|t| !t.trim().is_empty()));
+                self.set_filter(Some(text.as_str()));
                 EventResult::consumed()
             }
             Editing::None => EventResult::Ignored,
@@ -275,9 +275,8 @@ impl MedleyView {
             // `/` filters the focused window's own list; only an empty Search window sends it to the query input instead.
             Action::FocusSearch => {
                 let id = self.filter_id();
-                let help = self.windows[id].kind == Kind::Help;
-                let Some(awaiting) = self.with_session(|s| self.windows[id].list().map(|list| list.awaiting_search(s)).or(help.then_some(false))) else {
-                    // No list here at all (a Log/Help/Settings tab, a focused Genre Map): fall back to global search.
+                let Some(awaiting) = self.with_session(|s| self.windows[id].awaiting_search(s)) else {
+                    // Nothing here to filter (a Log/Settings tab, a focused Genre Map): fall back to global search.
                     let search_id = self.search_window();
                     self.show(search_id);
                     self.edit_search(search_id);
@@ -320,7 +319,6 @@ impl MedleyView {
                     }
                 }
                 self.focus_or_show(id);
-                self.edit_search(id);
                 EventResult::consumed()
             }
             Action::ShowInGenreMap(track) => {

@@ -285,7 +285,7 @@ impl TrackList {
 
     /// Sets the `/`-filter and, when it changed, restarts the selection at the top.
     pub(super) fn set_query(&mut self, query: Option<&str>) {
-        let query = query.filter(|q| !q.is_empty());
+        let query = query.filter(|q| !q.trim().is_empty());
         if self.query.as_deref() != query {
             self.query = query.map(str::to_string);
             self.state = ListState::default();
@@ -826,7 +826,7 @@ impl TrackList {
     pub(super) fn idle(&self, frame: &ListFrame, placement: Placement, status: &StatusCtx, fit: usize) -> String {
         let c = status.chrome;
         let tab = placement == Placement::Tabbed;
-        let mut tail = status.tail(placement);
+        let mut tail = status.tail();
         tail.retain(|hint| !(tab && self.kind == ListKind::Playlists) && !(self.kind == ListKind::NowPlaying && status.place.as_ref() == Some(hint)));
         let hints: Vec<String> = match (self.kind, &self.open) {
             (ListKind::Playlists, Open::TopLevel) => {

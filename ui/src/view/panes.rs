@@ -231,7 +231,11 @@ impl MedleyView {
             return self.toggle_help();
         }
         if self.windows.placement(id) == Placement::Tabbed {
-            self.activate(id);
+            if self.focus == Focus::Window(id) && self.windows.closes_on_esc(id) {
+                self.close_focused(id);
+            } else {
+                self.activate(id);
+            }
         } else if !self.close_window(id) {
             self.open.push((id, self.focus));
             self.kick_playlists(id);
@@ -274,22 +278,29 @@ impl MedleyView {
         self.focus = Focus::Window(id);
     }
 
-    /// The `OpenHelp` key and `:help`: a focused help window closes (a tab returns to where it was opened from), else it opens as a tab, or is focused where it already is.
+    /// Closes the focused window `id`: a tab leaves the bar for its home placement (Help returns to where it was opened from), any other window is closed.
+    pub(super) fn close_focused(&mut self, id: WindowId) {
+        let Some(i) = self.tabs.iter().position(|&tab| tab == id).filter(|_| self.windows.closes_on_esc(id)) else {
+            self.close_window(id);
+            return;
+        };
+        self.windows[id].blur();
+        self.tabs.remove(i);
+        let home = self.windows.home_placement(id, self.pane_cfg.mode.into());
+        self.windows.place(id, home);
+        let from = if self.windows.named(HELP) == Some(id) { self.help_from.take() } else { None };
+        let (tab, focus) = from.unwrap_or((self.active, Focus::Window(self.active)));
+        self.active = if self.tabs.contains(&tab) { tab } else { self.tabs[i.min(self.tabs.len() - 1)] };
+        let back = Some(focus).filter(|focus| matches!(focus, Focus::Window(w) if self.visible().contains(w)));
+        self.focus = back.unwrap_or(Focus::Window(self.active));
+    }
+
+    /// The `OpenHelp` key and `:help`: a focused help window closes, else it opens as a tab, or is focused where it already is.
     pub(super) fn toggle_help(&mut self) {
         let Some(id) = self.windows.named(HELP) else { return };
         let tabbed = self.windows.placement(id) == Placement::Tabbed;
         if self.focus == Focus::Window(id) {
-            if !tabbed {
-                self.close_window(id);
-            } else if let Some(i) = self.tabs.iter().position(|&tab| tab == id) {
-                self.windows[id].blur();
-                self.tabs.remove(i);
-                self.windows.place(id, Placement::Floating);
-                let (tab, focus) = self.help_from.take().unwrap_or((self.active, Focus::Window(self.active)));
-                self.active = if self.tabs.contains(&tab) { tab } else { self.tabs[i.min(self.tabs.len() - 1)] };
-                let back = Some(focus).filter(|focus| matches!(focus, Focus::Window(w) if self.visible().contains(w)));
-                self.focus = back.unwrap_or(Focus::Window(self.active));
-            }
+            self.close_focused(id);
             return;
         }
         self.windows[id].blur();

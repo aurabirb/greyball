@@ -475,6 +475,7 @@ impl View for MedleyView {
                 chrome,
                 hints: self.show_hints,
                 reserved: widget.as_ref().filter(|widget| !widget.scrubber && widget.host == placed.id).map_or(0, |widget| widget.rect().width()),
+                closes: self.windows.closes_on_esc(placed.id),
             };
             window.draw(printer, marked, window_frame, self.windows.placement(placed.id), &status);
         }
@@ -695,9 +696,8 @@ impl MedleyView {
 
         // A key goes to the focused window, then the shell; nothing under a fullscreen window is ever offered one.
         let ids = [self.focused_id(), self.main_id()];
-        // Esc a window that is not tabbed has no use for closes it, before the window beneath sees it.
-        let help = self.windows[ids[0]].kind == Kind::Help;
-        let closing = *event == Event::Key(Key::Esc) && (help || self.windows.placement(ids[0]).closes_on_esc());
+        // Esc a window that is not a startup tab has no use for closes it, before the window beneath sees it.
+        let closing = *event == Event::Key(Key::Esc) && self.windows.closes_on_esc(ids[0]);
         // Only Enter and Esc go on to the main list, and only past a window with no rows of its own to act on.
         let through = matches!(event, Event::Key(Key::Enter | Key::Esc))
             && self.windows[ids[1]].list().is_some()
@@ -710,11 +710,7 @@ impl MedleyView {
         match sent {
             Some((_, outcome)) => self.apply(outcome),
             None if closing => {
-                if help {
-                    self.toggle_help();
-                } else {
-                    self.close_window(ids[0]);
-                }
+                self.close_focused(ids[0]);
                 EventResult::consumed()
             }
             // A window shown over the view that is no list owns the keyboard but for the keys about windows themselves.

@@ -77,11 +77,6 @@ impl Placement {
         matches!(self, Placement::Floating | Placement::Screen)
     }
 
-    /// Esc closes it once it has nothing left to undo.
-    pub fn closes_on_esc(self) -> bool {
-        self != Placement::Tabbed
-    }
-
     pub fn from_word(word: &str) -> Option<Placement> {
         Placement::CYCLE.into_iter().find(|placement| placement.word() == word)
     }
