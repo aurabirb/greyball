@@ -25,7 +25,8 @@ pub fn decode_genre_embedding(s: &str) -> Option<Vec<f32>> {
     if bytes.len() % 4 != 0 {
         return None;
     }
-    Some(bytes.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
+    let v: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    v.iter().all(|x| x.is_finite()).then_some(v)
 }
 
 /// A track and its decoded genre embedding, decoded once when it enters the cache.
@@ -56,13 +57,4 @@ pub fn normalize(v: &mut [f32]) -> f32 {
         }
     }
     norm
-}
-
-/// Cosine similarity, or `NEG_INFINITY` (ranks last) for mismatched lengths or a zero vector.
-pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    let (na, nb) = (dot(a, a).sqrt(), dot(b, b).sqrt());
-    if a.len() != b.len() || na <= 1e-9 || nb <= 1e-9 {
-        return f32::NEG_INFINITY;
-    }
-    dot(a, b) / (na * nb)
 }

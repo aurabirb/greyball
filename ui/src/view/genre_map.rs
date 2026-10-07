@@ -10,7 +10,7 @@ use cursive::event::Key;
 use cursive::theme::{Color, ColorStyle, Effect};
 use cursive::{Printer, Rect};
 
-use core::embedding::{EmbeddedTrack, cosine, dot, normalize};
+use core::embedding::{EmbeddedTrack, dot, normalize};
 use core::{Command, MutexExt, Session, Track, TrackId};
 
 use super::memo::Memo;
@@ -19,10 +19,17 @@ use super::window::Ctx;
 
 const NEUTRAL_COLOR: Color = Color::Rgb(120, 120, 120);
 
+/// Most tracks a played map context holds.
+const PLAY_LIMIT: usize = 5000;
+
+/// Same click-timing window `TrackList` uses for its own double-click detection.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
 /// One plotted track: its cell in the pane and the color it's drawn in.
 struct Point {
     track: Arc<Track>,
-    embedding: Arc<[f32]>,
+    /// L2-normalized embedding, so cosine similarity is a plain dot.
+    unit: Box<[f32]>,
     x: usize,
     y: usize,
     color: Color,
@@ -45,7 +52,9 @@ impl Plot {
             .filter_map(|e| {
                 let &(x, y) = fitted.get(&e.track.id)?;
                 let color = e.track.attrs.get("bpm").and_then(|bpm| bpm_color(bpm)).unwrap_or(NEUTRAL_COLOR);
-                Some(Point { track: e.track.clone(), embedding: e.embedding.clone(), x, y, color })
+                let mut unit = e.embedding.to_vec();
+                normalize(&mut unit);
+                Some(Point { track: e.track.clone(), unit: unit.into(), x, y, color })
             })
             .collect();
         let index = points.iter().enumerate().map(|(i, p)| (p.track.id, i)).collect();
@@ -78,9 +87,9 @@ impl GenreMapFrame {
     /// Plays `id` first, then the points most cosine-similar to it by genre embedding.
     pub(super) fn play_context(&self, id: TrackId) -> Option<Command> {
         let sel = *self.plot.index.get(&id)?;
-        let query = &self.plot.points[sel].embedding;
+        let query = &self.plot.points[sel].unit;
         let mut ranked: Vec<(f32, usize)> = (0..self.plot.points.len())
-            .map(|i| (if i == sel { f32::INFINITY } else { cosine(query, &self.plot.points[i].embedding) }, i))
+            .map(|i| (if i == sel { f32::INFINITY } else { dot(query, &self.plot.points[i].unit) }, i))
             .collect();
         // Ties break by plot index so the order is deterministic.
         let by_rank = |a: &(f32, usize), b: &(f32, usize)| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1));
@@ -93,12 +102,6 @@ impl GenreMapFrame {
         Some(Command::PlayContext { tracks, index: 0, remote: None, local: None, name: Some("Genre Map".to_string()) })
     }
 }
-
-/// Most tracks a played map context holds.
-const PLAY_LIMIT: usize = 5000;
-
-/// Same click-timing window `TrackList` uses for its own double-click detection.
-const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// The finished projection's embeddings gen, `w`, `h`.
 type FitKey = (Option<u64>, usize, usize);

@@ -370,9 +370,7 @@ impl Window {
             gm.nav(&frame, dir, reach as isize);
             return WindowOutcome::Consumed;
         }
-        // Enter plays the selected point, same "play this and carry on through the rest of the
-        // list" shape as a TrackList row's Enter. A no-op with nothing selected (e.g. the pane
-        // has no plotted points at all).
+        // Enter plays the selected point, then its nearest neighbours; a no-op with nothing selected.
         if let Body::GenreMap(gm) = &mut self.body
             && matches!(event, Event::Key(Key::Enter))
         {
@@ -382,10 +380,7 @@ impl Window {
                 None => WindowOutcome::Consumed,
             };
         }
-        // A left click selects the nearest plotted point — the mouse's equivalent of arrow-nav
-        // landing on it — and a second click within the double-click window on that same point
-        // plays it, same timing pattern as `TrackList`'s own click detection
-        // (`track_list.rs`'s `last_click`/`DOUBLE_CLICK_WINDOW`).
+        // A left click selects the nearest plotted point; a double-click on it plays it like Enter.
         if let Body::GenreMap(gm) = &mut self.body
             && let Event::Mouse { offset, position, event: MouseEvent::Press(MouseButton::Left) } = event
             && let Some(pos) = position.checked_sub(*offset)

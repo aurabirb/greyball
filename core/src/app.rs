@@ -225,8 +225,8 @@ pub enum HotkeyTarget {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Play(TrackId),
-    /// "Play this list, starting here" — the whole currently-visible list
-    /// (search results, a playlist, Liked Songs, ...), remembered as a
+    /// "Play this list, starting here" — the currently-visible list
+    /// (search results, a playlist, Liked Songs, a genre-map ranking, ...), remembered as a
     /// fallback: once the manual queue has nothing left to play,
     /// `PlayerEvent::Finished` advances into the rest of this list instead
     /// of stopping (see `Session::advance`). Doesn't touch the
